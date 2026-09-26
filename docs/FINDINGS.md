@@ -617,6 +617,7 @@ buffers to the bus and leave when there is no tx context yet.
 
 ### 15. Radio, registration and the data bearer
 * AT channels: `/dev/stty_nr0` carries unsolicited results (URCs); `/dev/stty_nr1` is a clean command channel.
+  Where those six channels come from and who owns which is in 15b, from reversing `libimpl-ril.so`.
 * After `modem_control` boots the modem the radio is off (`+CFUN: 0`). Android's RIL (`libimpl-ril.so`) uses the Unisoc
   commands `AT+SFUN=2` (SIM on) and `AT+SFUN=4` (protocol stack on); afterwards `+CFUN: 1` and the modem registers
   (`+CEREG: 2,1,...,13` = E-UTRA-NR dual connectivity, i.e. 5G NSA).
@@ -631,6 +632,56 @@ buffers to the bus and leave when there is no tx context yet.
   reboot after changing the SIM.
 * A SIM without an active data plan still registers and gets an address; TCP handshakes may even succeed, but no data
   flows. Check the plan before debugging the data path.
+
+### 15b. Who opens which AT channel: reversing `libimpl-ril.so`
+The Android firmware's RIL implementation (`vendor/lib64/libimpl-ril.so`, loaded by `urild` → `librilcore.so`;
+ARM64, stripped but with a `.gnu_debugdata` mini symbol table that yields `mainLoop`, `openModemDev`,
+`sendHandshakeCmd`, `resetModem`, `at_open` …) was reversed to answer one question: which `stty_nr*` port belongs
+to whom. The analysis scripts (capstone xref scanner + annotated disassembler + the extracted symbol list) are in
+`tools/analysis/`; addresses below are file offsets in that `.so`.
+
+**The channel name is a formula, not a list.** `mainLoop` (at `0x2a490`) does:
+
+```
+property_get("ro.vendor.modem.tty", buf, "/dev/sdiomux");     /* build.prop: /dev/stty_nr */
+for (i = socket_id*3; i < socket_id*3+3; i++) {
+    snprintf(dev, "%s%d", buf, i);                            /* fmt @0x16f49 */
+    fd = open(dev, O_RDWR|O_NONBLOCK);                        /* + tcsetattr raw */
+    at_open(fd, i, "Channel%d", onUnsolicited);               /* one readerLoop thread per channel */
+}
+```
+
+`RIL_Init` creates **two** `mainLoop` threads unconditionally, one per RIL socket, and rejects `socket_id >= 2`
+("Invalid socket_id"); it logs `RIL_Init, SIM_COUNT: 2`. So the six ports are two groups of three, one group per
+SIM slot, on the single NR modem:
+
+| Device | Owner | Role |
+|---|---|---|
+| `/dev/stty_nr0..nr2` | RIL socket 0 (SIM slot 0) | 3 AT channels for slot 0 |
+| `/dev/stty_nr3..nr5` | RIL socket 1 (SIM slot 1) | 3 AT channels for slot 1 |
+| `/dev/stty_nr31` | engpc (`etc/engpc/dev/cp.conf`, `COM_AT`) | engineering AT port |
+
+The driver exposes at least 32 (`ueventd.rc` matches `/dev/stty_nr*`, 0660 radio:system); ports 6-30 are not
+touched by the RIL or engpc. This is also why `mu300-atd`'s choices match Android's own usage exactly: `nr1` is a
+command channel and `nr0` a URC channel for socket 0, and the measured "nr2-nr5 say nothing" (13b) is expected -
+they belong to socket 0's spare and all of socket 1's, which has no SIM activity to report.
+
+**Within a group, `i % 3 == 1` is the handshake channel.** The modem power-on state machine ("Modem Alive, do
+handshake first", around `0x269e0`) opens the literal name `<prop>1` - always `/dev/stty_nr1`, whichever socket it
+is acting for - and `sendHandshakeCmd` writes `AT+SMMSWAP=0\r` (or plain `AT\r` when a single-SIM flag global is
+set) before anything else. The exported `resetModem` (`0x235d0`) likewise opens `<prop>1` and writes
+`AT^CURC=%d` to quiet URCs across a reset. Requests then carry an absolute channel id (`socket_id*3 + i`, 0-5) in
+their AT-command context (`at_send_command_full`, `0x24840`), with a per-channel mutex array at `0xa5d80`.
+
+**UAC reporting is not in this library.** Its whole unsolicited-prefix table was enumerated (100+ `+SP*`/`^*`
+prefixes: network, SIM, IMS, calls - no audio of any kind). Whatever talks UAC state over `stty_nr0` on this
+firmware is another process opening the node directly, not the RIL; with the 0660 radio:system permissions any
+uid-system process can. If that daemon is ever identified, `nr0` has to be taken from `mu300-atd`'s drain loop
+first (13b: exactly one reader per channel).
+
+Two smaller facts worth keeping: the fallback prefix is `/dev/sdiomux`, so a firmware without
+`ro.vendor.modem.tty` set names its channels `/dev/sdiomux0..5`; and the modem's non-AT nodes all follow the same
+pattern in `build.prop` - `spipe_nr0` (command), `spipe_nr2` (assert/alive), `sdiag_nr`, `slog_nr`, `snv_nr`.
 
 ### 16. Rootfs details found while testing data
 * `docker export` leaves an empty `/etc/resolv.conf`: `resolvectl query` works but glibc programs cannot resolve names.
