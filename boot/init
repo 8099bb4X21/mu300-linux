@@ -279,13 +279,13 @@ if [ -d $A/vendor/bin ] && [ -f $A/vendor/bin/modem_control ]; then
     MODEM_PID=$!
     log "stage=modem_control-started-early pid=$MODEM_PID"
     for n in $(seq 1 30); do
-        dmesg | grep -q "sbuf ready for pmic wdt init" && break
+        dmesg | grep -q "Modem Alive" && break
         sleep 1
     done
-    if dmesg | grep -q "sbuf ready for pmic wdt init"; then
-        log "stage=pmic-wdt-rstoff-early t=$n"
+    if dmesg | grep -q "Modem Alive"; then
+        log "stage=modem-alive-early t=$n"
     else
-        log "stage=pmic-wdt-early-TIMEOUT (continuing; rootfs vendor will retry)"
+        log "stage=modem-alive-TIMEOUT (continuing; rootfs vendor will retry)"
     fi
     kill $MODEM_PID 2>/dev/null
     sleep 1
