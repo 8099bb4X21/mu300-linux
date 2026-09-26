@@ -5,8 +5,8 @@ USE_PROCD=1
 export PATH="$PATH:/opt/mu300/busybox-bin"
 
 start_service() {
-	# the NCM gadget interface (what a Windows host binds; macOS/Linux use ECM's usb0) joins the LAN
-	# bridge at runtime - netifd would block br-lan on a configured-but-missing port
+	# usb0 (the NCM gadget) is a configured bridge port; usb1 exists only with a MU300_USBNET second
+	# function and joins the LAN bridge at runtime - netifd would block br-lan on a missing port
 	[ -e /sys/class/net/usb1 ] && ip link set usb1 master br-lan 2>/dev/null && ip link set usb1 up
 	# the host gives up asking for a DHCP lease long before this device finishes booting; if nothing took an
 	# address, make the gadget re-enumerate once, which looks like a fresh cable to the host

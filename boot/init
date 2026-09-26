@@ -136,13 +136,14 @@ setup_usb_gadget() {
     mount -t configfs configfs /config
     g=/config/usb_gadget/linux
     mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
-    # The USB network functions: whichever of these the kernel actually has. Creating one it was not built with
-    # fails here; a function that could not be created is simply skipped. ECM serves macOS/Linux hosts, NCM the
-    # Windows inbox driver (Windows has no ECM class driver, so without NCM a Windows host gets no network at
-    # all) - both may coexist in one configuration and each host binds only its own.
+    # The USB network function: whichever of these the kernel actually has. Creating one it was not built with
+    # fails here; a function that could not be created is simply skipped. NCM alone: every current Windows,
+    # macOS and Linux host has an NCM class driver (Windows never had an ECM one), and the former ECM+NCM pair
+    # made the host enumerate two network adapters where each OS bound only its own. MU300_USBNET="ecm ncm"
+    # restores that pair for a host that still needs ECM.
     netfuncs=
-    for f in ${MU300_USBNET:-ecm ncm}; do
-        mkdir -p "$g/functions/$f.usb$f" 2>/dev/null && netfuncs="$netfuncs $f"
+    for f in ${MU300_USBNET:-ncm}; do
+        mkdir -p "$g/functions/$f.usb$f" 2>/dev/null && netfuncs="${netfuncs:+$netfuncs }$f"
     done
     [ -n "$netfuncs" ] || log "stage=usb-no-net-function (console only)"
     echo 0x0525 > "$g/idVendor"
@@ -151,12 +152,12 @@ setup_usb_gadget() {
     echo MU300LINUX > "$g/strings/0x409/serialnumber"
     echo Linux > "$g/strings/0x409/manufacturer"
     echo "MU300 Linux USB Ethernet" > "$g/strings/0x409/product"
-    echo "Linux${netfunc:- no} net (${netfuncs:-none}) + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
+    echo "Linux net (${netfuncs:-none}) + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
     echo 250 > "$g/configs/c.1/MaxPower"
     i=1; mac=1
     for f in $netfuncs; do
-        # ECM keeps the original pair (macOS' ECM driver reacts badly to a later link notification);
-        # the NCM pair is offset by 2 so the two interfaces never share a MAC
+        # the first function keeps the original MAC pair; a second one (only with a MU300_USBNET
+        # override) is offset by 2 so the two interfaces never share a MAC
         echo 02:50:00:00:77:0$((mac + 1)) > "$g/functions/$f.usb$f/dev_addr"
         echo 02:50:00:00:77:0$((mac + 2)) > "$g/functions/$f.usb$f/host_addr"
         mac=$((mac + 2))
@@ -165,7 +166,7 @@ setup_usb_gadget() {
     done
     # USB serial console alongside the network: recovery/debug access that does not depend on networking
     mkdir -p "$g/functions/acm.GS0" && ln -s "$g/functions/acm.GS0" "$g/configs/c.1/f$i"
-    log "stage=usb-net-function${netfuncs:-none}"
+    log "stage=usb-net-function ${netfuncs:-none}"
     log "stage=usb-wait-udc"
     for n in $(seq 1 40); do
         [ -e /sys/class/udc/25100000.dwc3 ] && break
@@ -184,9 +185,9 @@ setup_usb_gadget() {
     log "stage=usb-bind-done rc=$?"
     persist
 
-    # Bring the network links up immediately after binding, before the host selects a data interface:
-    # f_ecm reports the link state in its first CONNECT notification, and macOS' ECM driver does not
-    # pick up a later "connected" notification (v10 left usb0 down until systemd ran -> host "inactive").
+    # Bring the network links up immediately after binding: the host probes the link right after the
+    # gadget enumerates, long before the real system configures it (the old ECM gadget even reported
+    # its link state in its first CONNECT notification, and macOS did not pick up a later one).
     for u in usb0 usb1 usb2; do [ -e /sys/class/net/$u ] && ifconfig $u up; done
 
     # Temporary DHCP from the initramfs: the host asks for a lease the moment the gadget enumerates

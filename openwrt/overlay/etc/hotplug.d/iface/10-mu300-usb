@@ -1,6 +1,6 @@
-# MU300: the ECM gadget was bound in the initramfs; macOS keeps the link inactive after netifd reconfigures usb0
-# (at boot and on every network restart). Re-enumerate the gadget whenever the LAN comes up, at most every 20 s,
-# so the host starts DHCP on a fresh link.
+# MU300: the network gadget was bound in the initramfs; macOS kept the ECM link inactive after netifd
+# reconfigured usb0, and its NCM driver has not been measured to behave better. Re-enumerate the gadget
+# whenever the LAN comes up, at most every 20 s, so the host starts DHCP on a fresh link.
 [ "$ACTION" = ifup ] && [ "$INTERFACE" = lan ] || exit 0
 stamp=/tmp/mu300-usb-rebound
 now=$(cut -d. -f1 /proc/uptime)
@@ -30,8 +30,8 @@ udc=$(cat $g/UDC)
 		for u in usb0 usb1; do
 			[ -e /sys/class/net/$u ] || continue
 			ip link set $u up
-			# usb1 (NCM, what Windows binds) is not a configured bridge port: netifd would block
-			# br-lan on a missing interface, so it is re-attached at runtime here as well
+			# usb1 exists only with a MU300_USBNET second function and is not a configured bridge
+			# port: netifd would block br-lan on a missing interface, so re-attach it here as well
 			[ "$u" = usb1 ] && ip link set usb1 master br-lan 2>/dev/null
 		done
 	else
