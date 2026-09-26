@@ -180,29 +180,27 @@ do_get() {
 
 # ------------------------------------------------------------------ apply
 sfun_restart() {
+    # SFUN 5 -> 4 itself takes 1-2 seconds. The old code waited here for the radio
+    # and registration to come back (up to 70 s of polling) - completely unnecessary:
+    # mobile-data's watch redials automatically and the watchdog handles a dead radio.
+    # Fire the sequence, do one quick radio check, and get out of the way.
     say "restarting the protocol stack (SFUN 5 -> 4)"
     at 'AT+SFUN=5' 10 >/dev/null
     sleep 1
     at 'AT+SFUN=4' 30 >/dev/null
-    # after a stack restart the radio can come back OFF (+CFUN: 0 - measured on the
-    # device after a mode switch): nobody switches it on again and the box stays
-    # offline. Same cure as mobile-data's radio_on: SFUN=4, and if the radio is
-    # still off, SFUN=2 then SFUN=4 again.
-    n=0
-    while [ $n -lt 15 ]; do
-        at 'AT+CFUN?' 4 | grep -q '+CFUN: 1' && break
-        [ $((n % 5)) = 0 ] && { at 'AT+SFUN=4' 20 >/dev/null; sleep 2; at 'AT+SFUN=2' 8 >/dev/null; sleep 2; at 'AT+SFUN=4' 30 >/dev/null; }
-        n=$((n + 1)); sleep 2
-    done
-    at 'AT+CFUN?' 4 | grep -q '+CFUN: 1' || say "radio did not come back on after restart"
-    # wait for registration to come back (the page polls; this is only for the log)
-    n=0
-    while [ $n -lt 20 ]; do
-        at 'AT+CEREG?' 4 | grep -qE '\+CEREG: [0-9],(1|5)' && break
-        n=$((n + 1)); sleep 2
-    done
+    # one quick check: if the radio came back off (measured once, not the norm),
+    # nudge it with the mobile-data radio_on sequence; the watchdog covers the rest
+    sleep 3
+    if ! at 'AT+CFUN?' 4 2>/dev/null | grep -q '+CFUN: 1'; then
+        say "radio off after restart, running radio_on recovery"
+        at 'AT+SFUN=4' 20 >/dev/null
+        sleep 1
+        at 'AT+SFUN=2' 8 >/dev/null
+        sleep 1
+        at 'AT+SFUN=4' 30 >/dev/null
+    fi
     ifup wan 2>/dev/null
-    say "stack restarted, radio $(at 'AT+CFUN?' 4 | grep -q '+CFUN: 1' && echo on || echo OFF), registration $([ $n -lt 20 ] && echo back || echo 'still waiting')"
+    say "stack restarted ($(( $(date +%s) - ${_t0:-$(date +%s)} ))s), radio $(at 'AT+CFUN?' 4 2>/dev/null | grep -q '+CFUN: 1' && echo on || echo 'checking')"
 }
 
 # one apply at a time: overlapping SFUN dances (band lock + cell unlock + mode in
@@ -228,6 +226,7 @@ save_state() {  # save_state KEY VALUE - one small file per key, so applies neve
 }
 
 do_apply() {  # do_apply KIND VALUE
+    _t0=$(date +%s)
     apply_lock
     trap 'rm -rf /run/mu300-dash-apply 2>/dev/null' EXIT INT TERM
     kind=$1; val=$2
