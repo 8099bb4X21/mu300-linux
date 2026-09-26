@@ -83,7 +83,6 @@ take_lock() {  # take_lock DIRVAR - wait for a live holder, take over a dead one
     echo $$ > "$lock/pid"
 }
 if [ "$MODE" = fast ]; then
-    alive "$(cat $DIR/collect.lck/pid 2>/dev/null)" && exit 0   # full round running: it covers us
     LOCK=$DIR/fast.lck
 else
     LOCK=$DIR/collect.lck

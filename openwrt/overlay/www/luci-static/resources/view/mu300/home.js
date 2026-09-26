@@ -310,8 +310,7 @@ return view.extend({
 			'<span class="mud-q" style="background:color-mix(in oklab,' + col + ' 16%,transparent);color:' + col + '">' + label + '</span>' +
 			(rsrq != null ? '<span class="mud-tag">RSRQ ' + rsrq.toFixed(1) + '</span>' : '') +
 			(sinr != null ? '<span class="mud-tag">SINR ' + sinr.toFixed(1) + '</span>' : '') +
-			(c && c.lte && !c.nr && c.lte.sinr != null ? '<span class="mud-tag">LTE SINR ' + c.lte.sinr.toFixed(1) + '</span>' : '') +
-			(st.refreshing ? '<span class="mud-tag" style="opacity:.6">采集中…</span>' : '');
+			(c && c.lte && !c.nr && c.lte.sinr != null ? '<span class="mud-tag">LTE SINR ' + c.lte.sinr.toFixed(1) + '</span>' : '');
 
 		/* -- 链路与流量 */
 		var nrk = (c && c.nr) || null;

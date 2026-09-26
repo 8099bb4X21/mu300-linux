@@ -225,7 +225,13 @@ var CSS = `
 .mud-sms-item:hover{background:var(--hover-faint,rgba(127,127,127,.05))}
 .mud-sms-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
 .mud-badge{font-size:.68rem;padding:0 7px;border-radius:99px;background:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
-@media(max-width:600px){.mud-hero-r{text-align:left}.mud-chips{justify-content:flex-start}.mud-rsrp{font-size:1.9rem}}
+/* 手机端 hero 与锁定页一致：信息块在上、RSRP 块自然换行到下一行（右对齐） */
+@media(max-width:600px){
+.mud-hero{gap:8px}
+.mud-hero-l{flex:1 1 100%}
+.mud-hero-r{flex:1 0 100%;flex-direction:row;justify-content:space-between;align-items:baseline;text-align:left}
+.mud-rsrp{font-size:1.9rem}
+.mud-chips{justify-content:flex-end}}
 `;
 
 function injectCss() {

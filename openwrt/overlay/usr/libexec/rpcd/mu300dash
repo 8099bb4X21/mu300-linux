@@ -36,7 +36,7 @@ COLLECT_LCK=$DIR/collect.lck
 FAST_LCK=$DIR/fast.lck
 HIST=$DIR/at-history
 TTL=${MU300_DASH_TTL:-5}          # full tier: neighbours/QoS/operator
-TTL_FAST=${MU300_DASH_TTL_FAST:-3} # serving tier: signal/registration (page polls 1.5 s)
+TTL_FAST=${MU300_DASH_TTL_FAST:-1} # serving tier: kick whenever older than 1 s (a fast round is ~300 ms)
 MU300_AT_LOCK_WAIT=12
 export MU300_AT_LOCK_WAIT
 
