@@ -86,25 +86,28 @@ return view.extend({
   </div>
 
   <div class="mud-card">
-    <h3>Wi-Fi 与客户端</h3>
+    <h3>无线与局域网</h3>
     <div class="mud-rows">
       <div class="mud-r"><span class="mud-k">SSID · 信道</span><span class="mud-v" id="mud-ssid">--</span></div>
-      <div class="mud-r"><span class="mud-k">客户端 · 租约 · 连接跟踪</span><span class="mud-v" id="mud-lan">--</span></div>
+      <div class="mud-r"><span class="mud-k">加密 · 隐藏 · 国家</span><span class="mud-v" id="mud-wsec">--</span></div>
+      <div class="mud-r"><span class="mud-k">AP · USB 网络 · 跟踪</span><span class="mud-v" id="mud-wsta">--</span></div>
+      <div class="mud-r"><span class="mud-k">LAN · 客户端</span><span class="mud-v" id="mud-lan">--</span></div>
     </div>
     <div id="mud-clist" style="margin-top:6px"></div>
+    <div id="mud-leases" style="margin-top:6px"></div>
   </div>
 
   <div class="mud-card">
     <h3>设备与 SIM</h3>
     <div class="mud-temp" id="mud-temps"></div>
     <div class="mud-kpis" style="margin-top:8px">
-      <div class="mud-kpi"><b id="mud-cpu">--</b><span>CPU</span><div class="mud-meter"><i id="mud-cpu-bar" style="background:var(--brand,var(--primary,#3b82f6))"></i></div></div>
+      <div class="mud-kpi"><b id="mud-cpu">--</b><span>CPU 占用</span><div class="mud-meter"><i id="mud-cpu-bar" style="background:var(--brand,var(--primary,#3b82f6))"></i></div><div id="mud-cpu-spark" style="color:var(--brand,var(--primary,#3b82f6));margin-top:2px"></div></div>
       <div class="mud-kpi"><b id="mud-ram">--</b><span>内存</span><div class="mud-meter"><i id="mud-ram-bar" style="background:var(--info,#0ea5e9)"></i></div></div>
       <div class="mud-kpi"><b id="mud-disk">--</b><span>存储</span><div class="mud-meter"><i id="mud-disk-bar" style="background:var(--warning,#f59e0b)"></i></div></div>
       <div class="mud-kpi"><b id="mud-batt">--</b><span id="mud-batt-l">电源</span></div>
     </div>
+    <div id="mud-freqs" class="mud-freqs"></div>
     <div class="mud-rows">
-      <div class="mud-r"><span class="mud-k">CPU 频率</span><span class="mud-v" id="mud-freq">--</span></div>
       <div class="mud-r"><span class="mud-k">型号 · 系统</span><span class="mud-v" id="mud-model">--</span></div>
       <div class="mud-r"><span class="mud-k">调制解调器</span><span class="mud-v" id="mud-modem">--</span></div>
       <div class="mud-r"><span class="mud-k">运营商</span><span class="mud-v" id="mud-carr">--</span></div>
@@ -134,7 +137,7 @@ return view.extend({
 	wire: function(root) {
 		var self = this;
 		this.identShown = false;
-		this.dlHist = []; this.ulHist = [];
+		this.dlHist = []; this.ulHist = []; this.cpuHist = [];
 		this.lastNet = null; this.lastCpu = null; this.lastFullTs = 0;
 		/* render() 在节点挂进文档之前运行，这里相对 root 查找（挂载后 update 用全文档查找） */
 		var q = function(id) { return root.querySelector('#mud-' + id); };
@@ -328,8 +331,13 @@ return view.extend({
 		var wf = i.wifi || {};
 		M.set('ssid', (wf.ssid || '--') + (wf.channel ? ' · Ch ' + wf.channel : '') +
 			(wf.band ? '（' + wf.band + (wf.width ? ' · ' + wf.width : '') + '）' : ''));
-		M.set('lan', (wf.clients_n != null ? wf.clients_n + ' 台' : '--') +
-			' · ' + (i.lan ? i.lan.leases : '--') + ' 租约 · ' + (i.conns != null ? i.conns : '--') + ' 跟踪');
+		M.set('wsec', (wf.enc || '--') + (wf.hidden == 1 ? ' · 已隐藏' : '') + (wf.country ? ' · ' + wf.country : ''));
+		M.set('wsta', (wf.hostapd ? 'AP 运行' : 'AP 未运行') +
+			' · USB ' + ((i.net && i.net.usb0 && i.net.usb0.up) ? '已连接' : '未连接') +
+			' · ' + (i.conns != null ? i.conns : '--') + ' 跟踪');
+		M.set('lan', (i.lan && i.lan.ip ? i.lan.ip : '--') +
+			' · 无线 ' + (wf.clients_n != null ? wf.clients_n : '--') + ' 台' +
+			' · 租约 ' + (i.lan ? i.lan.leases : '--'));
 		M.v('clist').innerHTML = (wf.clients || []).map(function(cl) {
 			var l = cl.signal != null ? (cl.signal >= -55 ? '优秀' : cl.signal >= -67 ? '良好' : cl.signal >= -80 ? '一般' : '较差') : '未知';
 			return '<div class="mud-cli"><div class="t"><b>' + M.esc(cl.host || cl.ip || cl.mac) + '</b>' +
@@ -338,6 +346,16 @@ return view.extend({
 				((cl.tx || cl.rx) ? ' · ↑' + M.esc(cl.tx || '--') + ' ↓' + M.esc(cl.rx || '--') : '') +
 				(cl.conn ? ' · ' + M.esc(cl.conn) : '') + '</div></div>';
 		}).join('') || '';
+		/* 近期 DHCP 租约：没人连着的时候这里也能看出谁来过 */
+		M.v('leases').innerHTML = (i.lan && i.lan.list && i.lan.list.length)
+			? '<div class="mud-note" style="margin:0 0 4px">近期 DHCP 租约</div>' +
+				'<table class="mud-table"><tbody>' +
+				i.lan.list.slice(0, 8).map(function(l) {
+					return '<tr><td>' + M.esc(l.host || l.ip || '?') + '</td><td>' + M.esc(l.ip || '') + '</td>' +
+						'<td style="color:var(--text-subtle,var(--text-light,#999))">' + M.esc(l.mac) + '</td>' +
+						'<td>' + (l.left >= 3600 ? Math.round(l.left / 3600) + ' 小时' : Math.max(0, Math.round(l.left / 60)) + ' 分') + '</td></tr>';
+				}).join('') + '</tbody></table>'
+			: '';
 
 		var t = i.temps || {};
 		M.v('temps').innerHTML = [ [ 'SoC', t.soc ], [ 'CPU', t.cpu ], [ '调制解调器', t.modem ], [ '主板', t.board ] ]
@@ -349,15 +367,24 @@ return view.extend({
 
 		if (i.cpu && this.lastCpu && i.cpu.total != null && this.lastCpu.total != null) {
 			var dt2 = i.cpu.total - this.lastCpu.total, di = i.cpu.idle - this.lastCpu.idle;
-			var pct = dt2 > 0 ? Math.round((dt2 - di) * 100 / dt2) : null;
-			M.set('cpu', pct != null ? pct + '%' : '--');
-			M.v('cpu-bar').style.width = (pct || 0) + '%';
+			var pct = dt2 > 0 ? Math.max(0, Math.min(100, Math.round((dt2 - di) * 100 / dt2))) : null;
+			if (pct != null) {
+				M.set('cpu', pct + '%');
+				M.v('cpu-bar').style.width = pct + '%';
+				this.cpuHist.push(pct);
+				if (this.cpuHist.length > RATE_WIN) this.cpuHist.shift();
+				M.spark(M.v('cpu-spark'), this.cpuHist, 0, 100, RATE_WIN);
+			}
 		}
 		this.lastCpu = i.cpu || null;
-		var fs = ((i.cpu && i.cpu.freqs) || []).map(function(f) {
-			return (f.cur != null && f.max != null) ? (f.cur / 1000).toFixed(0) + ' / ' + (f.max / 1000).toFixed(0) : null;
-		}).filter(Boolean).join(' MHz · ');
-		if (fs) M.set('freq', fs + ' MHz');
+		/* 每簇一条 cur/max 频率条 */
+		M.v('freqs').innerHTML = ((i.cpu && i.cpu.freqs) || []).map(function(f, n) {
+			if (f.cur == null || f.max == null || !f.max) return '';
+			var w = Math.max(2, Math.round(f.cur * 100 / f.max));
+			return '<div class="mud-freq"><span class="mud-k">簇' + n + '</span>' +
+				'<div class="mud-meter" style="flex:1;margin:4px 8px 0"><i style="width:' + w + '%;background:var(--brand,var(--primary,#3b82f6))"></i></div>' +
+				'<span class="mud-v" style="flex:0 0 auto">' + (f.cur / 1000).toFixed(0) + ' <span style="opacity:.55">/ ' + (f.max / 1000).toFixed(0) + ' MHz</span></span></div>';
+		}).join('');
 
 		if (i.mem && i.mem.total_kb) {
 			var used = i.mem.total_kb - i.mem.avail_kb, pct = Math.round(used * 100 / i.mem.total_kb);

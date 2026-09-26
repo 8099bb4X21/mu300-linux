@@ -71,7 +71,7 @@ wan_proto=$(jval "$WANJSON" proto)
 wan_ip4=$(jaddr4 "$WANJSON")
 wan6_up=$(jval "$WAN6JSON" up)
 [ "$wan6_up" = "true" ] && wan6_up=1 || wan6_up=0
-wan6_ip=$(t2 ip -6 -br addr show sipa_eth0 2>/dev/null | awk '{for(i=3;i<=NF;i++) if($i ~ /^[2-3]/){split($i,s,"/");print s[1];exit}}')
+wan6_ip=$(t2 ip -6 addr show sipa_eth0 2>/dev/null | awk '/inet6 [23]/{split($2,s,"/"); print s[1]; exit}')
 wan_dns=$(jarr_dns "$WANJSON")
 apn=$(t3 uci -q get network.wan.apn)
 [ -n "$apn" ] || apn="(SIM default)"
@@ -150,6 +150,10 @@ W_HT=$(t3 uci -q get wireless.radio0.htmode)   # HE80 / VHT40 / HT20 -> the numb
 W_WIDTH=$(printf '%s' "$W_HT" | tr -cd '0-9' | head -c 2)
 [ -n "$W_WIDTH" ] && W_WIDTH="$W_WIDTH MHz"
 W_COUNTRY=$(t3 uci -q get wireless.radio0.country)
+W_ENC=$(t3 uci -q get wireless.@wifi-iface[0].encryption)
+[ -n "$W_ENC" ] || W_ENC=none
+W_HIDDEN=$(t3 uci -q get wireless.@wifi-iface[0].hidden)
+W_HOSTAPD=0; pidof hostapd >/dev/null 2>&1 && W_HOSTAPD=1
 W_DIS=$(t3 uci -q get wireless.radio0.disabled)
 [ "$W_DIS" = "1" ] && W_UP=0 || W_UP=1
 [ -d /sys/class/net/wlan0 ] || W_UP=0
@@ -177,6 +181,19 @@ $(printf '%s\n' "$W_CLIENTS")
 EOF2
 W_CLIST=${W_CLIST%,}
 LAN_LEASES=$(cat /tmp/dhcp.leases 2>/dev/null | wc -l)
+# recent DHCP leases (host/ip/mac + remaining time) - shows devices that were
+# here even when nobody is associated right now
+NOWS=$NOW
+LEASES=
+while read -r exp mac ip host _cid; do
+    [ -n "$mac" ] || continue
+    [ "$host" = "*" ] && host=
+    left=$(( exp - NOWS ))
+    [ "$left" -lt 0 ] && left=0
+    LEASES="$LEASES{\"host\":$(qs "$host"),\"ip\":$(qs "$ip"),\"mac\":$(qs "$mac"),\"left\":$left},"
+done < /tmp/dhcp.leases 2>/dev/null
+LEASES=${LEASES%,}
+LAN_IP=$(t2 ip -4 addr show br-lan 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')
 
 # ---------------------------------------------------------------- modem/path
 # the same liveness rule mu300-atd uses: the URC log on nr0 is written to as
@@ -214,9 +231,9 @@ printf '"net":{"sipa_eth0":%s,"brlan":%s,"wlan0":%s,"usb0":%s},' \
     "$(net_obj sipa_eth0)" "$(net_obj br-lan)" "$(net_obj wlan0)" "$(net_obj usb0)"
 printf '"wan":{"up":%d,"uptime":%s,"proto":%s,"apn":%s,"ip4":%s,"ip6":%s,"dns":%s},' \
     "$wan_up" "$(n_or_null "$wan_uptime")" "$(qs "$wan_proto")" "$(qs "$apn")" "$(qs "$wan_ip4")" "$(qs "$wan6_ip")" "$(qs "$wan_dns")"
-printf '"wifi":{"up":%d,"ssid":%s,"channel":%s,"band":%s,"width":%s,"country":%s,"clients":[%s],"clients_n":%d},' \
-    "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_WIDTH")" "$(qs "$W_COUNTRY")" "${W_CLIST:-}" "$W_CN"
-printf '"lan":{"leases":%s},' "$(n_or_null "$LAN_LEASES")"
+printf '"wifi":{"up":%d,"ssid":%s,"channel":%s,"band":%s,"width":%s,"country":%s,"enc":%s,"hidden":%s,"hostapd":%d,"clients":[%s],"clients_n":%d},' \
+    "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_WIDTH")" "$(qs "$W_COUNTRY")" "$(qs "$W_ENC")" "$(n_or_null "$W_HIDDEN")" "$W_HOSTAPD" "${W_CLIST:-}" "$W_CN"
+printf '"lan":{"leases":%s,"ip":%s,"list":[%s]},' "$(n_or_null "$LAN_LEASES")" "$(qs "$LAN_IP")" "${LEASES:-}"
 printf '"modem":{"alive":%d,"atd":%d,"data_paused":%d},' "$MODEM_ALIVE" "$ATD_OK" "$DATA_PAUSED"
 printf '"conns":%s,' "$(n_or_null "$CONNS")"
 printf '"vpn":{"enabled":%d,"engine":%s,"up":%d}}\n' "$VPN_ENABLED" "$(qs "$VPN_ENGINE")" "$VPN_UP"

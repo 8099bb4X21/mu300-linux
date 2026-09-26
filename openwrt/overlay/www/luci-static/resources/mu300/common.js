@@ -144,6 +144,8 @@ var CSS = `
 .mud-kpi span{font-size:.68rem;color:var(--text-muted,var(--text-light,#777))}
 .mud-meter{height:5px;border-radius:3px;background:var(--surface-sunken,rgba(127,127,127,.15));overflow:hidden;margin:3px 0 1px}
 .mud-meter i{display:block;height:100%;border-radius:3px}
+.mud-freq{display:flex;align-items:center;font-size:.76rem;font-variant-numeric:tabular-nums;padding:1px 0}
+.mud-freq .mud-k{flex:0 0 2.4em}
 .mud-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:6px 10px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.82rem;cursor:pointer;user-select:none}
 .mud-btn:active{transform:scale(.97)}
 .mud-btn.on{background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
