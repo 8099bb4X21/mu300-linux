@@ -16,5 +16,25 @@ udc=$(cat $g/UDC)
 	sleep 2
 	echo "" > $g/UDC 2>/dev/null
 	sleep 1
-	echo "$udc" > $g/UDC && logger -t mu300 "usb gadget re-enumerated on $udc"
+	# a single blind rebind can fail to bite (measured with the dual ECM+NCM configuration: the
+	# host tears its drivers down on unbind and the gadget stays unbound forever, taking the ACM
+	# console with it). Retry until UDC reports the gadget again, then restore the LAN ports.
+	n=0
+	while [ $n -lt 5 ]; do
+		echo "$udc" > $g/UDC 2>/dev/null && grep -q . $g/UDC 2>/dev/null && [ "$(cat $g/UDC)" = "$udc" ] && break
+		n=$((n + 1))
+		sleep 2
+	done
+	if [ "$(cat $g/UDC)" = "$udc" ]; then
+		logger -t mu300 "usb gadget re-enumerated on $udc"
+		for u in usb0 usb1; do
+			[ -e /sys/class/net/$u ] || continue
+			ip link set $u up
+			# usb1 (NCM, what Windows binds) is not a configured bridge port: netifd would block
+			# br-lan on a missing interface, so it is re-attached at runtime here as well
+			[ "$u" = usb1 ] && ip link set usb1 master br-lan 2>/dev/null
+		done
+	else
+		logger -t mu300 "usb gadget re-enumerate FAILED on $udc"
+	fi
 ) &
