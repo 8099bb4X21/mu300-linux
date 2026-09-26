@@ -154,9 +154,10 @@ sp_fragment() {  # sp_fragment MODE LINE [PHYLINE]  (MODE: lte | nr | ltenb)
         function f(x,   v) { v = x; sub(/,.*/, "", v); gsub(/\+/, "-", v); return (v == "" || v == "NA" || v == "N/A") ? "" : v+0 }
         function num(x) { return (x == "") ? "null" : x }
         function c1(x) { if (x == "") return "null"; return sprintf("%.1f", x/100) }
-        # large ids (NR cell id is 36 bits) must not go through %d: busybox awk
-        # casts to int32 and the dashboard showed them negative (measured)
-        function u64(x) { if (x == "") return "null"; return sprintf("%.0f", x) }
+        # large ids (NR cell id is 36 bits) must never go through arithmetic:
+        # busybox awk wraps integers at 32 bits (measured: 2579463431 came out
+        # negative through both %d and %.0f). fs() passes the token as a string.
+        function fs(x,   v) { v = x; sub(/,.*/, "", v); gsub(/\+/, "-", v); return (v == "" || v == "NA" || v == "N/A") ? "null" : "\"" v "\"" }
         function lteband(fr,   a,b,r,i,n) {
             n = split("1:0-599 2:600-1199 3:1200-1949 4:1950-2399 5:2400-2649 7:2750-3449 8:3450-3799 12:5010-5179 13:5180-5279 14:5280-5379 17:5730-5849 18:5850-5999 19:6000-6149 20:6150-6449 25:8040-8689 26:8690-9039 27:9040-9209 28:9210-9659 30:9770-9869 31:9870-9919 33:36000-36199 34:36200-36349 35:36350-36949 36:36950-37549 37:37550-37749 38:37750-38249 39:38250-38649 40:38650-39649 41:39650-41589 42:41590-43589 43:43590-45589 44:45590-46589 46:46790-54539 47:54540-55239 48:55240-56739 49:56740-58239 50:58240-59089 51:59090-59139 65:65536-66435 66:66436-67335", a, " ")
             for (i = 1; i <= n; i++) { split(a[i], b, ":"); split(b[2], r, "-")
@@ -212,7 +213,7 @@ sp_fragment() {  # sp_fragment MODE LINE [PHYLINE]  (MODE: lte | nr | ltenb)
                 bw = f(t[7])
                 printf "{\"band\":%d,\"arfcn\":%d,\"pci\":%d,\"rsrp\":%s,\"rsrq\":%s,\"sinr\":%s,\"bw_mhz\":%s,\"gnb\":%s,\"cid\":%s,\"ul_mcs\":%s,\"dl_mcs\":%s,\"ul_bler\":%s,\"dl_bler\":%s}",
                     band, arfcn, pci, c1(f(t[3])), c1(f(t[4])), c1(f(t[15])), num(bw),
-                    u64(f(t[8])), u64(f(t[9])), num(f(t[16])), num(f(t[17])), c1(f(t[18])), c1(f(t[19]))
+                    fs(t[8]), fs(t[9]), num(f(t[16])), num(f(t[17])), c1(f(t[18])), c1(f(t[19]))
             } else {   # ltenb: eight 12-field slots, first four are EARFCN/PCI/RSRP/RSRQ
                 out = ""
                 for (s = 0; s < 8; s++) {
