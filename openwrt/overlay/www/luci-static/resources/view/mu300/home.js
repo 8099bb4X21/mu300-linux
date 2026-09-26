@@ -22,10 +22,16 @@ return view.extend({
 	render: function() {
 		M.injectCss();
 		var root = document.createElement('div');
-		root.className = 'mud';
+		this._bootEl = root;
+		root.className = 'mud mud-booting';
 		root.innerHTML = this.html();
 		this.wire(root);
 		var self = this;
+		/* 首屏不等蜂窝缓存：sysinfo 是纯本地快照（毫秒级），先把系统/网络/无线全部画出来；
+		 * 蜂窝字段（RAT/RSRP/邻区…）由 1.5 s 的完整 status 轮询随后补上 */
+		L.resolveDefault(M.callSysinfo()).then(function(info) {
+			self.update({ info: info || {} });
+		});
 		poll.add(function() {
 			return L.resolveDefault(M.callStatus()).then(function(st) { self.update(st || {}); });
 		}, POLL_S);
@@ -249,6 +255,8 @@ return view.extend({
 	update: function(st) {
 		var i = st.info || {};
 		this.lastInfo = i;
+		/* 第一份带时间戳的快照落地后解除 loading 呼吸态 */
+		if (i.ts && this._bootEl) { this._bootEl.classList.remove('mud-booting'); this._bootEl = null; }
 		/* 快档覆盖：sig（服务小区/注册，1.5 s 级）盖在慢档缓存 c 的对应字段上 */
 		var c = st.cell || null;
 		var s = st.sig || null;

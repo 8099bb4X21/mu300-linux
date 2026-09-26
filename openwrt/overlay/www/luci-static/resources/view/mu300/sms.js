@@ -21,11 +21,8 @@ return view.extend({
 		root.innerHTML = `
 <div class="mud-sec" style="margin-top:0">
   <h3>短信 <span id="mud-sms-stat" style="font-weight:400"></span></h3>
-  <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-    <input id="mud-sms-num" placeholder="发送到：号码，如 10086 或 +86..." spellcheck="false"
-      style="flex:1 1 260px;padding:7px 11px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222)"/>
-    <button class="mud-btn" id="mud-sms-send" style="padding:7px 20px">发送</button>
-  </div>
+  <input id="mud-sms-num" placeholder="收件人：号码，如 10086 或 +86..." spellcheck="false"
+    style="width:100%;margin-bottom:8px;padding:7px 11px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222)"/>
   <div class="mud-ctl" style="max-width:460px;margin-bottom:8px">
     <button class="mud-btn" id="mud-sms-refresh">刷新</button>
     <button class="mud-btn" id="mud-sms-sync">从 SIM 同步</button>
@@ -36,7 +33,8 @@ return view.extend({
     <div class="mud-thread">
       <div class="mud-msgs" id="mud-sms-msgs"><div class="mud-note" style="margin:8px 2px">选择左侧会话，或直接在下方输入号码发送。</div></div>
       <div class="mud-comp">
-        <textarea id="mud-sms-text" placeholder="内容（UCS-2 提交，中文可直接发；Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+        <textarea id="mud-sms-text" placeholder="短信内容（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+        <button class="mud-btn" id="mud-sms-send" style="align-self:flex-end;padding:8px 18px">发送</button>
       </div>
     </div>
   </div>

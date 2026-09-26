@@ -12,6 +12,7 @@
  * 深浅两套模式都跟随主题。 */
 
 var callStatus = rpc.declare({ object: 'mu300dash', method: 'status', expect: { '': {} } });
+var callSysinfo = rpc.declare({ object: 'mu300dash', method: 'sysinfo', expect: { '': {} } });
 var callAct    = rpc.declare({ object: 'mu300dash', method: 'act', params: [ 'op', 'arg' ], expect: { '': {} } });
 var callAt     = rpc.declare({ object: 'mu300dash', method: 'at', params: [ 'cmd' ], expect: { '': {} } });
 var callAtHist = rpc.declare({ object: 'mu300dash', method: 'at_history', expect: { '': {} } });
@@ -126,6 +127,9 @@ var CSS = `
 .mud-sec>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
 .mud-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 28px}
 .mud-body>.mud-sec+.mud-sec{border-top:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 60%,transparent);margin-top:14px;padding-top:2px}
+/* 首屏 loading：数据未到时占位值轻微呼吸，不改变布局 */
+@keyframes mudpulse{0%,100%{opacity:1}50%{opacity:.35}}
+.mud-booting .mud-v,.mud-booting .mud-kpi b,.mud-booting .mud-rsrp,.mud-booting .mud-rat,.mud-booting .mud-temp span{animation:mudpulse 1.1s ease-in-out infinite}
 /* 紧凑键值行：键与值相邻排布（不两端对齐拉开），用于驻网参照等 */
 .mud-srvline{display:flex;flex-wrap:wrap;gap:4px 10px;padding:2px 0;font-size:.84rem}
 .mud-srvline .k{color:var(--text-muted,var(--text-light,#777));flex:0 0 auto}
@@ -303,7 +307,7 @@ function neighborRows(c, lockedCell) {
 
 /* LuCI 的 require 把模块当类工厂：必须返回 baseclass 派生的类，加载后拿到的是它的实例 */
 return baseclass.extend({
-	callStatus: callStatus, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
+	callStatus: callStatus, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
 	callLockGet: callLockGet, callLockFresh: callLockFresh, callLockSet: callLockSet,
 	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
