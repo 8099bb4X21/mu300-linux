@@ -31,3 +31,6 @@ arch/*.tar.gz
 arch/ArchLinuxARM-*
 android/magisk/*.zip
 /tools/pcmhost/pcmhost
+kernel/builtin-rejected.txt
+kernel/builtin.fragment
+kernel/merge-builtin.log

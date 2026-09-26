@@ -133,7 +133,10 @@ def main():
     if a.android_subset:
         dirs.add('android')
         for f in sorted(a.android_subset.rglob('*')):
-            rel = 'android/' + str(f.relative_to(a.android_subset))
+            # Windows Path.relative_to yields backslashes; the cpio needs forward ones
+            # (with backslashes the kernel creates literal "vendor\bin\modem_control" files,
+            # not a directory tree - the early-modem [ -f ] guard silently fails)
+            rel = 'android/' + str(f.relative_to(a.android_subset)).replace('\\', '/')
             # see vendor-overlay.py: ':' in property-area filenames became U+F03A on Windows; restore it
             rel = rel.replace('', ':')
             if f.is_symlink():
