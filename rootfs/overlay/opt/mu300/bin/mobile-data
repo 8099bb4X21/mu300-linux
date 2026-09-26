@@ -29,8 +29,15 @@ at_owner_alive() {
 
 at() {  # at CMD [timeout] -> response lines up to the final result code
     local cmd=$1 t=${2:-5} line owner
-    # mu300-atd owns the AT channel when it runs: closing the SIPC tty wedges it until the modem restarts, so
-    # ask the daemon instead of opening the device here
+    # mobile-data gets its own AT channel (nr2, same slot-0 group as nr1): AT+CGDATA
+    # blocks its channel for 10-20 s, and having it on the shared nr1 made every other
+    # AT user (toolkit signal checks, SMS) wait behind it. The nr2 daemon serves only
+    # this script, so the dial-up sequence never contends with anything.
+    if [ -p /run/mu300-at2/cmd ]; then
+        MU300_AT_DIR=/run/mu300-at2 /opt/mu300/bin/mu300-at -t "$t" "$cmd"
+        return
+    fi
+    # fall through to the shared nr1 daemon when the nr2 one is not running yet
     if [ -p /run/mu300-at/cmd ]; then
         /opt/mu300/bin/mu300-at -t "$t" "$cmd"
         return
