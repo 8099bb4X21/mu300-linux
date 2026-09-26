@@ -9,6 +9,11 @@ start_service() {
 	# come up (the SIPC nodes can appear after S91, and hw_bringup's background start
 	# occasionally lost the race), start them here - a minute into the boot every
 	# prerequisite exists for sure
+	procd_open_instance ledfix
+	procd_set_param command /opt/mu300/bin/mu300-ledfix
+	procd_set_param respawn 3600 30 0
+	procd_close_instance
+
 	procd_open_instance bootfix
 	procd_set_param command /bin/sh -c 'sleep 45;
 		[ -p /run/mu300-at/cmd ] || /etc/init.d/mu300-atd start;

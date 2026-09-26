@@ -313,6 +313,12 @@ return view.extend({
 		}
 
 		var oper = M.carrierName(c && c.operator);
+		/* COPS 空时（重启后的过渡态），从 IMSI 前 5-6 位推导 PLMN */
+		if (oper === '--' && c && c.ident && c.ident.imsi) {
+			var imsi = c.ident.imsi;
+			var plmn5 = imsi.substring(0, 5), plmn6 = imsi.substring(0, 6);
+			oper = M.PLMN_CN[plmn5] || M.PLMN_CN[plmn6] || plmn5;
+		}
 		M.set('op', oper + (score != null ? ' · 信号 ' + label + ' ' + score.toFixed(1) + ' 分' : ' · 信号 ' + label));
 
 		var cl = [];
@@ -385,7 +391,8 @@ return view.extend({
 		if (slowChanged) {
 			this.repaintNeigh();
 			M.set('carr', oper);
-			M.set('plmn', (c && c.operator && c.operator.plmn) || '--');
+			M.set('plmn', (c && c.operator && c.operator.plmn) ||
+				(c && c.ident && c.ident.imsi ? c.ident.imsi.substring(0, 5) : '--'));
 			this.paintIdent(c);
 		}
 

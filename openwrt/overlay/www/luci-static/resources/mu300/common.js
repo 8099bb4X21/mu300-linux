@@ -318,6 +318,6 @@ return baseclass.extend({
 	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	carrierName: carrierName, qLabel: qLabel, qCol: qCol, qScore: qScore,
-	esc: esc, fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime,
+	esc: esc, fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, PLMN_CN: PLMN_CN,
 	injectCss: injectCss, v: v, set: set, spark: spark, neighborRows: neighborRows
 });

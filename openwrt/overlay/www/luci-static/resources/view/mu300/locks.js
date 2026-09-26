@@ -239,7 +239,10 @@ return view.extend({
 		}
 		var ratTxt = (c.nr && c.nr.band) ? ((c.lte && c.lte.band) ? '5G NSA' : '5G SA') : 'LTE';
 		var sig = c.sig || {}, label = M.qLabel(sig.rsrp, sig.rsrq, sig.sinr);
-		this.Q('srv-rat').textContent = ratTxt + ' · ' + M.carrierName(c.operator);
+		var operName = M.carrierName(c.operator);
+			if (operName === '--' && c.ident && c.ident.imsi)
+				operName = M.PLMN_CN[c.ident.imsi.substring(0, 5)] || c.ident.imsi.substring(0, 5);
+			this.Q('srv-rat').textContent = ratTxt + ' · ' + operName;
 		this.Q('srv-rat').style.color = M.qCol(label);
 		var rsrpEl = this.Q('srv-rsrp');
 		if (sig.rsrp != null) { rsrpEl.innerHTML = sig.rsrp.toFixed(1) + '<small> dBm</small>'; rsrpEl.style.color = M.qCol(label); }

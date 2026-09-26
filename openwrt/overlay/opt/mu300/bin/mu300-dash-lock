@@ -140,9 +140,11 @@ do_get() {
     [ -n "$m1" ] || m1=134; [ -n "$prim" ] || prim=0
     lbl=$(mode_label "$m0" "$gran")
 
-    # NR read: normally three masks A,B,S; some firmwares answer four fields - then
-    # the extra one sits between A and B (same shape as the write A,0,B,S)
-    nr3=$(echo "$nrm" | awk -F',' 'NF>=4 {print $1","$3","$4; exit} {print}')
+    # NR read: the write format is mA,0,mB,mS - the read keeps the middle zero.
+    # Four fields: A,0,B,S -> take 1,3,4. Three fields: A,0,B -> take 1,3 (S=0).
+    # The old code passed 3 fields through untouched, so the B mask landed in the
+    # super-table slot and decoded as nonsense bands like n82.
+    nr3=$(echo "$nrm" | awk -F',' 'NF>=4 {print $1","$3","$4; exit} NF==3 {print $1","$3",0"; exit} {print "0,0,0"}')
     lte_b=$(lte_bands "$ltem")
     nr_b=$(nr_bands "$nr3")
 
