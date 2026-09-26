@@ -31,9 +31,12 @@ DASH=${MU300_DASH_BIN:-/opt/mu300/bin}
 SMS=${MU300_SMS_BIN:-/opt/mu300/bin/mu300-sms}
 DIR=${MU300_DASH_DIR:-/tmp/mu300-dash}
 CELL=$DIR/cell.json
+SIGF=$DIR/sig.json
 COLLECT_LCK=$DIR/collect.lck
+FAST_LCK=$DIR/fast.lck
 HIST=$DIR/at-history
-TTL=${MU300_DASH_TTL:-20}
+TTL=${MU300_DASH_TTL:-5}          # full tier: neighbours/QoS/operator
+TTL_FAST=${MU300_DASH_TTL_FAST:-3} # serving tier: signal/registration (page polls 1.5 s)
 MU300_AT_LOCK_WAIT=12
 export MU300_AT_LOCK_WAIT
 
@@ -50,28 +53,36 @@ collecting() {
     [ -n "$_p" ] && [ -d "/proc/$_p" ] &&
         tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -q mu300-dash-cell
 }
+fast_busy() {
+    _p=$(cat "$FAST_LCK/pid" 2>/dev/null)
+    [ -n "$_p" ] && [ -d "/proc/$_p" ] &&
+        tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -q mu300-dash-cell
+}
+age_of() { [ -s "$1" ] && echo $(( $(now) - $(date -r "$1" +%s 2>/dev/null || echo 0) )) || echo -1; }
 
 m_status() {
-    local info age busy=0
+    local info cage sage busy=0 fbusy=0
     info=$("$DASH/mu300-dash-info" 2>/dev/null)
     [ -n "$info" ] || info='{"error":"mu300-dash-info failed"}'
-    age=-1
-    if [ -s "$CELL" ]; then
-        age=$(( $(now) - $(date -r "$CELL" +%s 2>/dev/null || echo 0) ))
+    cage=$(age_of "$CELL"); sage=$(age_of "$SIGF")
+    # two refresh tiers, both detached: the fast one keeps the serving-cell data
+    # within ~3 s of reality, the full one refreshes neighbours/QoS/operator.
+    # a full round in flight also writes the fast cache, so it counts for both.
+    if collecting; then busy=1; fbusy=1; fi
+    fast_busy && fbusy=1
+    if [ "$sage" -gt "$TTL_FAST" ] && [ "$fbusy" = 0 ]; then
+        setsid "$DASH/mu300-dash-cell" fast >/dev/null 2>&1 &
+        fbusy=1
     fi
-    collecting && busy=1
-    if [ "$age" -gt "$TTL" ] && [ "$busy" = 0 ]; then
-        # kick a background refresh; the page gets the current (stale) data now and
-        # the fresh round lands within a couple of seconds
+    if [ "$cage" -gt "$TTL" ] && [ "$busy" = 0 ]; then
         setsid "$DASH/mu300-dash-cell" >/dev/null 2>&1 &
         busy=1
     fi
-    if [ -s "$CELL" ]; then
-        printf '{"info":%s,"cell":%s,"cell_age":%d,"refreshing":%d}\n' \
-            "$info" "$(cat "$CELL")" "$age" "$busy"
-    else
-        printf '{"info":%s,"cell":null,"cell_age":%d,"refreshing":%d}\n' "$info" "$age" "$busy"
-    fi
+    printf '{"info":%s,"cell":%s,"sig":%s,"cell_age":%d,"sig_age":%d,"refreshing":%d}\n' \
+        "$info" \
+        "$([ -s "$CELL" ] && cat "$CELL" || echo null)" \
+        "$([ -s "$SIGF" ] && cat "$SIGF" || echo null)" \
+        "$cage" "$sage" "$busy"
 }
 
 m_act() {

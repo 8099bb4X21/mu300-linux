@@ -140,26 +140,37 @@ net_obj() {  # net_obj IFACE -> {"rx":N,"tx":N,"up":0|1} or null
 }
 
 # ------------------------------------------------------------------- Wi-Fi
-# configuration truth is uci (the driver reports nothing useful); client list
-# from the driver's station table, names from the DHCP leases
+# configuration truth is uci (the driver reports nothing useful); per-client detail
+# comes from the driver's station table, names and addresses from the DHCP leases
 W_SSID=$(t3 uci -q get wireless.@wifi-iface[0].ssid)
 W_CH=$(t3 uci -q get wireless.radio0.channel)
 W_BAND=$(t3 uci -q get wireless.radio0.band)
 [ -n "$W_BAND" ] || W_BAND=$(t3 uci -q get wireless.radio0.hwmode)
+W_HT=$(t3 uci -q get wireless.radio0.htmode)   # HE80 / VHT40 / HT20 -> the number is the width
+W_WIDTH=$(printf '%s' "$W_HT" | tr -cd '0-9' | head -c 2)
+[ -n "$W_WIDTH" ] && W_WIDTH="$W_WIDTH MHz"
 W_COUNTRY=$(t3 uci -q get wireless.radio0.country)
 W_DIS=$(t3 uci -q get wireless.radio0.disabled)
 [ "$W_DIS" = "1" ] && W_UP=0 || W_UP=1
 [ -d /sys/class/net/wlan0 ] || W_UP=0
-# station table: "Station xx:.. (on wlan0)" then "	signal: -53 dBm"
-W_CLIENTS=$(t3 iw dev wlan0 station dump 2>/dev/null | awk '
-    /^Station / { mac = $2; sig = "" }
-    /^[ \t]*signal:/ { sig = $2 }
-    mac != "" && sig != "" && !seen[mac]++ { printf "%s %s\n", mac, sig; sig = "" }')
+# station table: one block per client - mac, signal, tx/rx bitrate, connected time
+W_CLIENTS=$(t3 iw dev wlan0 station dump 2>/dev/null | awk -F':\t*' '
+    /^Station / { mac = $2; sub(/ .*/, "", mac); sig = tx = rx = ct = "" }
+    /^	signal:/ { sig = $2 + 0 }
+    /^	tx bitrate:/ { tx = $2; sub(/ .*/, "", tx); sub(/$/, " Mbit/s", tx) }
+    /^	rx bitrate:/ { rx = $2; sub(/ .*/, "", rx); sub(/$/, " Mbit/s", rx) }
+    /^	connected time:/ { ct = $2 + 0; ct = int(ct / 60) + " min" }
+    mac != "" && sig != "" && !seen[mac]++ {
+        printf "%s|%s|%s|%s|%s\n", mac, sig, tx, rx, ct; sig = ""
+    }')
 W_CN=0; W_CLIST=
-while read -r mac sig; do
+while IFS='|' read -r mac sig txr rxr ct; do
     [ -n "$mac" ] || continue
-    host=$(awk -v m="$(echo "$mac" | tr 'a-f' 'A-F')" '$2 == m {print $4}' /tmp/dhcp.leases 2>/dev/null | head -n1)
-    W_CLIST="$W_CLIST{\"mac\":\"$mac\",\"host\":$(qs "$host"),\"signal\":$(n_or_null "$sig")},"
+    umac=$(echo "$mac" | tr 'a-f' 'A-F')
+    line=$(awk -v m="$umac" '$2 == m { print $3 "|" $4; exit }' /tmp/dhcp.leases 2>/dev/null)
+    ip=${line%%|*}; host=${line#*|}
+    [ "$host" = "$line" ] && host=
+    W_CLIST="$W_CLIST{\"mac\":\"$mac\",\"host\":$(qs "$host"),\"ip\":$(qs "$ip"),\"signal\":$(n_or_null "$sig"),\"tx\":$(qs "$txr"),\"rx\":$(qs "$rxr"),\"conn\":$(qs "$ct")},"
     W_CN=$((W_CN + 1))
 done <<EOF2
 $(printf '%s\n' "$W_CLIENTS")
@@ -203,8 +214,8 @@ printf '"net":{"sipa_eth0":%s,"brlan":%s,"wlan0":%s,"usb0":%s},' \
     "$(net_obj sipa_eth0)" "$(net_obj br-lan)" "$(net_obj wlan0)" "$(net_obj usb0)"
 printf '"wan":{"up":%d,"uptime":%s,"proto":%s,"apn":%s,"ip4":%s,"ip6":%s,"dns":%s},' \
     "$wan_up" "$(n_or_null "$wan_uptime")" "$(qs "$wan_proto")" "$(qs "$apn")" "$(qs "$wan_ip4")" "$(qs "$wan6_ip")" "$(qs "$wan_dns")"
-printf '"wifi":{"up":%d,"ssid":%s,"channel":%s,"band":%s,"country":%s,"clients":[%s],"clients_n":%d},' \
-    "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_COUNTRY")" "${W_CLIST:-}" "$W_CN"
+printf '"wifi":{"up":%d,"ssid":%s,"channel":%s,"band":%s,"width":%s,"country":%s,"clients":[%s],"clients_n":%d},' \
+    "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_WIDTH")" "$(qs "$W_COUNTRY")" "${W_CLIST:-}" "$W_CN"
 printf '"lan":{"leases":%s},' "$(n_or_null "$LAN_LEASES")"
 printf '"modem":{"alive":%d,"atd":%d,"data_paused":%d},' "$MODEM_ALIVE" "$ATD_OK" "$DATA_PAUSED"
 printf '"conns":%s,' "$(n_or_null "$CONNS")"

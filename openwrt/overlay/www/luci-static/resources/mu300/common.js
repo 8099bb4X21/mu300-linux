@@ -115,8 +115,10 @@ var CSS = `
 .mud{color:var(--text,#222);font-size:.85rem;line-height:1.45}
 .mud *{box-sizing:border-box}
 .mud-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;margin-top:6px}
-.mud-card{background:var(--surface,var(--background-alt,var(--background,#fff)));border:1px solid var(--hairline,var(--border,#e3e6ea));border-radius:calc(var(--radius-base,.5rem) + .375rem);padding:10px 12px;box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.04))}
+.mud-card{background:var(--surface,var(--background-alt,var(--background,#fff)));border:1px solid var(--hairline,var(--border,#e3e6ea));border-radius:calc(var(--radius-base,.5rem) + .375rem);padding:10px 12px;box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.04));transition:border-color .15s}
+.mud-card:hover{border-color:color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 30%,var(--hairline,var(--border,#e3e6ea)))}
 .mud-card>h3{margin:0 0 8px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
+.mud-card>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
 .mud-hero{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:14px;align-items:center;background:var(--brand-subtle,var(--surface,#fff))}
 .mud-hero-l{flex:1 1 240px;min-width:0}
 .mud-hero-r{flex:0 0 auto;text-align:right}
@@ -136,10 +138,10 @@ var CSS = `
 .mud-bars{display:inline-flex;align-items:flex-end;gap:2px;height:16px;margin-left:8px;vertical-align:baseline}
 .mud-bars i{width:3px;border-radius:1px;background:var(--hairline,var(--border,#ccc))}
 .mud-bars i.on{background:currentColor}
-.mud-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;margin-bottom:4px}
-.mud-kpi{background:var(--surface-sunken,rgba(127,127,127,.06));border-radius:calc(var(--radius-base,.5rem));padding:6px 9px}
-.mud-kpi b{display:block;font-size:1.02rem;font-variant-numeric:tabular-nums;font-weight:700}
-.mud-kpi span{font-size:.7rem;color:var(--text-muted,var(--text-light,#777))}
+.mud-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:8px;margin-bottom:4px}
+.mud-kpi{background:var(--surface-sunken,rgba(127,127,127,.06));border-radius:var(--radius-base,.5rem);padding:6px 9px 6px 10px;border-left:3px solid color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 55%,transparent)}
+.mud-kpi b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums;font-weight:700;line-height:1.25}
+.mud-kpi span{font-size:.68rem;color:var(--text-muted,var(--text-light,#777))}
 .mud-meter{height:5px;border-radius:3px;background:var(--surface-sunken,rgba(127,127,127,.15));overflow:hidden;margin:3px 0 1px}
 .mud-meter i{display:block;height:100%;border-radius:3px}
 .mud-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:6px 10px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.82rem;cursor:pointer;user-select:none}
@@ -150,10 +152,13 @@ var CSS = `
 .mud-ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:7px}
 .mud-note{font-size:.72rem;color:var(--text-subtle,var(--text-light,#999));margin-top:7px}
 .mud-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:.8rem}
-.mud-table th{font-weight:500;color:var(--text-muted,var(--text-light,#777));text-align:right;padding:1px 4px;border-bottom:1px solid var(--hairline,var(--border,#ddd));font-size:.72rem}
+.mud-table th{font-weight:500;color:var(--text-muted,var(--text-light,#777));text-align:right;padding:1px 4px;border-bottom:1px solid var(--hairline,var(--border,#ddd));font-size:.72rem;position:sticky;top:0;background:var(--surface,var(--background-alt,var(--background,#fff)))}
 .mud-table td{text-align:right;padding:2px 4px;border-bottom:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 5%,transparent)}
 .mud-table th:first-child,.mud-table td:first-child{text-align:left}
 .mud-scroll{max-height:230px;overflow:auto}
+.mud-cli{padding:4px 8px;border-radius:var(--radius-base,.5rem);border:1px solid color-mix(in oklab,var(--hairline,var(--border,#ddd)) 55%,transparent);margin-bottom:5px}
+.mud-cli .t{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.mud-cli .s{font-size:.72rem;color:var(--text-muted,var(--text-light,#888));font-variant-numeric:tabular-nums;margin-top:1px}
 .mud-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-subtle,#8A8F98);margin-right:6px;vertical-align:1px}
 .mud-dot.on{background:var(--success,#2FBF71)}
 .mud-temp{display:inline-flex;gap:5px;flex-wrap:wrap}

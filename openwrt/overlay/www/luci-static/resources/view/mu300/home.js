@@ -12,8 +12,8 @@
  * 数据只有一个来源：ubus mu300dash status（快照 + 蜂窝缓存，页面永不发 AT）。
  * CPU 占用与上下行速率用相邻两次快照差分。loadavg 不显示（厂商线程常驻 D 态）。 */
 
-var POLL_S = 3;
-var RATE_WIN = 60;
+var POLL_S = 1.5;   /* 快档：信号/速率/CPU 每轮都刷；邻区等慢数据只在 cell.ts 变化时重绘 */
+var RATE_WIN = 40;
 
 return view.extend({
 	load: function() { return Promise.resolve(); },
@@ -55,7 +55,8 @@ return view.extend({
       <div class="mud-kpi"><b id="mud-mcs">--</b><span>MCS 下/上</span></div>
       <div class="mud-kpi"><b id="mud-bler">--</b><span>BLER 下/上</span></div>
       <div class="mud-kpi"><b id="mud-bw">--</b><span>频宽</span></div>
-      <div class="mud-kpi"><b id="mud-qci">--</b><span>QCI · AMBR 下/上</span></div>
+      <div class="mud-kpi"><b id="mud-qci">--</b><span>QCI</span></div>
+      <div class="mud-kpi"><b id="mud-ambr">--</b><span>AMBR 下/上</span></div>
     </div>
     <div class="mud-rows" id="mud-lteanchor"></div>
   </div>
@@ -88,8 +89,7 @@ return view.extend({
     <h3>Wi-Fi 与客户端</h3>
     <div class="mud-rows">
       <div class="mud-r"><span class="mud-k">SSID · 信道</span><span class="mud-v" id="mud-ssid">--</span></div>
-      <div class="mud-r"><span class="mud-k">已连接客户端</span><span class="mud-v" id="mud-wcl">--</span></div>
-      <div class="mud-r"><span class="mud-k">DHCP 租约 · 连接跟踪</span><span class="mud-v" id="mud-lan">--</span></div>
+      <div class="mud-r"><span class="mud-k">客户端 · 租约 · 连接跟踪</span><span class="mud-v" id="mud-lan">--</span></div>
     </div>
     <div id="mud-clist" style="margin-top:6px"></div>
   </div>
@@ -99,11 +99,12 @@ return view.extend({
     <div class="mud-temp" id="mud-temps"></div>
     <div class="mud-kpis" style="margin-top:8px">
       <div class="mud-kpi"><b id="mud-cpu">--</b><span>CPU</span><div class="mud-meter"><i id="mud-cpu-bar" style="background:var(--brand,var(--primary,#3b82f6))"></i></div></div>
-      <div class="mud-kpi"><b id="mud-ram">--</b><span>内存</span><div class="mud-meter"><i id="mud-ram-bar" style="background:color-mix(in oklab,var(--brand,#8b5cf6) 60%,var(--text,#8b5cf6))"></i></div></div>
+      <div class="mud-kpi"><b id="mud-ram">--</b><span>内存</span><div class="mud-meter"><i id="mud-ram-bar" style="background:var(--info,#0ea5e9)"></i></div></div>
       <div class="mud-kpi"><b id="mud-disk">--</b><span>存储</span><div class="mud-meter"><i id="mud-disk-bar" style="background:var(--warning,#f59e0b)"></i></div></div>
       <div class="mud-kpi"><b id="mud-batt">--</b><span id="mud-batt-l">电源</span></div>
     </div>
     <div class="mud-rows">
+      <div class="mud-r"><span class="mud-k">CPU 频率</span><span class="mud-v" id="mud-freq">--</span></div>
       <div class="mud-r"><span class="mud-k">型号 · 系统</span><span class="mud-v" id="mud-model">--</span></div>
       <div class="mud-r"><span class="mud-k">调制解调器</span><span class="mud-v" id="mud-modem">--</span></div>
       <div class="mud-r"><span class="mud-k">运营商</span><span class="mud-v" id="mud-carr">--</span></div>
@@ -134,7 +135,7 @@ return view.extend({
 		var self = this;
 		this.identShown = false;
 		this.dlHist = []; this.ulHist = [];
-		this.lastNet = null; this.lastCpu = null;
+		this.lastNet = null; this.lastCpu = null; this.lastFullTs = 0;
 		/* render() 在节点挂进文档之前运行，这里相对 root 查找（挂载后 update 用全文档查找） */
 		var q = function(id) { return root.querySelector('#mud-' + id); };
 
@@ -193,8 +194,20 @@ return view.extend({
 	update: function(st) {
 		var i = st.info || {};
 		this.lastInfo = i;
+		/* 快档覆盖：sig（服务小区/注册，1.5 s 级）盖在慢档缓存 c 的对应字段上 */
 		var c = st.cell || null;
+		var s = st.sig || null;
+		if (s && !s.error && (!c || !c.ts || (s.ts || 0) >= c.ts)) {
+			c = c ? Object.assign({}, c, {
+				ts: s.ts, cfun: s.cfun, reg: s.reg, reg5g: s.reg5g,
+				sig_src: s.sig_src, sig: s.sig, lte: s.lte, nr: s.nr
+			}) : s;
+		}
 		this.lastCell = c;
+		/* 慢档数据（邻区/运营商/身份）只在整份缓存的时间戳变化时重绘 */
+		var fullTs = (st.cell && st.cell.ts) || 0;
+		var slowChanged = fullTs !== this.lastFullTs;
+		this.lastFullTs = fullTs;
 
 		M.set('host', i.host);
 		M.set('uptime', i.uptime ? '已运行 ' + M.fmtUptime(i.uptime) : '');
@@ -250,7 +263,8 @@ return view.extend({
 		M.set('bler', nr && nr.dl_bler != null ? nr.dl_bler + '% / ' + (nr.ul_bler != null ? nr.ul_bler : '--') + '%' : '--');
 		M.set('bw', nr && nr.bw_mhz ? nr.bw_mhz + ' MHz' : (c && c.lte && c.lte.bw) || '--');
 		var qos = c && c.qos;
-		M.set('qci', qos && qos.qci != null ? qos.qci + (qos.dl != null ? ' · ' + qos.dl + '/' + qos.ul + ' M' : '') : '--');
+		M.set('qci', qos && qos.qci != null ? qos.qci : '--');
+		M.set('ambr', qos && qos.dl != null ? qos.dl + ' / ' + qos.ul + ' Mbps' : '--');
 		var anchor = (c && c.lte && c.lte.band) ? c.lte : null;
 		M.v('lteanchor').innerHTML = (anchor && c.nr && c.nr.band) ?
 			'<div class="mud-r"><span class="mud-k">LTE 锚点</span><span class="mud-v">B' + M.esc(anchor.band) +
@@ -292,30 +306,38 @@ return view.extend({
 		} else if (c && c.error) reg = c.error;
 		M.set('reg', reg);
 
-		var nb = (c && c.neigh) || [];
-		nb.sort(function(a, b) {
-			if ((a.rat == 'nr') != (b.rat == 'nr')) return a.rat == 'nr' ? -1 : 1;
-			return (b.rsrp || -999) - (a.rsrp || -999);
-		});
-		M.v('neigh').innerHTML = nb.length ? nb.map(function(n) {
-			var l = M.qLabel(n.rsrp, n.rsrq, n.sinr);
-			return '<tr><td>' + (n.rat == 'nr' ? 'NR n' + M.esc(n.band) : 'LTE B' + M.esc(n.band)) + '</td>' +
-				'<td>' + M.esc(n.pci != null ? n.pci : '--') + '</td>' +
-				'<td>' + M.esc(n.arfcn != null ? n.arfcn : '--') + '</td>' +
-				'<td style="color:' + M.qCol(l) + '">' + (n.rsrp != null ? n.rsrp.toFixed(1) : '--') + '</td>' +
-				'<td>' + (n.rsrq != null ? n.rsrq.toFixed(1) : '--') + '</td>' +
-				'<td>' + (n.sinr != null ? n.sinr.toFixed(1) : '--') + '</td></tr>';
-		}).join('') : '<tr><td colspan="6" style="color:var(--text-muted,var(--text-light,#777))">暂无邻区数据</td></tr>';
+		if (slowChanged) {
+			var nb = (c && c.neigh) || [];
+			nb.sort(function(a, b) {
+				if ((a.rat == 'nr') != (b.rat == 'nr')) return a.rat == 'nr' ? -1 : 1;
+				return (b.rsrp || -999) - (a.rsrp || -999);
+			});
+			M.v('neigh').innerHTML = nb.length ? nb.map(function(n) {
+				var l = M.qLabel(n.rsrp, n.rsrq, n.sinr);
+				return '<tr><td>' + (n.rat == 'nr' ? 'NR n' + M.esc(n.band) : 'LTE B' + M.esc(n.band)) + '</td>' +
+					'<td>' + M.esc(n.pci != null ? n.pci : '--') + '</td>' +
+					'<td>' + M.esc(n.arfcn != null ? n.arfcn : '--') + '</td>' +
+					'<td style="color:' + M.qCol(l) + '">' + (n.rsrp != null ? n.rsrp.toFixed(1) : '--') + '</td>' +
+					'<td>' + (n.rsrq != null ? n.rsrq.toFixed(1) : '--') + '</td>' +
+					'<td>' + (n.sinr != null ? n.sinr.toFixed(1) : '--') + '</td></tr>';
+			}).join('') : '<tr><td colspan="6" style="color:var(--text-muted,var(--text-light,#777))">暂无邻区数据</td></tr>';
+			M.set('carr', oper + (c && c.operator && c.operator.plmn ? ' · ' + c.operator.plmn : ''));
+			this.paintIdent(c);
+		}
 
 		var wf = i.wifi || {};
-		M.set('ssid', (wf.ssid || '--') + (wf.channel ? ' · Ch ' + wf.channel + (wf.band ? ' (' + wf.band + ')' : '') : ''));
-		M.set('wcl', wf.clients_n != null ? wf.clients_n + ' 台' : '--');
-		M.set('lan', (i.lan ? i.lan.leases : '--') + ' 条 · ' + (i.conns != null ? i.conns + ' 条' : '--'));
+		M.set('ssid', (wf.ssid || '--') + (wf.channel ? ' · Ch ' + wf.channel : '') +
+			(wf.band ? '（' + wf.band + (wf.width ? ' · ' + wf.width : '') + '）' : ''));
+		M.set('lan', (wf.clients_n != null ? wf.clients_n + ' 台' : '--') +
+			' · ' + (i.lan ? i.lan.leases : '--') + ' 租约 · ' + (i.conns != null ? i.conns : '--') + ' 跟踪');
 		M.v('clist').innerHTML = (wf.clients || []).map(function(cl) {
 			var l = cl.signal != null ? (cl.signal >= -55 ? '优秀' : cl.signal >= -67 ? '良好' : cl.signal >= -80 ? '一般' : '较差') : '未知';
-			return '<div class="mud-r"><span class="mud-k">' + M.esc(cl.host || cl.mac) + '</span>' +
-				'<span class="mud-v">' + M.esc(cl.mac) + (cl.signal != null ? ' · <span style="color:' + M.qCol(l) + '">' + cl.signal + ' dBm</span>' : '') + '</span></div>';
-		}).join('');
+			return '<div class="mud-cli"><div class="t"><b>' + M.esc(cl.host || cl.ip || cl.mac) + '</b>' +
+				(cl.signal != null ? '<span style="color:' + M.qCol(l) + ';font-variant-numeric:tabular-nums">' + cl.signal + ' dBm</span>' : '') +
+				'</div><div class="s">' + (cl.ip ? M.esc(cl.ip) + ' · ' : '') + M.esc(cl.mac) +
+				((cl.tx || cl.rx) ? ' · ↑' + M.esc(cl.tx || '--') + ' ↓' + M.esc(cl.rx || '--') : '') +
+				(cl.conn ? ' · ' + M.esc(cl.conn) : '') + '</div></div>';
+		}).join('') || '';
 
 		var t = i.temps || {};
 		M.v('temps').innerHTML = [ [ 'SoC', t.soc ], [ 'CPU', t.cpu ], [ '调制解调器', t.modem ], [ '主板', t.board ] ]
@@ -328,14 +350,14 @@ return view.extend({
 		if (i.cpu && this.lastCpu && i.cpu.total != null && this.lastCpu.total != null) {
 			var dt2 = i.cpu.total - this.lastCpu.total, di = i.cpu.idle - this.lastCpu.idle;
 			var pct = dt2 > 0 ? Math.round((dt2 - di) * 100 / dt2) : null;
-			var fs = (i.cpu.freqs || []).map(function(f) {
-				return (f.cur != null && f.max != null) ? (f.cur / 1000).toFixed(0) + '/' + (f.max / 1000).toFixed(0) : null;
-			}).filter(Boolean).join(' ');
 			M.set('cpu', pct != null ? pct + '%' : '--');
 			M.v('cpu-bar').style.width = (pct || 0) + '%';
-			if (fs) M.v('cpu').textContent += ' · ' + fs + ' MHz';
 		}
 		this.lastCpu = i.cpu || null;
+		var fs = ((i.cpu && i.cpu.freqs) || []).map(function(f) {
+			return (f.cur != null && f.max != null) ? (f.cur / 1000).toFixed(0) + ' / ' + (f.max / 1000).toFixed(0) : null;
+		}).filter(Boolean).join(' MHz · ');
+		if (fs) M.set('freq', fs + ' MHz');
 
 		if (i.mem && i.mem.total_kb) {
 			var used = i.mem.total_kb - i.mem.avail_kb, pct = Math.round(used * 100 / i.mem.total_kb);
@@ -355,7 +377,6 @@ return view.extend({
 		}
 		M.set('model', (i.model || '--') + ' · ' + (i.fw || ''));
 		M.set('modem', (i.modem && i.modem.alive ? '在线' : '无应答') + (i.modem && i.modem.atd ? '' : ' · mu300-atd 未运行'));
-		M.set('carr', oper + (c && c.operator && c.operator.plmn ? ' · ' + c.operator.plmn : ''));
 
 		var b;
 		b = M.v('btn-data'); b.className = 'mud-btn' + (w.up ? ' on' : ''); b.textContent = w.up ? '数据连接 ✓' : '数据连接';
@@ -363,7 +384,5 @@ return view.extend({
 		b = M.v('btn-wifi'); b.className = 'mud-btn' + (wf.up ? ' on' : ''); b.textContent = wf.up ? 'Wi-Fi 热点 ✓' : 'Wi-Fi 热点';
 		var vp = i.vpn || {};
 		b = M.v('btn-vpn'); b.className = 'mud-btn' + (vp.up ? ' on' : ''); b.textContent = vp.up ? 'VPN ✓' : 'VPN';
-
-		this.paintIdent(c);
 	}
 });

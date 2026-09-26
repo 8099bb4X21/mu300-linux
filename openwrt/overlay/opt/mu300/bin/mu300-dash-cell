@@ -32,10 +32,21 @@
 # or the firmware changes, so it lives in /etc/mu300/dash/sim.json and is re-read
 # at most every 6 hours - not on every round, and never inside a page request.
 
+# Two rounds share this script:
+#   mu300-dash-cell          full: everything below, ~11 commands, neighbours included
+#   mu300-dash-cell fast     serving-cell tier: CFUN/CEREG/C5GREG/CESQ + the two
+#                            SPENGMD serving reads (~6 commands, well under a second),
+#                            written to sig.json only - the page polls this at 1.5 s
+#                            and the slow tier (neighbours, operator, QoS, identity)
+#                            rides the 5 s full cache. A fast round yields to a full
+#                            round in flight (the full round writes sig.json too).
+
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
 
+MODE=${1:-full}
 DIR=${MU300_DASH_DIR:-/tmp/mu300-dash}
 CELL=$DIR/cell.json
+SIGF=$DIR/sig.json
 IDENT_DIR=${MU300_DASH_IDENT_DIR:-/etc/mu300/dash}
 IDENT=$IDENT_DIR/sim.json
 IDENT_MAXAGE=21600   # seconds; a SIM change goes through a reboot, 6 h is plenty
@@ -50,23 +61,37 @@ qs() { [ -n "$1" ] && printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -
 # --------------------------------------------------------------- one collector
 # the same "one owner, spare waits/takes over" pattern mu300-atd uses, so two
 # kicks (page reload while a refresh runs) cannot interleave AT replies
-LOCK=$DIR/collect.lck
 alive() { [ -n "$1" ] && [ -d "/proc/$1" ] && tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q mu300-dash-cell; }
-while ! mkdir "$LOCK" 2>/dev/null; do
-    owner=$(cat "$LOCK/pid" 2>/dev/null || true)
-    alive "$owner" && exit 0        # a refresh is already running; the cache will land
-    rm -rf "$LOCK"
-done
-echo $$ > "$LOCK/pid"
+take_lock() {  # take_lock DIRVAR - wait for a live holder, take over a dead one
+    local lock=$1 owner n=0
+    while ! mkdir "$lock" 2>/dev/null; do
+        owner=$(cat "$lock/pid" 2>/dev/null || true)
+        if alive "$owner"; then
+            n=$((n + 1)); [ "$n" -gt 120 ] && exit 0   # holder wedged: drop this round
+            sleep 1
+            continue
+        fi
+        rm -rf "$lock"
+    done
+    echo $$ > "$lock/pid"
+}
+if [ "$MODE" = fast ]; then
+    alive "$(cat $DIR/collect.lck/pid 2>/dev/null)" && exit 0   # full round running: it covers us
+    LOCK=$DIR/fast.lck
+else
+    LOCK=$DIR/collect.lck
+fi
+take_lock "$LOCK"
 trap 'rm -rf "$LOCK" 2>/dev/null' EXIT INT TERM
 
 # ------------------------------------------------------------------- identity
-IDENT_AGE=999999
-[ -s "$IDENT" ] && IDENT_AGE=$(( $(now) - $(date -r "$IDENT" +%s 2>/dev/null || echo 0) ))
 IDENT_JSON=null
-if [ "$IDENT_AGE" -le "$IDENT_MAXAGE" ]; then
-    IDENT_JSON=$(cat "$IDENT" 2>/dev/null || echo null)
-else
+if [ "$MODE" = full ]; then
+    IDENT_AGE=999999
+    [ -s "$IDENT" ] && IDENT_AGE=$(( $(now) - $(date -r "$IDENT" +%s 2>/dev/null || echo 0) ))
+    if [ "$IDENT_AGE" -le "$IDENT_MAXAGE" ]; then
+        IDENT_JSON=$(cat "$IDENT" 2>/dev/null || echo null)
+    else
     i_mfg=$(at 'AT+CGMI' | grep -v '^OK' | head -n1)
     i_model=$(at 'AT+CGMM' | grep -v '^OK' | head -n1)
     i_fw=$(at 'AT+CGMR' | grep -v '^OK' | head -n1)
@@ -80,26 +105,30 @@ else
     elif [ -s "$IDENT" ]; then
         IDENT_JSON=$(cat "$IDENT")   # modem unreachable: keep the last known identity
     fi
+    fi
 fi
 
 # ------------------------------------------------------------------- the round
 CFUN=$(at 'AT+CFUN?' | sed -n 's/^+CFUN: *//p' | head -n1)
-COPS=$(at 'AT+COPS?' | grep '^+COPS:' | head -n1)
 CEREG=$(at 'AT+CEREG?' | grep '^+CEREG:' | head -n1)
 C5GREG=$(at 'AT+C5GREG?' | grep '^+C5GREG:' | head -n1)
 CESQ=$(at 'AT+CESQ' | grep '^+CESQ:' | head -n1)
 SP_LTE=$(at 'AT+SPENGMD=0,6,0' | grep -v '^AT' | grep -- '-' | head -n1)
 SP_LTEPHY=$(at 'AT+SPENGMD=0,0,6' | grep -v '^AT' | grep -- '-' | head -n1)
 SP_NR=$(at 'AT+SPENGMD=0,14,1' | grep -v '^AT' | grep -- '-' | head -n1)
-SP_LN=$(at 'AT+SPENGMD=0,6,6' | grep -v '^AT' | grep -- '-' | head -n1)
-SP_NRNB=$(at 'AT+SPQ5GNCELLEX' | sed -n 's/^+SPQ5GNCELLEX: *//p' | head -n1)
-QOS=$(at 'AT+CGEQOSRDP=1' | sed -n 's/^+CGEQOSRDP: *//p' | head -n1)
+if [ "$MODE" = full ]; then
+    COPS=$(at 'AT+COPS?' | grep '^+COPS:' | head -n1)
+    SP_LN=$(at 'AT+SPENGMD=0,6,6' | grep -v '^AT' | grep -- '-' | head -n1)
+    SP_NRNB=$(at 'AT+SPQ5GNCELLEX' | sed -n 's/^+SPQ5GNCELLEX: *//p' | head -n1)
+    QOS=$(at 'AT+CGEQOSRDP=1' | sed -n 's/^+CGEQOSRDP: *//p' | head -n1)
+fi
 
 # "no answer at all" is a modem/daemon problem, not "no signal": say so explicitly
-if [ -z "$CFUN$COPS$CEREG$CESQ$SP_LTE$SP_NR" ]; then
+if [ -z "$CFUN$CEREG$CESQ$SP_LTE$SP_NR$COPS" ]; then
     if [ -p /run/mu300-at/cmd ]; then ERR="modem did not answer (radio off or CP restarting)"
     else ERR="mu300-atd is not running"; fi
-    printf '{"ts":%d,"error":%s}\n' "$(now)" "$(qs "$ERR")" > "$CELL.part" && mv "$CELL.part" "$CELL"
+    printf '{"ts":%d,"error":%s}\n' "$(now)" "$(qs "$ERR")" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
+    [ "$MODE" = full ] && cp "$SIGF" "$CELL"
     exit 0
 fi
 
@@ -258,6 +287,24 @@ qos_fragment() {  # "+CGEQOSRDP: 1,9,..OK" (this modem glues OK onto the line)
 
 LTE=$(sp_fragment lte "$SP_LTE" "$SP_LTEPHY")
 NR=$(sp_fragment nr "$SP_NR")
+REG=$(reg_fragment "$CEREG")
+REG5=$(reg_fragment "$C5GREG")
+CESQJ=$(cesq_fragment "$CESQ")
+CFUNN=$(n_or_null "$CFUN")
+
+# preferred signal source: NR (NSA/SA), then LTE, then the CESQ fallback
+if [ "$NR" != null ]; then SIG="$NR"; SRC=nr
+elif [ "$LTE" != null ]; then SIG="$LTE"; SRC=lte
+else SIG="$CESQJ"; SRC=cesq; fi
+
+# the fast tier: serving cell + registration only (both modes write it; the page
+# polls this at 1.5 s and overlays it on the slower full cache)
+printf '{"ts":%d,"cfun":%s,"reg":%s,"reg5g":%s,"sig_src":"%s","sig":%s,"lte":%s,"nr":%s}\n' \
+    "$(now)" "$CFUNN" "$REG" "$REG5" "$SRC" "$SIG" "$LTE" "$NR" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
+
+[ "$MODE" = fast ] && exit 0
+
+# the full tier: everything else the page needs only every few seconds
 LN=$(sp_fragment ltenb "$SP_LN")
 NN=$(nr_neighbours "$SP_NRNB")
 # one neighbour list, NR first (the page shows NR cells at the top)
@@ -266,17 +313,8 @@ elif [ -n "$NN" ]; then NEIGH="[$NN]"
 elif [ -n "$LN" ]; then NEIGH="[$LN]"
 else NEIGH=null; fi
 
-REG=$(reg_fragment "$CEREG")
-REG5=$(reg_fragment "$C5GREG")
 COPSJ=$(cops_fragment "$COPS")
-CESQJ=$(cesq_fragment "$CESQ")
 QOSJ=$(qos_fragment "$QOS")
-CFUNN=$(n_or_null "$CFUN")
-
-# preferred signal source: NR (NSA/SA), then LTE, then the CESQ fallback
-if [ "$NR" != null ]; then SIG="$NR"; SRC=nr
-elif [ "$LTE" != null ]; then SIG="$LTE"; SRC=lte
-else SIG="$CESQJ"; SRC=cesq; fi
 
 printf '{"ts":%d,"cfun":%s,"reg":%s,"reg5g":%s,"operator":%s,"sig_src":"%s","sig":%s,"lte":%s,"nr":%s,"qos":%s,"neigh":%s,"ident":%s}\n' \
     "$(now)" "$CFUNN" "$REG" "$REG5" "$COPSJ" "$SRC" "$SIG" "$LTE" "$NR" "$QOSJ" "$NEIGH" "$IDENT_JSON" > "$CELL.part" && mv "$CELL.part" "$CELL"
