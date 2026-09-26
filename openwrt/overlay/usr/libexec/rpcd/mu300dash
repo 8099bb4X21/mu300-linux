@@ -126,6 +126,13 @@ m_at() {
         return
         ;;
     esac
+    # a lock apply in flight means the modem is restarting (SFUN) - say so instead
+    # of a generic busy, so it does not look like the console died
+    if [ -d /run/mu300-dash-apply ]; then
+        printf '{"ok":0,"busy":1,"error":"正在应用网络锁定，调制解调器重启中（约半分钟），请稍后再试"}
+'
+        return
+    fi
     # mu300-at itself gives up waiting for the lock and says so; turn that into a
     # retryable "busy" instead of letting the page show a dead console
     reply=$(mu300-at -t 8 "$cmd" 2>&1)
