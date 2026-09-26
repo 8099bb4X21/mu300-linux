@@ -16,6 +16,7 @@ var callAct    = rpc.declare({ object: 'mu300dash', method: 'act', params: [ 'op
 var callAt     = rpc.declare({ object: 'mu300dash', method: 'at', params: [ 'cmd' ], expect: { '': {} } });
 var callAtHist = rpc.declare({ object: 'mu300dash', method: 'at_history', expect: { '': {} } });
 var callLockGet = rpc.declare({ object: 'mu300dash', method: 'lock_get', expect: { '': {} } });
+var callLockFresh = rpc.declare({ object: 'mu300dash', method: 'lock_get', params: [ 'fresh' ], expect: { '': {} } });
 var callLockSet = rpc.declare({ object: 'mu300dash', method: 'lock_set', params: [ 'kind', 'val' ], expect: { '': {} } });
 var callSmsList = rpc.declare({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
 var callSmsShow = rpc.declare({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
@@ -115,11 +116,19 @@ var CSS = `
 .mud{color:var(--text,#222);font-size:.85rem;line-height:1.45}
 .mud *{box-sizing:border-box}
 .mud-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;margin-top:6px}
-.mud-card{background:var(--surface,var(--background-alt,var(--background,#fff)));border:1px solid var(--hairline,var(--border,#e3e6ea));border-radius:calc(var(--radius-base,.5rem) + .375rem);padding:10px 12px;box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.04));transition:border-color .15s}
+.mud-card{background:var(--surface,var(--background-alt,var(--background,#fff)));border:1px solid var(--hairline,var(--border,#e3e6ea));border-radius:calc(var(--radius-base,.5rem) + .375rem);padding:14px 16px;box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.04));transition:border-color .15s}
 .mud-card:hover{border-color:color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 30%,var(--hairline,var(--border,#e3e6ea)))}
 .mud-card>h3{margin:0 0 8px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
 .mud-card>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
 .mud-hero{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:14px;align-items:center;background:var(--brand-subtle,var(--surface,#fff))}
+.mud-sec{padding:2px 2px 6px}
+.mud-sec>h3{margin:16px 0 10px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
+.mud-sec>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
+.mud-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 28px}
+.mud-body>.mud-sec+.mud-sec{border-top:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 60%,transparent);margin-top:14px;padding-top:2px}
+.mud-lockbtn{padding:0 10px;border-radius:99px;border:1px solid var(--hairline,var(--border,#ccc));background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.72rem;cursor:pointer;line-height:1.7}
+.mud-lockbtn.on,.mud-lockbtn:active{background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
+.mud-lockbtn.locked{opacity:.45;pointer-events:none;background:var(--surface-sunken,rgba(127,127,127,.1));color:var(--text-muted,var(--text-light,#888));border-color:transparent}
 .mud-hero-l{flex:1 1 240px;min-width:0}
 .mud-hero-r{flex:0 0 auto;text-align:right}
 .mud-rat{font-size:1.7rem;font-weight:700;line-height:1.15;letter-spacing:.02em}
@@ -131,22 +140,22 @@ var CSS = `
 .mud-tag{display:inline-block;padding:1px 8px;border-radius:99px;background:var(--surface-sunken,rgba(127,127,127,.1));font-size:.74rem;font-weight:600;font-variant-numeric:tabular-nums}
 .mud-q{display:inline-block;min-width:3em;padding:1px 8px;border-radius:99px;font-size:.74rem;font-weight:600;text-align:center}
 .mud-rows{display:grid;gap:2px}
-.mud-r{display:flex;justify-content:space-between;gap:10px;padding:2px 0;border-bottom:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 55%,transparent)}
+.mud-r{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 55%,transparent)}
 .mud-r:last-child{border-bottom:none}
 .mud-k{color:var(--text-muted,var(--text-light,#777));flex:0 0 auto}
 .mud-v{font-variant-numeric:tabular-nums;text-align:right;word-break:break-all;font-weight:500}
 .mud-bars{display:inline-flex;align-items:flex-end;gap:2px;height:16px;margin-left:8px;vertical-align:baseline}
 .mud-bars i{width:3px;border-radius:1px;background:var(--hairline,var(--border,#ccc))}
 .mud-bars i.on{background:currentColor}
-.mud-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:8px;margin-bottom:4px}
-.mud-kpi{background:var(--surface-sunken,rgba(127,127,127,.06));border-radius:var(--radius-base,.5rem);padding:6px 9px 6px 10px;border-left:3px solid color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 55%,transparent)}
+.mud-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(122px,1fr));gap:10px;margin-bottom:10px}
+.mud-kpi{background:var(--surface-sunken,rgba(127,127,127,.06));border-radius:var(--radius-base,.5rem);padding:9px 12px}
 .mud-kpi b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums;font-weight:700;line-height:1.25}
 .mud-kpi span{font-size:.68rem;color:var(--text-muted,var(--text-light,#777))}
 .mud-meter{height:5px;border-radius:3px;background:var(--surface-sunken,rgba(127,127,127,.15));overflow:hidden;margin:3px 0 1px}
 .mud-meter i{display:block;height:100%;border-radius:3px}
 .mud-freq{display:flex;align-items:center;font-size:.76rem;font-variant-numeric:tabular-nums;padding:1px 0}
 .mud-freq .mud-k{flex:0 0 2.4em}
-.mud-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:6px 10px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.82rem;cursor:pointer;user-select:none}
+.mud-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.82rem;cursor:pointer;user-select:none}
 .mud-btn:active{transform:scale(.97)}
 .mud-btn.on{background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
 .mud-btn.warn{border-color:color-mix(in oklab,var(--danger,#E25555) 55%,transparent);color:var(--danger,#E25555)}
@@ -155,12 +164,38 @@ var CSS = `
 .mud-note{font-size:.72rem;color:var(--text-subtle,var(--text-light,#999));margin-top:7px}
 .mud-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:.8rem}
 .mud-table th{font-weight:500;color:var(--text-muted,var(--text-light,#777));text-align:right;padding:1px 4px;border-bottom:1px solid var(--hairline,var(--border,#ddd));font-size:.72rem;position:sticky;top:0;background:var(--surface,var(--background-alt,var(--background,#fff)))}
-.mud-table td{text-align:right;padding:2px 4px;border-bottom:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 5%,transparent)}
+.mud-table td{text-align:right;padding:3px 6px;border-bottom:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 5%,transparent)}
 .mud-table th:first-child,.mud-table td:first-child{text-align:left}
-.mud-scroll{max-height:230px;overflow:auto}
+.mud-scroll{max-height:230px;overflow:auto;border:1px solid color-mix(in oklab,var(--hairline,var(--border,#ddd)) 45%,transparent);border-radius:var(--radius-base,.5rem);padding:4px}
 .mud-cli{padding:4px 8px;border-radius:var(--radius-base,.5rem);border:1px solid color-mix(in oklab,var(--hairline,var(--border,#ddd)) 55%,transparent);margin-bottom:5px}
 .mud-cli .t{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
 .mud-cli .s{font-size:.72rem;color:var(--text-muted,var(--text-light,#888));font-variant-numeric:tabular-nums;margin-top:1px}
+/* ---- 聊天式短信 ---- */
+.mud-chat{display:flex;gap:12px;min-height:420px}
+.mud-convs{flex:0 0 240px;overflow:auto;max-height:520px}
+.mud-conv{padding:7px 9px;border-radius:var(--radius-base,.5rem);cursor:pointer;margin-bottom:4px;border:1px solid transparent}
+.mud-conv:hover{background:var(--hover-faint,rgba(127,127,127,.06))}
+.mud-conv.sel{background:var(--brand-subtle,var(--surface-sunken,rgba(127,127,127,.08)));border-color:color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 30%,transparent)}
+.mud-conv .n{display:flex;justify-content:space-between;gap:6px;font-weight:600;font-size:.84rem}
+.mud-conv .p{font-size:.74rem;color:var(--text-muted,var(--text-light,#888));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.mud-thread{flex:1;display:flex;flex-direction:column;min-width:0;border-left:1px solid var(--hairline,var(--border,#ddd));padding-left:12px}
+.mud-msgs{flex:1;overflow:auto;max-height:460px;padding:4px 2px;display:flex;flex-direction:column;gap:6px}
+.mud-bub{max-width:78%;padding:6px 11px;border-radius:calc(var(--radius-base,.5rem) + .25rem);font-size:.85rem;white-space:pre-wrap;word-break:break-word;align-self:flex-start;background:var(--surface-sunken,rgba(127,127,127,.08))}
+.mud-bub.out{align-self:flex-end;background:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
+.mud-bub .tm{display:block;font-size:.64rem;opacity:.65;margin-top:2px;text-align:right;font-variant-numeric:tabular-nums}
+.mud-comp{display:flex;gap:8px;margin-top:8px}
+.mud-comp input,.mud-comp textarea{padding:7px 11px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222);font-family:inherit}
+.mud-comp input{flex:0 0 170px}
+.mud-comp textarea{flex:1;resize:none;min-height:40px;max-height:120px}
+@media(max-width:700px){.mud-chat{flex-direction:column}.mud-convs{flex:none;max-height:150px}.mud-thread{border-left:none;padding-left:0;border-top:1px solid var(--hairline,var(--border,#ddd));padding-top:8px}}
+/* ---- 专业 AT 终端 ---- */
+.mud-term{font-family:var(--font-mono,monospace);font-size:.8rem;line-height:1.5;background:color-mix(in oklab,var(--surface,#14161a) 92%,var(--brand,#2f7bf6) 3%);color:var(--text,#d5d9de);border:1px solid var(--hairline,var(--border,#2a2d33));border-radius:var(--radius-base,.5rem);padding:12px;height:380px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+.mud-term .ln-cmd{color:var(--brand,#6ab0ff);font-weight:600}
+.mud-term .ln-ok{color:var(--success,#57c98a);font-weight:600}
+.mud-term .ln-err{color:var(--danger,#ff7b72);font-weight:600}
+.mud-term .ln-data{color:var(--text,#d5d9de)}
+.mud-term .ln-meta{color:var(--text-subtle,#7d8590);font-style:italic}
+.mud-term .ln-ms{float:right;color:var(--text-subtle,#7d8590);font-size:.7rem}
 .mud-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-subtle,#8A8F98);margin-right:6px;vertical-align:1px}
 .mud-dot.on{background:var(--success,#2FBF71)}
 .mud-temp{display:inline-flex;gap:5px;flex-wrap:wrap}
@@ -204,13 +239,40 @@ function spark(el, arr, min, max, win) {
 		'<polyline points="' + pts.join(' ') + '" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>';
 }
 
+/* 邻区表（主页与网络锁定页共用）：NR 置顶按 RSRP 排序，行尾带锁定按钮。
+ * lockedCell 是 lock_get 的 cell 字段（如 "nr:627264,501"），命中行显示灰色"已锁定"。
+ * 点击事件由页面用事件委托绑定（[data-lock] 属性："<rat>:<arfcn>,<pci>"）。 */
+function neighborRows(c, lockedCell) {
+	var nb = (c && c.neigh) || [];
+	nb.sort(function(a, b) {
+		if ((a.rat == 'nr') != (b.rat == 'nr')) return a.rat == 'nr' ? -1 : 1;
+		return (b.rsrp || -999) - (a.rsrp || -999);
+	});
+	if (!nb.length)
+		return '<tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">暂无邻区数据</td></tr>';
+	var lk = lockedCell || '';
+	return nb.map(function(n) {
+		var l = qLabel(n.rsrp, n.rsrq, n.sinr);
+		var key = n.rat + ':' + n.arfcn + ',' + n.pci;
+		var isLocked = (lk == key);
+		return '<tr><td>' + (n.rat == 'nr' ? 'NR n' + esc(n.band) : 'LTE B' + esc(n.band)) + '</td>' +
+			'<td>' + esc(n.pci != null ? n.pci : '--') + '</td>' +
+			'<td>' + esc(n.arfcn != null ? n.arfcn : '--') + '</td>' +
+			'<td style="color:' + qCol(l) + '">' + (n.rsrp != null ? n.rsrp.toFixed(1) : '--') + '</td>' +
+			'<td>' + (n.rsrq != null ? n.rsrq.toFixed(1) : '--') + '</td>' +
+			'<td>' + (n.sinr != null ? n.sinr.toFixed(1) : '--') + '</td>' +
+			'<td><button class="mud-lockbtn' + (isLocked ? ' locked' : '') + '" data-lock="' + key + '"' +
+			(isLocked ? ' disabled' : '') + '>' + (isLocked ? '已锁定' : '锁定') + '</button></td></tr>';
+	}).join('');
+}
+
 /* LuCI 的 require 把模块当类工厂：必须返回 baseclass 派生的类，加载后拿到的是它的实例 */
 return baseclass.extend({
 	callStatus: callStatus, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
-	callLockGet: callLockGet, callLockSet: callLockSet,
+	callLockGet: callLockGet, callLockFresh: callLockFresh, callLockSet: callLockSet,
 	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	carrierName: carrierName, qLabel: qLabel, qCol: qCol, qScore: qScore,
 	esc: esc, fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime,
-	injectCss: injectCss, v: v, set: set, spark: spark
+	injectCss: injectCss, v: v, set: set, spark: spark, neighborRows: neighborRows
 });

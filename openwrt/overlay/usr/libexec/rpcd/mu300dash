@@ -251,7 +251,7 @@ do_list() {
 	"act": { "op": "String", "arg": "String" },
 	"at": { "cmd": "String" },
 	"at_history": { },
-	"lock_get": { },
+	"lock_get": { "fresh": "String" },
 	"lock_set": { "kind": "String", "val": "String" },
 	"sms_list": { "page": "String" },
 	"sms_show": { "id": "String" },
@@ -272,7 +272,16 @@ call)
         act)        m_act ;;
         at)         m_at ;;
         at_history) m_at_history ;;
-        lock_get)   "$DASH/mu300-dash-lock" get 2>/dev/null || printf '{"error":"lock read failed"}\n' ;;
+        lock_get)
+            # default serves the lock cache instantly (a real read is seven AT
+            # round trips, about a second each); fresh=1 does the real read -
+            # the page uses it only behind the manual refresh button
+            if [ "$(inp '@.fresh')" = "1" ]; then
+                "$DASH/mu300-dash-lock" get fresh 2>/dev/null || printf '{"error":"lock read failed"}\n'
+            else
+                "$DASH/mu300-dash-lock" get 2>/dev/null || printf '{"error":"lock read failed"}\n'
+            fi
+            ;;
         lock_set)   m_lock_set ;;
         sms_list)   m_sms_list ;;
         sms_show)   m_sms_show ;;

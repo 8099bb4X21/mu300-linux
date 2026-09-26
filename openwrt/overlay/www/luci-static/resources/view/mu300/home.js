@@ -5,14 +5,15 @@
 
 /* MU300 状态看板 -- LuCI 落地页（menu.d 挂在 admin/home）。
  *
- * 这一页只做数据展示（控制卡片收在最后）：蜂窝状态、链路质量、流量、邻区、
- * 无线客户端、设备与 SIM。锁频/小区锁定在「蜂窝 -> 网络锁定」，AT 终端在
- * 「蜂窝 -> AT 终端」，短信在「蜂窝 -> 短信」。
+ * 布局：顶部驻网卡片是唯一的卡片；其余都是全宽分区（链路与流量 / 邻区 / 无线·局域网·
+ * 设备·SIM / 快捷控制）。锁频、短信、AT 终端在「蜂窝」子菜单。
  *
- * 数据只有一个来源：ubus mu300dash status（快照 + 蜂窝缓存，页面永不发 AT）。
- * CPU 占用与上下行速率用相邻两次快照差分。loadavg 不显示（厂商线程常驻 D 态）。 */
+ * 数据只有一个来源：ubus mu300dash status（info 快照 + sig 快档蜂窝缓存 + cell 慢档缓存）。
+ * 页面 1.5 s 一轮：信号/速率/CPU 每轮都刷；邻区/QoS/身份只在慢档时间戳变化时重绘。
+ * 邻区行内「锁定」走 lock_set cell（SFUN 重启协议栈，约半分钟断网）；锁定状态来自
+ * lock_get（页面加载时取一次，锁定操作后刷新）。 */
 
-var POLL_S = 1.5;   /* 快档：信号/速率/CPU 每轮都刷；邻区等慢数据只在 cell.ts 变化时重绘 */
+var POLL_S = 1.5;
 var RATE_WIN = 40;
 
 return view.extend({
@@ -33,112 +34,119 @@ return view.extend({
 
 	html: function() {
 		return `
-<div class="mud-grid">
-  <div class="mud-card mud-hero">
-    <div class="mud-hero-l">
-      <div style="font-size:.78rem;color:var(--text-muted,var(--text-light,#777))">
-        <span class="mud-dot" id="mud-dot"></span><b id="mud-host" style="color:var(--text,#222)">--</b>
-        <span id="mud-uptime"></span></div>
-      <div class="mud-rat" id="mud-rat">--<span class="mud-bars" id="mud-bars"><i style="height:25%"></i><i style="height:45%"></i><i style="height:65%"></i><i style="height:85%"></i><i style="height:100%"></i></span></div>
-      <div class="mud-op" id="mud-op">--</div>
-      <div class="mud-cellline" id="mud-cellline"></div>
-    </div>
-    <div class="mud-hero-r">
-      <div class="mud-rsrp" id="mud-rsrp">--</div>
-      <div class="mud-chips" id="mud-metric-chips"></div>
-    </div>
+<div class="mud-card mud-hero">
+  <div class="mud-hero-l">
+    <div style="font-size:.78rem;color:var(--text-muted,var(--text-light,#777))">
+      <span class="mud-dot" id="mud-dot"></span><b id="mud-host" style="color:var(--text,#222)">--</b>
+      <span id="mud-uptime"></span></div>
+    <div class="mud-rat" id="mud-rat">--<span class="mud-bars" id="mud-bars"><i style="height:25%"></i><i style="height:45%"></i><i style="height:65%"></i><i style="height:85%"></i><i style="height:100%"></i></span></div>
+    <div class="mud-op" id="mud-op">--</div>
+    <div class="mud-cellline" id="mud-cellline"></div>
   </div>
-
-  <div class="mud-card">
-    <h3>链路质量</h3>
-    <div class="mud-kpis">
-      <div class="mud-kpi"><b id="mud-mcs">--</b><span>MCS 下/上</span></div>
-      <div class="mud-kpi"><b id="mud-bler">--</b><span>BLER 下/上</span></div>
-      <div class="mud-kpi"><b id="mud-bw">--</b><span>频宽</span></div>
-      <div class="mud-kpi"><b id="mud-qci">--</b><span>QCI</span></div>
-      <div class="mud-kpi"><b id="mud-ambr">--</b><span>AMBR 下/上</span></div>
-    </div>
-    <div class="mud-rows" id="mud-lteanchor"></div>
+  <div class="mud-hero-r">
+    <div class="mud-rsrp" id="mud-rsrp">--</div>
+    <div class="mud-chips" id="mud-metric-chips"></div>
   </div>
+</div>
 
-  <div class="mud-card">
-    <h3>网络与流量</h3>
-    <div class="mud-kpis">
-      <div class="mud-kpi"><b id="mud-dl" style="color:var(--brand,var(--primary,#2f7bf6))">--</b><span>下行速率</span><div style="color:var(--brand,var(--primary,#2f7bf6))" id="mud-spark-dl"></div></div>
-      <div class="mud-kpi"><b id="mud-ul" style="color:var(--success,#2FBF71)">--</b><span>上行速率</span><div style="color:var(--success,#2FBF71)" id="mud-spark-ul"></div></div>
-      <div class="mud-kpi"><b id="mud-rx">--</b><span>累计接收</span></div>
-      <div class="mud-kpi"><b id="mud-tx">--</b><span>累计发送</span></div>
-    </div>
-    <div class="mud-rows">
-      <div class="mud-r"><span class="mud-k">IPv4 / IPv6</span><span class="mud-v" id="mud-ip">--</span></div>
-      <div class="mud-r"><span class="mud-k">DNS</span><span class="mud-v" id="mud-dns">--</span></div>
-      <div class="mud-r"><span class="mud-k">APN · 会话</span><span class="mud-v" id="mud-apn">--</span></div>
-      <div class="mud-r"><span class="mud-k">注册状态</span><span class="mud-v" id="mud-reg">--</span></div>
-    </div>
+<div class="mud-card mud-body">
+
+<div class="mud-sec">
+  <h3>链路与流量</h3>
+  <div class="mud-kpis">
+    <div class="mud-kpi"><b id="mud-dl" style="color:var(--brand,var(--primary,#2f7bf6))">--</b><span>下行速率</span><div style="color:var(--brand,var(--primary,#2f7bf6))" id="mud-spark-dl"></div></div>
+    <div class="mud-kpi"><b id="mud-ul" style="color:var(--success,#2FBF71)">--</b><span>上行速率</span><div style="color:var(--success,#2FBF71)" id="mud-spark-ul"></div></div>
+    <div class="mud-kpi"><b id="mud-rx">--</b><span>累计接收</span></div>
+    <div class="mud-kpi"><b id="mud-tx">--</b><span>累计发送</span></div>
   </div>
-
-  <div class="mud-card">
-    <h3>邻区</h3>
-    <div class="mud-scroll">
-    <table class="mud-table"><thead><tr><th>制式/频段</th><th>PCI</th><th>频点</th><th>RSRP</th><th>RSRQ</th><th>SINR</th></tr></thead>
-    <tbody id="mud-neigh"><tr><td colspan="6" style="color:var(--text-muted,var(--text-light,#777))">--</td></tr></tbody></table>
+  <div class="mud-cols">
+    <div>
+      <div class="mud-rows">
+        <div class="mud-r"><span class="mud-k">IPv4 / IPv6</span><span class="mud-v" id="mud-ip">--</span></div>
+        <div class="mud-r"><span class="mud-k">DNS</span><span class="mud-v" id="mud-dns">--</span></div>
+        <div class="mud-r"><span class="mud-k">APN · 会话</span><span class="mud-v" id="mud-apn">--</span></div>
+        <div class="mud-r"><span class="mud-k">注册状态</span><span class="mud-v" id="mud-reg">--</span></div>
+      </div>
     </div>
-  </div>
-
-  <div class="mud-card">
-    <h3>无线与局域网</h3>
+    <div>
+      <div class="mud-rows" id="mud-lteanchor"></div>
+      <div class="mud-rows">
+        <div class="mud-r"><span class="mud-k">MCS 下/上</span><span class="mud-v" id="mud-mcs">--</span></div>
+        <div class="mud-r"><span class="mud-k">BLER 下/上</span><span class="mud-v" id="mud-bler">--</span></div>
+        <div class="mud-r"><span class="mud-k">频宽</span><span class="mud-v" id="mud-bw">--</span></div>
+        <div class="mud-r"><span class="mud-k">QCI · AMBR 下/上</span><span class="mud-v"><span id="mud-qci">--</span> · <span id="mud-ambr">--</span></span></div>
+      </div>
+    </div>
     <div class="mud-rows">
       <div class="mud-r"><span class="mud-k">SSID · 信道</span><span class="mud-v" id="mud-ssid">--</span></div>
       <div class="mud-r"><span class="mud-k">加密 · 隐藏 · 国家</span><span class="mud-v" id="mud-wsec">--</span></div>
-      <div class="mud-r"><span class="mud-k">AP · USB 网络 · 跟踪</span><span class="mud-v" id="mud-wsta">--</span></div>
-      <div class="mud-r"><span class="mud-k">LAN · 客户端</span><span class="mud-v" id="mud-lan">--</span></div>
+      <div class="mud-r"><span class="mud-k">AP · USB · 跟踪</span><span class="mud-v" id="mud-wsta">--</span></div>
+      <div class="mud-r"><span class="mud-k">LAN · 无线客户端</span><span class="mud-v" id="mud-lan">--</span></div>
     </div>
-    <div id="mud-clist" style="margin-top:6px"></div>
-    <div id="mud-leases" style="margin-top:6px"></div>
   </div>
+</div>
 
-  <div class="mud-card">
-    <h3>设备与 SIM</h3>
-    <div class="mud-temp" id="mud-temps"></div>
-    <div class="mud-kpis" style="margin-top:8px">
-      <div class="mud-kpi"><b id="mud-cpu">--</b><span>CPU 占用</span><div class="mud-meter"><i id="mud-cpu-bar" style="background:var(--brand,var(--primary,#3b82f6))"></i></div><div id="mud-cpu-spark" style="color:var(--brand,var(--primary,#3b82f6));margin-top:2px"></div></div>
-      <div class="mud-kpi"><b id="mud-ram">--</b><span>内存</span><div class="mud-meter"><i id="mud-ram-bar" style="background:var(--info,#0ea5e9)"></i></div></div>
-      <div class="mud-kpi"><b id="mud-disk">--</b><span>存储</span><div class="mud-meter"><i id="mud-disk-bar" style="background:var(--warning,#f59e0b)"></i></div></div>
-      <div class="mud-kpi"><b id="mud-batt">--</b><span id="mud-batt-l">电源</span></div>
-    </div>
-    <div id="mud-freqs" class="mud-freqs"></div>
-    <div class="mud-rows">
-      <div class="mud-r"><span class="mud-k">型号 · 系统</span><span class="mud-v" id="mud-model">--</span></div>
-      <div class="mud-r"><span class="mud-k">调制解调器</span><span class="mud-v" id="mud-modem">--</span></div>
-      <div class="mud-r"><span class="mud-k">运营商</span><span class="mud-v" id="mud-carr">--</span></div>
-      <div class="mud-r"><span class="mud-k">IMEI</span><span class="mud-v" id="mud-imei">--</span></div>
-      <div class="mud-r"><span class="mud-k">IMSI</span><span class="mud-v" id="mud-imsi">--</span></div>
-      <div class="mud-r"><span class="mud-k">ICCID</span><span class="mud-v" id="mud-iccid">--</span></div>
-      <div class="mud-r"><span class="mud-k">模组 · 固件</span><span class="mud-v" id="mud-fw">--</span></div>
-    </div>
-    <div class="mud-chiprow"><span class="mud-chip" id="mud-reveal">显示卡号信息</span></div>
-  </div>
 
-  <div class="mud-card" style="grid-column:1/-1">
-    <h3>快捷控制</h3>
-    <div class="mud-ctl" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
-      <button class="mud-btn" id="mud-btn-data">数据连接</button>
-      <button class="mud-btn" id="mud-btn-radio">无线电</button>
-      <button class="mud-btn" id="mud-btn-wifi">Wi-Fi 热点</button>
-      <button class="mud-btn" id="mud-btn-vpn">VPN</button>
-      <button class="mud-btn warn" id="mud-btn-modem">重启调制解调器</button>
-      <button class="mud-btn warn" id="mud-btn-reboot">重启设备</button>
-    </div>
-    <div class="mud-note" id="mud-actnote"></div>
+<div class="mud-sec">
+  <h3>无线 · 局域网 · 设备 · SIM</h3>
+  <div class="mud-temp" id="mud-temps"></div>
+  <div class="mud-kpis" style="margin-top:8px">
+    <div class="mud-kpi"><b id="mud-cpu">--</b><span>CPU 占用</span><div class="mud-meter"><i id="mud-cpu-bar" style="background:var(--brand,var(--primary,#3b82f6))"></i></div></div>
+    <div class="mud-kpi"><b id="mud-ram">--</b><span>内存</span><div class="mud-meter"><i id="mud-ram-bar" style="background:var(--info,#0ea5e9)"></i></div></div>
+    <div class="mud-kpi"><b id="mud-disk">--</b><span>存储</span><div class="mud-meter"><i id="mud-disk-bar" style="background:var(--warning,#f59e0b)"></i></div></div>
+    <div class="mud-kpi"><b id="mud-batt">--</b><span id="mud-batt-l">电源</span></div>
   </div>
-</div>`;
+  <div id="mud-freqs" class="mud-freqs"></div>
+  <div class="mud-cols">
+    <div>
+      <div id="mud-clist" style="margin-top:2px"></div>
+      <div id="mud-leases" style="margin-top:6px"></div>
+    </div>
+    <div>
+      <div class="mud-rows">
+        <div class="mud-r"><span class="mud-k">型号 · 系统</span><span class="mud-v" id="mud-model">--</span></div>
+        <div class="mud-r"><span class="mud-k">调制解调器</span><span class="mud-v" id="mud-modem">--</span></div>
+        <div class="mud-r"><span class="mud-k">运营商</span><span class="mud-v" id="mud-carr">--</span></div>
+        <div class="mud-r"><span class="mud-k">IMEI</span><span class="mud-v" id="mud-imei">--</span></div>
+        <div class="mud-r"><span class="mud-k">IMSI</span><span class="mud-v" id="mud-imsi">--</span></div>
+        <div class="mud-r"><span class="mud-k">ICCID</span><span class="mud-v" id="mud-iccid">--</span></div>
+        <div class="mud-r"><span class="mud-k">模组 · 固件</span><span class="mud-v" id="mud-fw">--</span></div>
+      </div>
+      <div class="mud-chiprow"><span class="mud-chip" id="mud-reveal">显示卡号信息</span></div>
+    </div>
+  </div>
+</div>
+
+
+<div class="mud-sec">
+  <h3>快捷控制</h3>
+  <div class="mud-ctl" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+    <button class="mud-btn" id="mud-btn-data">数据连接</button>
+    <button class="mud-btn" id="mud-btn-radio">无线电</button>
+    <button class="mud-btn" id="mud-btn-wifi">Wi-Fi 热点</button>
+    <button class="mud-btn" id="mud-btn-vpn">VPN</button>
+    <button class="mud-btn warn" id="mud-btn-modem">重启调制解调器</button>
+    <button class="mud-btn warn" id="mud-btn-reboot">重启设备</button>
+  </div>
+  <div class="mud-note" id="mud-actnote"></div>
+</div>
+<div class="mud-sec">
+  <h3>邻区 <span id="mud-locknote" style="font-weight:400"></span></h3>
+  <div class="mud-scroll">
+  <table class="mud-table"><thead><tr><th>制式/频段</th><th>PCI</th><th>频点</th><th>RSRP</th><th>RSRQ</th><th>SINR</th><th></th></tr></thead>
+  <tbody id="mud-neigh"><tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">--</td></tr></tbody></table>
+  </div>
+</div>
+
+</div><!-- /mud-body -->`;
 	},
 
 	wire: function(root) {
 		var self = this;
 		this.identShown = false;
-		this.dlHist = []; this.ulHist = []; this.cpuHist = [];
+		this.dlHist = []; this.ulHist = [];
 		this.lastNet = null; this.lastCpu = null; this.lastFullTs = 0;
+		this.lockedCell = '';
 		/* render() 在节点挂进文档之前运行，这里相对 root 查找（挂载后 update 用全文档查找） */
 		var q = function(id) { return root.querySelector('#mud-' + id); };
 
@@ -180,6 +188,29 @@ return view.extend({
 			M.v('reveal').textContent = self.identShown ? '隐藏卡号信息' : '显示卡号信息';
 			self.paintIdent(self.lastCell);
 		};
+
+		/* 邻区行内锁定（事件委托） */
+		q('neigh').addEventListener('click', function(ev) {
+			var btn = ev.target;
+			if (!btn.getAttribute || !btn.getAttribute('data-lock')) return;
+			var key = btn.getAttribute('data-lock');
+			if (!window.confirm('锁定小区 ' + key.replace(':', ' ') + '？\n协议栈会重启（SFUN），蜂窝断开约半分钟。')) return;
+			M.v('locknote').textContent = '（正在后台锁定 ' + key + '，约半分钟）';
+			L.resolveDefault(M.callLockSet('cell', key)).then(function(r) {
+				r = r || {};
+				M.v('locknote').textContent = r.ok ? '（已后台锁定 ' + key + '，稍后自动刷新状态）' : '（锁定失败：' + (r.error || '未知错误') + '）';
+				setTimeout(function() { self.refreshLock(); }, 35000);
+			});
+		});
+		this.refreshLock();
+	},
+
+	refreshLock: function() {
+		var self = this;
+		L.resolveDefault(M.callLockGet()).then(function(l) {
+			self.lockedCell = (l || {}).cell || '';
+			self.repaintNeigh();
+		});
 	},
 
 	paintIdent: function(cell) {
@@ -192,6 +223,11 @@ return view.extend({
 		M.set('imsi', mask(id && id.imsi));
 		M.set('iccid', mask(id && id.iccid));
 		M.set('fw', id ? ((id.model || '--') + ' · ' + (id.fw || '--')) : '--');
+	},
+
+	repaintNeigh: function() {
+		var el = M.v('neigh');
+		if (el && this.lastCell) el.innerHTML = M.neighborRows(this.lastCell, this.lockedCell);
 	},
 
 	update: function(st) {
@@ -261,23 +297,14 @@ return view.extend({
 			(c && c.lte && !c.nr && c.lte.sinr != null ? '<span class="mud-tag">LTE SINR ' + c.lte.sinr.toFixed(1) + '</span>' : '') +
 			(st.refreshing ? '<span class="mud-tag" style="opacity:.6">采集中…</span>' : '');
 
-		var nr = (c && c.nr) || null;
-		M.set('mcs', nr && nr.dl_mcs != null ? nr.dl_mcs + ' / ' + (nr.ul_mcs != null ? nr.ul_mcs : '--') : '--');
-		M.set('bler', nr && nr.dl_bler != null ? nr.dl_bler + '% / ' + (nr.ul_bler != null ? nr.ul_bler : '--') + '%' : '--');
-		M.set('bw', nr && nr.bw_mhz ? nr.bw_mhz + ' MHz' : (c && c.lte && c.lte.bw) || '--');
+		/* -- 链路与流量 */
+		var nrk = (c && c.nr) || null;
+		M.set('mcs', nrk && nrk.dl_mcs != null ? nrk.dl_mcs + ' / ' + (nrk.ul_mcs != null ? nrk.ul_mcs : '--') : '--');
+		M.set('bler', nrk && nrk.dl_bler != null ? nrk.dl_bler + '% / ' + (nrk.ul_bler != null ? nrk.ul_bler : '--') + '%' : '--');
+		M.set('bw', nrk && nrk.bw_mhz ? nrk.bw_mhz + ' MHz' : (c && c.lte && c.lte.bw) || '--');
 		var qos = c && c.qos;
 		M.set('qci', qos && qos.qci != null ? qos.qci : '--');
 		M.set('ambr', qos && qos.dl != null ? qos.dl + ' / ' + qos.ul + ' Mbps' : '--');
-		var anchor = (c && c.lte && c.lte.band) ? c.lte : null;
-		M.v('lteanchor').innerHTML = (anchor && c.nr && c.nr.band) ?
-			'<div class="mud-r"><span class="mud-k">LTE 锚点</span><span class="mud-v">B' + M.esc(anchor.band) +
-			' · RSRP ' + (anchor.rsrp != null ? anchor.rsrp.toFixed(1) : '--') +
-			(anchor.sinr != null ? ' · SINR ' + anchor.sinr.toFixed(1) : '') +
-			(anchor.dl_mcs != null ? ' · MCS ' + anchor.dl_mcs : '') +
-			(anchor.ca ? ' · ' + anchor.ca : '') + '</span></div>' :
-			(anchor ? '<div class="mud-r"><span class="mud-k">LTE 链路</span><span class="mud-v">MCS ' +
-			(anchor.dl_mcs != null ? anchor.dl_mcs : '--') + ' / ' + (anchor.ul_mcs != null ? anchor.ul_mcs : '--') +
-			' · BLER ' + (anchor.dl_bler != null ? anchor.dl_bler : '--') + '%</span></div>' : '');
 
 		var net = (i.net && i.net.sipa_eth0) || null;
 		if (net && this.lastNet && i.ts && this.lastNet.ts) {
@@ -309,25 +336,25 @@ return view.extend({
 		} else if (c && c.error) reg = c.error;
 		M.set('reg', reg);
 
+		var anchor = (c && c.lte && c.lte.band) ? c.lte : null;
+		M.v('lteanchor').innerHTML = (anchor && c.nr && c.nr.band) ?
+			'<div class="mud-r"><span class="mud-k">LTE 锚点</span><span class="mud-v">B' + M.esc(anchor.band) +
+			' · RSRP ' + (anchor.rsrp != null ? anchor.rsrp.toFixed(1) : '--') +
+			(anchor.sinr != null ? ' · SINR ' + anchor.sinr.toFixed(1) : '') +
+			(anchor.dl_mcs != null ? ' · MCS ' + anchor.dl_mcs : '') +
+			(anchor.ca ? ' · ' + anchor.ca : '') + '</span></div>' :
+			(anchor ? '<div class="mud-r"><span class="mud-k">LTE 链路</span><span class="mud-v">MCS ' +
+			(anchor.dl_mcs != null ? anchor.dl_mcs : '--') + ' / ' + (anchor.ul_mcs != null ? anchor.ul_mcs : '--') +
+			' · BLER ' + (anchor.dl_bler != null ? anchor.dl_bler : '--') + '%</span></div>' : '');
+
+		/* -- 慢档分区 */
 		if (slowChanged) {
-			var nb = (c && c.neigh) || [];
-			nb.sort(function(a, b) {
-				if ((a.rat == 'nr') != (b.rat == 'nr')) return a.rat == 'nr' ? -1 : 1;
-				return (b.rsrp || -999) - (a.rsrp || -999);
-			});
-			M.v('neigh').innerHTML = nb.length ? nb.map(function(n) {
-				var l = M.qLabel(n.rsrp, n.rsrq, n.sinr);
-				return '<tr><td>' + (n.rat == 'nr' ? 'NR n' + M.esc(n.band) : 'LTE B' + M.esc(n.band)) + '</td>' +
-					'<td>' + M.esc(n.pci != null ? n.pci : '--') + '</td>' +
-					'<td>' + M.esc(n.arfcn != null ? n.arfcn : '--') + '</td>' +
-					'<td style="color:' + M.qCol(l) + '">' + (n.rsrp != null ? n.rsrp.toFixed(1) : '--') + '</td>' +
-					'<td>' + (n.rsrq != null ? n.rsrq.toFixed(1) : '--') + '</td>' +
-					'<td>' + (n.sinr != null ? n.sinr.toFixed(1) : '--') + '</td></tr>';
-			}).join('') : '<tr><td colspan="6" style="color:var(--text-muted,var(--text-light,#777))">暂无邻区数据</td></tr>';
+			this.repaintNeigh();
 			M.set('carr', oper + (c && c.operator && c.operator.plmn ? ' · ' + c.operator.plmn : ''));
 			this.paintIdent(c);
 		}
 
+		/* -- 无线 · 局域网 · 设备 · SIM */
 		var wf = i.wifi || {};
 		M.set('ssid', (wf.ssid || '--') + (wf.channel ? ' · Ch ' + wf.channel : '') +
 			(wf.band ? '（' + wf.band + (wf.width ? ' · ' + wf.width : '') + '）' : ''));
@@ -371,9 +398,6 @@ return view.extend({
 			if (pct != null) {
 				M.set('cpu', pct + '%');
 				M.v('cpu-bar').style.width = pct + '%';
-				this.cpuHist.push(pct);
-				if (this.cpuHist.length > RATE_WIN) this.cpuHist.shift();
-				M.spark(M.v('cpu-spark'), this.cpuHist, 0, 100, RATE_WIN);
 			}
 		}
 		this.lastCpu = i.cpu || null;

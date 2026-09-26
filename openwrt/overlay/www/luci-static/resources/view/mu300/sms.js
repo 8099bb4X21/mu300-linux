@@ -2,11 +2,14 @@
 'require view';
 'require mu300.common as M';
 
-/* 短信 -- 收发都在设备本地的短信池（/etc/mu300/sms，mu300-smsd 常驻与 SIM 同步）。
- * 页面只与池子打交道：列表/查看是纯文件读（快），发送/同步走 rpcd -> mu300-sms
- * （后者经 mu300-at 排队，不干扰拨号）。列表格式：
- *   pool: 3 message(s), 1 unread - page 1/1 (10 per page)
- *   000007  read    mt  +8613800138000  26/09/26 12:34:56  preview... */
+/* 短信 -- 聊天式界面。数据在设备本地池（mu300-smsd 与 SIM 同步）：
+ *   左列会话列表（按联系人分组，最新时间排序，未读徽标）
+ *   右侧对话区：气泡（收到的左侧灰底 / 发出的右侧品牌底）+ 时间戳
+ *   底部输入栏：号码 + 内容，Enter 发送、Shift+Enter 换行
+ * 打开会话时逐条取全文（sms_show 顺带把未读标记已读）。列表/取文都是纯文件读，
+ * 发送与 SIM 同步走 AT（后者后台执行）。删除单条：气泡上右键或长按。 */
+
+var MAX_PAGES = 5;   /* 一次聚合的池子页数（每页 10 条），纯文件读，很便宜 */
 
 return view.extend({
 	load: function() { return Promise.resolve(); },
@@ -16,130 +19,194 @@ return view.extend({
 		var root = document.createElement('div');
 		root.className = 'mud';
 		root.innerHTML = `
-<div class="mud-grid">
-  <div class="mud-card">
-    <h3>发送短信</h3>
-    <div class="mud-at-in">
-      <input id="mud-sms-num" placeholder="号码，如 10086 或 +86..." style="max-width:180px" spellcheck="false"/>
-      <input id="mud-sms-text" placeholder="内容（UCS-2 提交，中文可直接发）" spellcheck="false"/>
-      <button class="mud-btn" id="mud-sms-send">发送</button>
-    </div>
-    <div class="mud-note" id="mud-sms-note">发送走 AT+CMGS（PDU 模式），大约需要几秒；通道忙会提示重试。</div>
+<div class="mud-sec" style="margin-top:0">
+  <h3>短信 <span id="mud-sms-stat" style="font-weight:400"></span></h3>
+  <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+    <input id="mud-sms-num" placeholder="发送到：号码，如 10086 或 +86..." spellcheck="false"
+      style="flex:1 1 260px;padding:7px 11px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222)"/>
+    <button class="mud-btn" id="mud-sms-send" style="padding:7px 20px">发送</button>
   </div>
-
-  <div class="mud-card" style="grid-column:1/-1">
-    <h3>收件箱 <span id="mud-sms-stat" style="font-weight:400"></span></h3>
-    <div class="mud-ctl" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:8px">
-      <button class="mud-btn" id="mud-sms-refresh">刷新</button>
-      <button class="mud-btn" id="mud-sms-sync">从 SIM 同步</button>
-      <button class="mud-btn" id="mud-sms-prev">上一页</button>
-      <button class="mud-btn" id="mud-sms-next">下一页</button>
-      <button class="mud-btn warn" id="mud-sms-clear">清空本地池</button>
-    </div>
-    <div id="mud-sms-list" style="margin-top:4px"><div class="mud-note">加载中…</div></div>
-    <div class="mud-out" id="mud-sms-detail" style="display:none"></div>
+  <div class="mud-ctl" style="max-width:460px;margin-bottom:8px">
+    <button class="mud-btn" id="mud-sms-refresh">刷新</button>
+    <button class="mud-btn" id="mud-sms-sync">从 SIM 同步</button>
+    <button class="mud-btn warn" id="mud-sms-clear">清空本地池</button>
   </div>
+  <div class="mud-chat">
+    <div class="mud-convs" id="mud-sms-convs"><div class="mud-note">加载中…</div></div>
+    <div class="mud-thread">
+      <div class="mud-msgs" id="mud-sms-msgs"><div class="mud-note" style="margin:8px 2px">选择左侧会话，或直接在下方输入号码发送。</div></div>
+      <div class="mud-comp">
+        <textarea id="mud-sms-text" placeholder="内容（UCS-2 提交，中文可直接发；Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+      </div>
+    </div>
+  </div>
+  <div class="mud-note" id="mud-sms-note">发送走 AT+CMGS（PDU 模式）；通道忙会提示重试。删除单条：在气泡上右键（手机长按）。</div>
 </div>`;
-		this.page = 1;
-		this.root = root;
 		this.Q = function(id) { return root.querySelector('#mud-' + id); };
+		this.sel = null;          /* 当前会话的 peer */
+		this.convs = {};          /* peer -> {msgs:[], unread:n} */
 		this.wire(root);
-		this.load();
+		this.reload();
 		return root;
 	},
 
 	wire: function(root) {
 		var self = this;
-		var q = function(id) { return root.querySelector('#mud-' + id); };
 
-		q('sms-send').onclick = function() {
-			var num = (M.v('sms-num').value || '').trim();
-			var text = (M.v('sms-text').value || '').trim();
-			if (!num || !text) { M.v('sms-note').textContent = '号码和内容都要填。'; return; }
-			M.v('sms-note').textContent = '发送中…';
-			this.disabled = true;
-			L.resolveDefault(M.callSmsSend(num, text)).then(function(r) {
-				r = r || {};
-				self.buttons();
-				if (r.ok) {
-					M.v('sms-note').textContent = '已发送' + (r.warn ? '（' + r.warn + '）' : '') + '，稍后刷新列表。';
-					M.v('sms-text').value = '';
-					setTimeout(function() { self.load(); }, 3000);
-				} else {
-					M.v('sms-note').textContent = '发送失败：' + (r.error || '未知错误') + (r.busy ? '（AT 通道正忙，稍后重试）' : '');
-				}
-			}, function() { self.buttons(); M.v('sms-note').textContent = '调用失败'; });
-		};
-		q('sms-refresh').onclick = function() { self.load(); };
-		q('sms-sync').onclick = function() {
-			M.v('sms-note').textContent = '已在后台开始从 SIM 同步（AT+CMGL，需要一点时间）…';
+		this.Q('sms-refresh').onclick = function() { self.reload(); };
+		this.Q('sms-sync').onclick = function() {
+			self.note('已在后台开始从 SIM 同步（AT+CMGL）…');
 			L.resolveDefault(M.callSmsSync()).then(function() {
-				M.v('sms-note').textContent = 'SIM 同步已开始，几秒后点「刷新」。';
-				setTimeout(function() { self.load(); }, 10000);
+				self.note('SIM 同步已开始，几秒后自动刷新。');
+				setTimeout(function() { self.reload(); }, 8000);
 			});
 		};
-		q('sms-prev').onclick = function() { if (self.page > 1) { self.page--; self.load(); } };
-		q('sms-next').onclick = function() { self.page++; self.load(); };
-		q('sms-clear').onclick = function() {
-			if (!window.confirm('清空本地短信池？（只删本地文件，SIM 上的不动；删 SIM 需在设备上执行 mu300-sms delete --sim）')) return;
-			L.resolveDefault(M.callSmsDel('all')).then(function() { self.load(); });
+		this.Q('sms-clear').onclick = function() {
+			if (!window.confirm('清空本地短信池？（只删本地文件，SIM 上的不动）')) return;
+			L.resolveDefault(M.callSmsDel('all')).then(function() { self.sel = null; self.reload(); });
 		};
+		this.Q('sms-send').onclick = function() { self.send(); };
+		var txt = this.Q('sms-text');
+		txt.addEventListener('keydown', function(ev) {
+			if (ev.key == 'Enter' && !ev.shiftKey) { ev.preventDefault(); self.send(); }
+		});
+		txt.addEventListener('input', function() {
+			this.style.height = 'auto';
+			this.style.height = Math.min(120, this.scrollHeight) + 'px';
+		});
+		/* 气泡上删除（右键 / 长按） */
+		var msgBox = this.Q('sms-msgs');
+		msgBox.addEventListener('contextmenu', function(ev) {
+			var bub = ev.target.closest ? ev.target.closest('[data-id]') : null;
+			if (!bub) return;
+			ev.preventDefault();
+			self.delMsg(bub.getAttribute('data-id'));
+		});
+		var pressTimer = null;
+		msgBox.addEventListener('touchstart', function(ev) {
+			var bub = ev.target.closest ? ev.target.closest('[data-id]') : null;
+			if (!bub) return;
+			pressTimer = setTimeout(function() { self.delMsg(bub.getAttribute('data-id')); }, 650);
+		});
+		msgBox.addEventListener('touchend', function() { clearTimeout(pressTimer); });
 	},
 
-	buttons: function() {
-		var b = this.root.querySelector('#mud-sms-send');
-		if (b) b.disabled = false;
-	},
-
-	load: function() {
+	delMsg: function(id) {
 		var self = this;
-		L.resolveDefault(M.callSmsList(this.page)).then(function(r) { self.paint(r || {}); });
+		if (!window.confirm('删除这条短信（本地池）？')) return;
+		L.resolveDefault(M.callSmsDel(id)).then(function() { self.reload(); });
 	},
 
-	paint: function(r) {
+	note: function(t) { var e = this.Q('sms-note'); if (e) e.textContent = t; },
+
+	send: function() {
 		var self = this;
-		var box = this.Q('sms-list');
-		if (r.error) { box.innerHTML = '<div class="mud-note">' + M.esc(r.error) + '</div>'; return; }
-		var stat = this.root ? this.root.querySelector('#mud-sms-stat') : document.getElementById('mud-sms-stat');
-		if (stat) stat.textContent = r.total ? ('· ' + r.total + ' 条' + (r.unread ? '，' + r.unread + ' 条未读' : '') + ' · 第 ' + r.page + '/' + r.pages + ' 页') : '· 空';
-		if (!r.msgs || !r.msgs.length) {
-			box.innerHTML = '<div class="mud-note">池子是空的：收到/发出的短信会在这里，或点「从 SIM 同步」把 SIM 上的拉下来。</div>';
+		var num = (this.Q('sms-num').value || '').trim();
+		var text = (this.Q('sms-text').value || '').replace(/\s+$/, '');
+		if (!num || !text) { this.note('号码和内容都要填。'); return; }
+		var btn = this.Q('sms-send');
+		btn.disabled = true;
+		this.note('发送中…');
+		L.resolveDefault(M.callSmsSend(num, text)).then(function(r) {
+			r = r || {};
+			btn.disabled = false;
+			if (r.ok) {
+				self.note('已发送，稍后自动刷新。');
+				self.Q('sms-text').value = '';
+				setTimeout(function() { self.reload(); }, 2500);
+			} else {
+				self.note('发送失败：' + (r.error || '未知错误') + (r.busy ? '（AT 通道正忙，稍后重试）' : ''));
+			}
+		}, function() { btn.disabled = false; self.note('调用失败'); });
+	},
+
+	/* 聚合池子里的几页，按联系人分组 */
+	reload: function() {
+		var self = this;
+		var all = [], page = 1;
+		var step = function() {
+			L.resolveDefault(M.callSmsList(page)).then(function(r) {
+				r = r || {};
+				if (r.error) {
+					self.Q('sms-convs').innerHTML = '<div class="mud-note">' + M.esc(r.error) + '</div>';
+					return;
+				}
+				all = all.concat(r.msgs || []);
+				var pages = r.pages || 1;
+				if (page < pages && page < MAX_PAGES) { page++; return step(); }
+				self.stat = r;
+				self.build(all);
+			});
+		};
+		step();
+	},
+
+	build: function(all) {
+		var self = this;
+		this.convs = {};
+		all.forEach(function(m) {
+			var peer = m.peer || '?';
+			if (!self.convs[peer]) self.convs[peer] = { msgs: [], unread: 0 };
+			self.convs[peer].msgs.push(m);
+			if (m.status === 'unread') self.convs[peer].unread++;
+		});
+		var peers = Object.keys(this.convs).sort(function(a, b) {
+			var ma = self.convs[a].msgs[0], mb = self.convs[b].msgs[0];
+			return (mb && mb.time || '').localeCompare(ma && ma.time || '');
+		});
+		var st = this.stat || {};
+		this.Q('sms-stat').textContent = '· ' + (st.total || all.length) + ' 条' +
+			(st.unread ? '，' + st.unread + ' 条未读' : '') + ' · ' + peers.length + ' 个会话';
+		var box = this.Q('sms-convs');
+		if (!peers.length) {
+			box.innerHTML = '<div class="mud-note" style="margin:6px">池子是空的：收到/发出的短信会出现在这里，或点「从 SIM 同步」。</div>';
 			return;
 		}
-		box.innerHTML = r.msgs.map(function(m) {
-			var who = (m.dir === 'mt') ? '来自' : '发给';
-			return '<div class="mud-sms-item" data-id="' + m.esc_id + '">' +
-				'<div class="mud-sms-top"><span>' +
-					(m.status === 'unread' ? '<span class="mud-badge">未读</span> ' : '') +
-					'<b>' + M.esc(m.peer) + '</b> <span style="color:var(--text-muted,var(--text-light,#777));font-size:.74rem">' + who + ' · ' + M.esc(m.time) + '</span>' +
-				'</span><span><button class="mud-btn warn" style="padding:1px 8px;font-size:.72rem" data-del="' + m.esc_id + '">删除</button></span></div>' +
-				'<div style="margin-top:3px;font-size:.82rem;color:var(--text-muted,var(--text-light,#888))" class="mud-preview">' + M.esc(m.preview) + '</div>' +
-			'</div>';
+		box.innerHTML = peers.map(function(p) {
+			var cv = self.convs[p];
+			var last = cv.msgs[0];
+			return '<div class="mud-conv' + (p === self.sel ? ' sel' : '') + '" data-peer="' + M.esc(p) + '">' +
+				'<div class="n"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + M.esc(p) + '</span>' +
+				(cv.unread ? '<span class="mud-badge">' + cv.unread + '</span>' : '') + '</div>' +
+				'<div class="p">' + M.esc((last.dir === 'mo' ? '我: ' : '') + (last.preview || '')) + '</div>' +
+				'<div class="p" style="opacity:.7">' + M.esc(last.time || '') + '</div></div>';
 		}).join('');
-		box.querySelectorAll('.mud-sms-item').forEach(function(el) {
-			el.addEventListener('click', function(ev) {
-				if (ev.target && ev.target.getAttribute && ev.target.getAttribute('data-del')) return;
-				self.show(el.getAttribute('data-id'));
-			});
+		box.querySelectorAll('.mud-conv').forEach(function(el) {
+			el.onclick = function() { self.open(el.getAttribute('data-peer')); };
 		});
-		box.querySelectorAll('[data-del]').forEach(function(btn) {
-			btn.addEventListener('click', function(ev) {
-				ev.stopPropagation();
-				if (!window.confirm('删除这条短信（本地池）？')) return;
-				L.resolveDefault(M.callSmsDel(btn.getAttribute('data-del'))).then(function() { self.load(); });
-			});
-		});
+		if (this.sel && this.convs[this.sel]) this.open(this.sel);
 	},
 
-	show: function(id) {
+	/* 打开会话：渲染气泡并逐条取全文（未读的顺带标记已读） */
+	open: function(peer) {
 		var self = this;
-		var det = this.root.querySelector('#mud-sms-detail');
-		det.style.display = 'block';
-		det.textContent = '读取中…';
-		L.resolveDefault(M.callSmsShow(id)).then(function(r) {
-			r = r || {};
-			det.textContent = r.ok ? (r.text || '(空)') : ('读取失败：' + (r.error || ''));
-			if (r.ok) setTimeout(function() { self.load(); }, 1500); /* show 会把未读标为已读 */
+		this.sel = peer;
+		this.Q('sms-num').value = peer.replace(/[^+0-9]/g, '');
+		this.Q('sms-convs').querySelectorAll('.mud-conv').forEach(function(el) {
+			el.className = (el.getAttribute('data-peer') === peer ? 'mud-conv sel' : 'mud-conv');
 		});
+		var cv = this.convs[peer];
+		var msgsEl = this.Q('sms-msgs');
+		msgsEl.innerHTML = '';
+		cv.msgs.slice().reverse().forEach(function(m) {   /* 旧 -> 新 */
+			var div = document.createElement('div');
+			div.className = 'mud-bub' + (m.dir === 'mo' ? ' out' : '');
+			div.setAttribute('data-id', m.id);
+			div.innerHTML = '<span class="bd">' + M.esc(m.preview || '') + (m.preview && m.preview.length >= 44 ? '…' : '') + '</span>' +
+				'<span class="tm">' + M.esc((m.time || '').split(' ').pop() || '') + '</span>';
+			msgsEl.appendChild(div);
+			if (m.status === 'unread') div.querySelector('.bd').style.fontWeight = '600';
+			/* 需要全文或未读时取整条（sms_show 同时把未读标已读） */
+			if ((m.preview || '').length >= 44 || m.status === 'unread') {
+				L.resolveDefault(M.callSmsShow(m.id)).then(function(r) {
+					r = r || {};
+					if (!r.ok) return;
+					var body = (r.text || '').split('\n\n').slice(1).join('\n\n').trim();
+					var bd = div.querySelector('.bd');
+					if (bd) { bd.textContent = body; bd.style.fontWeight = ''; }
+				});
+			}
+		});
+		msgsEl.scrollTop = msgsEl.scrollHeight;
 	}
 });

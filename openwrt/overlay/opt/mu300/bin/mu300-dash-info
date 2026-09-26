@@ -141,20 +141,30 @@ net_obj() {  # net_obj IFACE -> {"rx":N,"tx":N,"up":0|1} or null
 
 # ------------------------------------------------------------------- Wi-Fi
 # configuration truth is uci (the driver reports nothing useful); per-client detail
-# comes from the driver's station table, names and addresses from the DHCP leases
-W_SSID=$(t3 uci -q get wireless.@wifi-iface[0].ssid)
-W_CH=$(t3 uci -q get wireless.radio0.channel)
-W_BAND=$(t3 uci -q get wireless.radio0.band)
-[ -n "$W_BAND" ] || W_BAND=$(t3 uci -q get wireless.radio0.hwmode)
-W_HT=$(t3 uci -q get wireless.radio0.htmode)   # HE80 / VHT40 / HT20 -> the number is the width
+# comes from the driver's station table, names and addresses from the DHCP leases.
+# ONE "uci show wireless" instead of nine "uci get": each uci call costs a fork
+# plus config parse and they added up to most of this script's runtime.
+WSHOW=$(t3 uci -q show wireless 2>/dev/null)
+wu() {  # wu KEY -> value ('' when absent); KEY like "radio0.channel"
+    printf '%s\n' "$WSHOW" | sed -n "s/^wireless\\.$1='\\(.*\\)'$/\\1/p" | head -n1
+}
+# anonymous sections appear in "uci show" under their cfg id, and named ones use
+# their name - either way the section type line has no quotes; resolve the first
+# wifi-iface section once and read its options through that key
+IFKEY=$(printf '%s\n' "$WSHOW" | sed -n "s/^wireless\\.\\([^.]*\\)=wifi-iface\$/\\1/p" | head -n1)
+W_SSID=$(wu "${IFKEY:-x}.ssid")
+W_CH=$(wu 'radio0.channel')
+W_BAND=$(wu 'radio0.band')
+[ -n "$W_BAND" ] || W_BAND=$(wu 'radio0.hwmode')
+W_HT=$(wu 'radio0.htmode')   # HE80 / VHT40 / HT20 -> the number is the width
 W_WIDTH=$(printf '%s' "$W_HT" | tr -cd '0-9' | head -c 2)
 [ -n "$W_WIDTH" ] && W_WIDTH="$W_WIDTH MHz"
-W_COUNTRY=$(t3 uci -q get wireless.radio0.country)
-W_ENC=$(t3 uci -q get wireless.@wifi-iface[0].encryption)
+W_COUNTRY=$(wu 'radio0.country')
+W_ENC=$(wu "${IFKEY:-x}.encryption")
 [ -n "$W_ENC" ] || W_ENC=none
-W_HIDDEN=$(t3 uci -q get wireless.@wifi-iface[0].hidden)
+W_HIDDEN=$(wu "${IFKEY:-x}.hidden")
 W_HOSTAPD=0; pidof hostapd >/dev/null 2>&1 && W_HOSTAPD=1
-W_DIS=$(t3 uci -q get wireless.radio0.disabled)
+W_DIS=$(wu 'radio0.disabled')
 [ "$W_DIS" = "1" ] && W_UP=0 || W_UP=1
 [ -d /sys/class/net/wlan0 ] || W_UP=0
 # station table: one block per client - mac, signal, tx/rx bitrate, connected time

@@ -35,6 +35,10 @@ export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
 AT=${MU300_AT:-mu300-at}
 STATE=/etc/mu300/dash/lock-state.json
 LOG=/tmp/mu300-dash/lock.log
+# The lock state only changes when somebody applies one - a real read costs seven
+# AT round trips (about a second each on this firmware), so normal reads are
+# served from this cache and refreshed in the background. "get fresh" re-reads.
+LOCKCACHE=/tmp/mu300-dash/lock.json
 mkdir -p /etc/mu300/dash /tmp/mu300-dash 2>/dev/null
 
 at() { "$AT" -t "${2:-6}" "$1" 2>/dev/null | tr -d '\r'; }
@@ -145,7 +149,8 @@ do_get() {
 
     # "auto" for bands = nothing locked (empty masks or the full supported set)
     printf '{"ts":%d,"mode":{"label":"%s","work":"%s","gran":"%s","m1":"%s","prim":"%s"},"endc":"%s","lte":{"locked":"%s","raw":"%s"},"nr":{"locked":"%s","raw":"%s"},"cell":"%s"}\n' \
-        "$(date +%s)" "$lbl" "${m0:-}" "${gran:-}" "$m1" "$prim" "${endc:-}" "${lte_b:-}" "${ltem:-}" "${nr_b:-}" "${nrm:-}" "${cell:-}"
+        "$(date +%s)" "$lbl" "${m0:-}" "${gran:-}" "$m1" "$prim" "${endc:-}" "${lte_b:-}" "${ltem:-}" "${nr_b:-}" "${nrm:-}" "${cell:-}" \
+        | tee "$LOCKCACHE.part" && mv "$LOCKCACHE.part" "$LOCKCACHE"
 }
 
 # ------------------------------------------------------------------ apply
@@ -248,6 +253,8 @@ do_apply() {  # do_apply KIND VALUE
     save_state "$kind" "$val"
     sfun_restart
     say "apply $kind=$val done"
+    # the cache must not keep serving the pre-apply state
+    setsid "$0" get fresh >/dev/null 2>&1 &
 }
 
 # ----------------------------------------------------------------- replay
@@ -295,8 +302,18 @@ do_apply_quiet() {
 }
 
 case "${1:-}" in
-    get)    do_get ;;
+    get)
+        # default: serve the cache (instant); refresh it in the background when
+        # it is missing or stale. "get fresh" does the real seven-AT read.
+        if [ "${2:-}" = fresh ] || [ ! -s "$LOCKCACHE" ]; then
+            do_get
+        else
+            cat "$LOCKCACHE"
+            age=$(( $(date +%s) - $(date -r "$LOCKCACHE" +%s 2>/dev/null || echo 0) ))
+            [ "$age" -gt 600 ] && setsid "$0" get fresh >/dev/null 2>&1 &
+        fi
+        ;;
     apply)  do_apply "${2:-}" "${3:-}" ;;
     replay) do_replay ;;
-    *)      echo "usage: $0 get | apply KIND VALUE | replay" >&2; exit 2 ;;
+    *)      echo "usage: $0 get [fresh] | apply KIND VALUE | replay" >&2; exit 2 ;;
 esac
