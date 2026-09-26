@@ -28,6 +28,7 @@
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
 
 DASH=${MU300_DASH_BIN:-/opt/mu300/bin}
+SMS=${MU300_SMS_BIN:-/opt/mu300/bin/mu300-sms}
 DIR=${MU300_DASH_DIR:-/tmp/mu300-dash}
 CELL=$DIR/cell.json
 COLLECT_LCK=$DIR/collect.lck
@@ -148,6 +149,90 @@ m_lock_set() {
     printf '{"ok":1,"started":1,"op":"lock %s=%s"}\n' "$kind" "$val"
 }
 
+# --------------------------------------------------------------------- SMS
+# Everything below talks to the LOCAL pool via mu300-sms (the sms daemon keeps
+# it in step with the SIM). list/show are file reads; send goes through AT
+# (UCS-2 PDU submit, seconds); sync runs detached because CMGL walks the SIM.
+
+esc_ml() {  # multi-line text -> one JSON string
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r' |
+        awk 'NR>1 { printf "\\n" } { printf "%s", $0 }'
+}
+
+m_sms_list() {
+    local page out
+    page=$(inp '@.page'); case "$page" in ''|*[!0-9]*) page=1 ;; esac
+    out=$("$SMS" list "$page" 2>/dev/null) || out=''
+    [ -n "$out" ] || { printf '{"error":"mu300-sms 不可用（短信服务没装或没起来）"}\n'; return; }
+    # first line "pool: N message(s), U unread - page P/T (10 per page)",
+    # then fixed-width rows (see mu300-sms cmd_list); parse by column position
+    printf '%s\n' "$out" | awk '
+        NR == 1 {
+            total = $0; sub(/^pool: /, "", total); sub(/ message.*/, "", total)
+            unread = $0; sub(/^pool: [0-9]+ message\(s\), /, "", unread); sub(/ unread.*/, "", unread)
+            pg = $0; sub(/.*page /, "", pg); sub(/\/.*/, "", pg)
+            pgs = $0; sub(/.*page [0-9]+\//, "", pgs); sub(/ \(.*/, "", pgs)
+            printf "{\"total\":%s,\"unread\":%s,\"page\":%s,\"pages\":%s,\"msgs\":[",
+                (total ~ /^[0-9]+$/ ? total : 0), (unread ~ /^[0-9]+$/ ? unread : 0),
+                (pg ~ /^[0-9]+$/ ? pg : 1), (pgs ~ /^[0-9]+$/ ? pgs : 1)
+            next
+        }
+        {
+            id = substr($0, 1, 7); st = substr($0, 9, 7); dir = substr($0, 17, 3)
+            peer = substr($0, 21, 18); tm = substr($0, 40, 21); prev = substr($0, 62)
+            gsub(/^[ \t]+|[ \t]+$/, "", id); gsub(/^[ \t]+|[ \t]+$/, "", st)
+            gsub(/^[ \t]+|[ \t]+$/, "", dir); gsub(/^[ \t]+|[ \t]+$/, "", peer)
+            gsub(/^[ \t]+|[ \t]+$/, "", tm); gsub(/^[ \t]+|[ \t]+$/, "", prev)
+            gsub(/\\/,"\\\\",prev); gsub(/"/,"\\\"",prev)
+            if (id ~ /^[0-9]+$/)
+                printf "%s{\"id\":\"%s\",\"status\":\"%s\",\"dir\":\"%s\",\"peer\":\"%s\",\"time\":\"%s\",\"preview\":\"%s\"}",
+                    (n++ ? "," : ""), id, st, dir, peer, tm, prev
+        }
+        END { print "]}" }'
+}
+
+m_sms_show() {
+    local id; id=$(inp '@.id')
+    case "$id" in ''|*[!0-9]*) printf '{"ok":0,"error":"bad id"}\n'; return ;; esac
+    local text
+    text=$("$SMS" show "$id" 2>/dev/null)
+    if [ $? = 0 ] && [ -n "$text" ]; then
+        printf '{"ok":1,"text":"%s"}\n' "$(esc_ml "$text")"
+    else
+        printf '{"ok":0,"error":"%s"}\n' "$(esc_ml "${text:-读取失败}")"
+    fi
+}
+
+m_sms_send() {
+    local num text
+    num=$(inp '@.num')
+    text=$(inp '@.text')
+    case "$num" in ''|*[!+0-9]) printf '{"ok":0,"error":"号码只能是数字（可带 +）"}\n'; return ;; esac
+    [ -n "$text" ] || { printf '{"ok":0,"error":"内容为空"}\n'; return; }
+    [ ${#text} -le 480 ] || { printf '{"ok":0,"error":"内容太长（>480 字符）"}\n'; return; }
+    local out
+    out=$("$SMS" send "$num" "$text" 2>&1)
+    case "$out" in
+        *"mu300-at: busy"*) printf '{"ok":0,"busy":1,"error":"AT 通道正忙，命令未发出，请重试"}\n' ;;
+        *sent*|*OK*)
+            printf '{"ok":1,"reply":"%s"}\n' "$(esc_ml "$out")" ;;
+        *)
+            printf '{"ok":0,"error":"%s"}\n' "$(esc_ml "$(printf '%s' "$out" | tail -n1)")" ;;
+    esac
+}
+
+m_sms_delete() {
+    local id; id=$(inp '@.id')
+    case "$id" in all|[0-9][0-9]*) ;; *) printf '{"ok":0,"error":"bad id"}\n'; return ;; esac
+    "$SMS" delete "$id" >/dev/null 2>&1
+    printf '{"ok":1}\n'
+}
+
+m_sms_sync() {
+    setsid "$SMS" sync >/dev/null 2>&1 &
+    printf '{"ok":1,"started":1}\n'
+}
+
 do_list() {
     cat <<EOF
 {
@@ -156,7 +241,12 @@ do_list() {
 	"at": { "cmd": "String" },
 	"at_history": { },
 	"lock_get": { },
-	"lock_set": { "kind": "String", "val": "String" }
+	"lock_set": { "kind": "String", "val": "String" },
+	"sms_list": { "page": "String" },
+	"sms_show": { "id": "String" },
+	"sms_send": { "num": "String", "text": "String" },
+	"sms_delete": { "id": "String" },
+	"sms_sync": { }
 }
 EOF
 }
@@ -173,6 +263,11 @@ call)
         at_history) m_at_history ;;
         lock_get)   "$DASH/mu300-dash-lock" get 2>/dev/null || printf '{"error":"lock read failed"}\n' ;;
         lock_set)   m_lock_set ;;
+        sms_list)   m_sms_list ;;
+        sms_show)   m_sms_show ;;
+        sms_send)   m_sms_send ;;
+        sms_delete) m_sms_delete ;;
+        sms_sync)   m_sms_sync ;;
         *)          printf '{"ok":0,"error":"no such method"}\n' ;;
     esac
     ;;
