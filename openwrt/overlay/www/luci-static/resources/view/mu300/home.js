@@ -25,6 +25,12 @@ return view.extend({
 		this._bootEl = root;
 		root.className = 'mud mud-booting';
 		root.innerHTML = this.html();
+		/* 官方状态页同款载入指示：居中转圈，首份带时间戳的快照落地后整体淡出 */
+		var veil = document.createElement('div');
+		veil.className = 'mud-veil';
+		veil.innerHTML = '<div class="mud-veil-in"><span class="mud-spin"></span>正在载入视图…</div>';
+		root.appendChild(veil);
+		this._veil = veil;
 		this.wire(root);
 		var self = this;
 		/* 首屏不等蜂窝缓存：sysinfo 是纯本地快照（毫秒级），先把系统/网络/无线全部画出来；
@@ -229,7 +235,7 @@ return view.extend({
 	refreshLock: function() {
 		var self = this;
 		L.resolveDefault(M.callLockGet()).then(function(l) {
-			self.lockedCell = (l || {}).cell || '';
+			self.lockedCell = (l || {}).cells || [];
 			self.repaintNeigh();
 		});
 	},
@@ -255,8 +261,12 @@ return view.extend({
 	update: function(st) {
 		var i = st.info || {};
 		this.lastInfo = i;
-		/* 第一份带时间戳的快照落地后解除 loading 呼吸态 */
-		if (i.ts && this._bootEl) { this._bootEl.classList.remove('mud-booting'); this._bootEl = null; }
+		/* 第一份带时间戳的快照落地后解除 loading 呼吸态与载入遮罩 */
+		if (i.ts && this._bootEl) {
+			this._bootEl.classList.remove('mud-booting'); this._bootEl = null;
+			if (this._veil) { var v = this._veil; v.classList.add('mud-veil-out');
+				setTimeout(function() { v.remove(); }, 250); this._veil = null; }
+		}
 		/* 快档覆盖：sig（服务小区/注册，1.5 s 级）盖在慢档缓存 c 的对应字段上 */
 		var c = st.cell || null;
 		var s = st.sig || null;

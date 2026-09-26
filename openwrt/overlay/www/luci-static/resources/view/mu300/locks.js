@@ -67,6 +67,7 @@ return view.extend({
 
 <div class="mud-sec">
   <h3>邻区与小区锁定 <span id="mud-lock-note" style="font-weight:400"></span></h3>
+  <div id="mud-lockedcells"></div>
   <div class="mud-ctl" style="max-width:400px;margin-bottom:8px">
     <button class="mud-btn" id="mud-lock-cell">锁定当前服务小区</button>
     <button class="mud-btn warn" id="mud-lock-cell-off">解除小区锁定</button>
@@ -92,8 +93,10 @@ return view.extend({
 			self.note('正在后台应用 ' + what + ' …（SFUN 重启 + 重新驻网，约半分钟）');
 			L.resolveDefault(M.callLockSet(kind, val)).then(function(r) {
 				r = r || {};
-				self.note(r.ok ? '已后台执行：' + (r.op || kind) + '。约半分钟后点「刷新锁定状态」确认。' : ('失败：' + (r.error || '未知错误')));
-				setTimeout(function() { self.refresh(); }, 35000);
+				if (!r.ok) { self.note('失败：' + (r.error || '未知错误')); return; }
+				if (kind == 'endc') { self.note('已生效（EN-DC 不需要重启协议栈）'); return self.refreshSoon(); }
+				self.note('已后台执行：' + (r.op || kind) + '（SFUN 重启约半分钟），自动回读状态…');
+				self.readback();
 			}, function() { self.note('调用失败'); });
 		};
 
@@ -118,7 +121,7 @@ return view.extend({
 				self.paint();
 				self.note('已刷新');
 				var nb = self.Q('neigh');
-				if (nb && self.lastCell) nb.innerHTML = M.neighborRows(self.lastCell, self.lastLock.cell || '');
+				if (nb && self.lastCell) nb.innerHTML = M.neighborRows(self.lastCell, self.lastLock.cells || []);
 			});
 			self.loadServing();
 		};
@@ -162,6 +165,20 @@ return view.extend({
 		this.Q('lock-cell').onclick = function() { apply('cell', 'auto', '锁定当前服务小区'); };
 		this.Q('lock-cell-off').onclick = function() { apply('cell', 'off', '解除小区锁定'); };
 
+		/* 已锁定小区表的解锁按钮（委托） */
+		this.Q('lockedcells').addEventListener('click', function(ev) {
+			var btn = ev.target;
+			if (!btn.getAttribute || !btn.getAttribute('data-unlock')) return;
+			var rat = btn.getAttribute('data-unlock');
+			if (!window.confirm('解除 ' + rat.toUpperCase() + ' 的小区锁定？（SFUN 重启约半分钟）')) return;
+			self.note('正在解除 ' + rat.toUpperCase() + ' 小区锁定…');
+			L.resolveDefault(M.callLockSet('cell', 'off-' + rat)).then(function(r) {
+				r = r || {};
+				if (!r.ok) { self.note('解锁失败：' + (r.error || '未知错误')); return; }
+				self.readback();
+			});
+		});
+
 		/* 邻区行内锁定（事件委托，与主页一致） */
 		this.Q('neigh').addEventListener('click', function(ev) {
 			var btn = ev.target;
@@ -171,8 +188,9 @@ return view.extend({
 			self.note('正在后台锁定 ' + key + ' …');
 			L.resolveDefault(M.callLockSet('cell', key)).then(function(r) {
 				r = r || {};
-				self.note(r.ok ? '已后台锁定 ' + key + '，约半分钟后刷新确认。' : '锁定失败：' + (r.error || '未知错误'));
-				setTimeout(function() { self.refresh(); }, 35000);
+				if (!r.ok) { self.note('锁定失败：' + (r.error || '未知错误')); return; }
+				self.note('已后台锁定 ' + key + '（SFUN 重启约半分钟），自动回读状态…');
+				self.readback();
 			});
 		});
 
@@ -222,7 +240,26 @@ return view.extend({
 			return '<div class="mud-srvline"><span class="k">' + x[0] + '</span><span class="v">' + M.esc(x[1]) + '</span></div>';
 		}).join('');
 		var nb = this.Q('neigh');
-		if (nb) nb.innerHTML = M.neighborRows(c, (this.lastLock || {}).cell || '');
+		if (nb) nb.innerHTML = M.neighborRows(c, (this.lastLock || {}).cells || []);
+	},
+
+	/* 应用后自动回读：轮询缓存 lock_get 直到 ts 越过本次应用（后端 apply 后会 fresh 刷新缓存） */
+	readback: function() {
+		var self = this, tries = 0, t0 = Date.now();
+		var step = function() {
+			L.resolveDefault(M.callLockGet()).then(function(l) {
+				l = l || {};
+				if ((l.ts && l.ts * 1000 > t0 - 30000) || ++tries > 12) {
+					self.lastLock = l; self.paint(); self.paintServing(self.lastCell);
+					self.note('状态已回读' + (l.mode ? '' : '（暂无数据，可手动刷新）'));
+				} else setTimeout(step, 2500);
+			});
+		};
+		step();
+	},
+	refreshSoon: function() {
+		var self = this;
+		setTimeout(function() { self.refresh(); }, 1500);
 	},
 
 	refresh: function() {
@@ -237,7 +274,7 @@ return view.extend({
 			self.paint();
 			/* 锁定状态回来了，把邻区表的“已锁定”标记也刷新一下 */
 			var nb = self.Q('neigh');
-			if (nb && self.lastCell) nb.innerHTML = M.neighborRows(self.lastCell, self.lastLock.cell || '');
+			if (nb && self.lastCell) nb.innerHTML = M.neighborRows(self.lastCell, self.lastLock.cells || []);
 		});
 	},
 
@@ -252,10 +289,24 @@ return view.extend({
 			b.className = (b.getAttribute('data-mode') === (l.mode && l.mode.label)) ? 'mud-btn on' : 'mud-btn';
 		});
 		var eb = this.Q('lock-endc');
-		if (eb) { eb.className = 'mud-btn' + (l.endc === '1' ? ' on' : ''); eb.textContent = l.endc === '1' ? 'EN-DC ✓' : 'EN-DC'; }
+		if (eb) { eb.className = 'mud-btn' + (l.endc === '1' ? ' on' : ''); eb.textContent = l.endc === '1' ? 'EN-DC' : 'EN-DC'; }
 
 		/* 支持频段优先取模组能力（SPLBAND=4 / =0 解码），读不到才用静态表 */
 		var caps = l.caps || {};
+		/* 已锁定小区独立表：多小区都列出来，每个 RAT 一个解锁按钮 */
+		var lc = self.Q('lockedcells');
+		if (lc) {
+			var cells = l.cells || [];
+			lc.innerHTML = cells.length
+				? '<div class="mud-note" style="margin:0 0 4px">已锁定小区</div><table class="mud-table"><tbody>' +
+					cells.map(function(k) {
+						var parts = k.split(':'), rat = parts[0], fp = (parts[1] || '').split(',');
+						return '<tr><td>' + (rat == 'nr' ? 'NR' : 'LTE') + '</td><td>' + M.esc(fp[0] || '?') + '</td>' +
+							'<td>' + M.esc(fp[1] || '?') + '</td>' +
+							'<td><button class="mud-lockbtn" data-unlock="' + rat + '">解锁 ' + (rat == 'nr' ? 'NR' : 'LTE') + '</button></td></tr>';
+					}).join('') + '</tbody></table>'
+				: '';
+		}
 		[ 'nr', 'lte' ].forEach(function(rat) {
 			var capList = (caps[rat] || '').split(',').map(Number).filter(function(b) { return b > 0; });
 			if (capList.length) {

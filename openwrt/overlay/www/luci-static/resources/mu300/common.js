@@ -127,6 +127,12 @@ var CSS = `
 .mud-sec>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
 .mud-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 28px}
 .mud-body>.mud-sec+.mud-sec{border-top:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 60%,transparent);margin-top:14px;padding-top:2px}
+/* 官方状态页同款载入遮罩 */
+.mud-veil{position:relative;min-height:220px;transition:opacity .25s}
+.mud-veil-out{opacity:0;pointer-events:none}
+.mud-veil-in{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--text-muted,var(--text-light,#888));font-size:.9rem}
+.mud-spin{width:22px;height:22px;border-radius:50%;border:2.5px solid color-mix(in oklab,currentColor 25%,transparent);border-top-color:currentColor;animation:mudrot .9s linear infinite}
+@keyframes mudrot{to{transform:rotate(360deg)}}
 /* 首屏 loading：数据未到时占位值轻微呼吸，不改变布局 */
 @keyframes mudpulse{0%,100%{opacity:1}50%{opacity:.35}}
 .mud-booting .mud-v,.mud-booting .mud-kpi b,.mud-booting .mud-rsrp,.mud-booting .mud-rat,.mud-booting .mud-temp span{animation:mudpulse 1.1s ease-in-out infinite}
@@ -289,11 +295,11 @@ function neighborRows(c, lockedCell) {
 	});
 	if (!nb.length)
 		return '<tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">暂无邻区数据</td></tr>';
-	var lk = lockedCell || '';
+	var lk = Array.isArray(lockedCell) ? lockedCell.join('|') : (lockedCell || '');
 	return nb.map(function(n) {
 		var l = qLabel(n.rsrp, n.rsrq, n.sinr);
 		var key = n.rat + ':' + n.arfcn + ',' + n.pci;
-		var isLocked = (lk == key);
+		var isLocked = lk.split('|').indexOf(key) >= 0;
 		return '<tr><td>' + (n.rat == 'nr' ? 'NR n' + esc(n.band) : 'LTE B' + esc(n.band)) + '</td>' +
 			'<td>' + esc(n.pci != null ? n.pci : '--') + '</td>' +
 			'<td>' + esc(n.arfcn != null ? n.arfcn : '--') + '</td>' +

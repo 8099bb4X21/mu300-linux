@@ -146,10 +146,16 @@ do_get() {
     lte_b=$(lte_bands "$ltem")
     nr_b=$(nr_bands "$nr3")
 
-    # cell locks: "12,3" alone = none; a pair follows when locked
-    cl=$(echo "$cell12" | awk -F',' 'NF>=4 {print "lte:" $3 "," $4}')
-    cn=$(echo "$cell16" | awk -F',' 'NF>=4 {print "nr:" $3 "," $4}')
-    cell=${cn:-$cl}
+    # cell locks: "12,3" alone = none; (freq,pci) pairs follow - and there can
+    # be several (users lock multiple cells), so collect every pair on both RATs
+    cl=$(echo "$cell12" | awk -F',' 'NF>=4 {p=""; for(i=3;i<NF;i+=2) p=p (p?",":"") "lte:" $i "," $(i+1); print p}')
+    cn=$(echo "$cell16" | awk -F',' 'NF>=4 {p=""; for(i=3;i<NF;i+=2) p=p (p?",":"") "nr:" $i "," $(i+1); print p}')
+    cell=${cn:+$cn}${cl:+,$cl}
+    cells=$(printf '%s' "$cell" | awk '{ out=""; n=0
+        while (match($0, /(nr|lte):[0-9]+,[0-9]+/)) {
+            out = out (n++ ? "," : "") "\"" substr($0, RSTART, RLENGTH) "\""
+            $0 = substr($0, RSTART+RLENGTH+1) }
+        print "[" out "]" }')
 
     # "auto" for bands = nothing locked (empty masks or the full supported set)
     # caps = what the module can do: LTE from the =0 read (the unlocked mask IS
@@ -158,8 +164,8 @@ do_get() {
     nr3cap=$(printf '%s' "$nrcapm" | awk -F',' '{ print $1 "," $3 ",0" }')
     nrcap=$(nr_bands "$nr3cap")
     ltecap=$(lte_bands "$ltem")
-    printf '{"ts":%d,"mode":{"label":"%s","work":"%s","gran":"%s","m1":"%s","prim":"%s"},"endc":"%s","lte":{"locked":"%s","raw":"%s"},"nr":{"locked":"%s","raw":"%s"},"cell":"%s","caps":{"nr":"%s","lte":"%s"}}\n' \
-        "$(date +%s)" "$lbl" "${m0:-}" "${gran:-}" "$m1" "$prim" "${endc:-}" "${lte_b:-}" "${ltem:-}" "${nr_b:-}" "${nrm:-}" "${cell:-}" "${nrcap:-}" "${ltecap:-}" \
+    printf '{"ts":%d,"mode":{"label":"%s","work":"%s","gran":"%s","m1":"%s","prim":"%s"},"endc":"%s","lte":{"locked":"%s","raw":"%s"},"nr":{"locked":"%s","raw":"%s"},"cell":"%s","cells":%s,"caps":{"nr":"%s","lte":"%s"}}\n' \
+        "$(date +%s)" "$lbl" "${m0:-}" "${gran:-}" "$m1" "$prim" "${endc:-}" "${lte_b:-}" "${ltem:-}" "${nr_b:-}" "${nrm:-}" "${cell%%,*}" "${cells:-[]}" "${nrcap:-}" "${ltecap:-}" \
         | tee "$LOCKCACHE.part" && mv "$LOCKCACHE.part" "$LOCKCACHE"
 }
 
@@ -201,7 +207,10 @@ do_apply() {  # do_apply KIND VALUE
         endc)
             case $val in on) v=1 ;; off) v=2 ;; esac   # OFF is 2 here, not 0 (measured)
             at "AT+SPENDC=$v" 6 >/dev/null
-            say "EN-DC -> $val (SPENDC=$v)"
+            say "EN-DC -> $val (SPENDC=$v, no stack restart needed)"
+            save_state "$kind" "$val"
+            setsid "$0" get fresh >/dev/null 2>&1 &
+            return 0   # takes effect without an SFUN restart
             ;;
         lte)
             if [ -n "$val" ]; then
@@ -225,6 +234,14 @@ do_apply() {  # do_apply KIND VALUE
                     at 'AT+SPFORCEFRQ=12,4' 6 >/dev/null
                     at 'AT+SPFORCEFRQ=16,4' 6 >/dev/null
                     say "cell lock removed"
+                    ;;
+                off-nr)
+                    at 'AT+SPFORCEFRQ=16,4' 6 >/dev/null
+                    say "NR cell lock removed"
+                    ;;
+                off-lte)
+                    at 'AT+SPFORCEFRQ=12,4' 6 >/dev/null
+                    say "LTE cell lock removed"
                     ;;
                 auto)  # lock whatever the current serving cell is
                     c=$(cat /tmp/mu300-dash/cell.json 2>/dev/null) || c=
