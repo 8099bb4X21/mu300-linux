@@ -117,13 +117,18 @@ return view.extend({
 			self.loadServing();
 		};
 
-		var chipRow = function(el, rat, cand) {
+		this.chipRow = function(el, rat, cand) {
 			el.innerHTML = cand.map(function(b) {
 				return '<span class="mud-chip" data-rat="' + rat + '" data-b="' + b + '">' + (rat === 'nr' ? 'n' : 'B') + b + '</span>';
 			}).join('');
+			/* chips 重建后恢复选中态 */
+			Array.prototype.forEach.call(el.children, function(ch) {
+				var b = ch.getAttribute('data-b');
+				if (self.lockSel[rat][b]) ch.className = 'mud-chip on';
+			});
 		};
-		chipRow(this.Q('lock-nr'), 'nr', NR_CAND);
-		chipRow(this.Q('lock-lte'), 'lte', LTE_CAND);
+		this.chipRow(this.Q('lock-nr'), 'nr', NR_CAND);
+		this.chipRow(this.Q('lock-lte'), 'lte', LTE_CAND);
 		root.querySelectorAll('#mud-lock-nr .mud-chip, #mud-lock-lte .mud-chip').forEach(function(ch) {
 			ch.onclick = function() {
 				var rat = ch.getAttribute('data-rat'), b = ch.getAttribute('data-b');
@@ -205,7 +210,7 @@ return view.extend({
 		if (c.nr && c.nr.band) rows.push([ 'NR 服务小区', 'n' + c.nr.band + ' · PCI ' + c.nr.pci + ' · ARFCN ' + c.nr.arfcn + (c.nr.bw_mhz ? ' · ' + c.nr.bw_mhz + ' MHz' : '') ]);
 		if (c.lte && c.lte.band) rows.push([ 'LTE 锚点', 'B' + c.lte.band + ' · PCI ' + c.lte.pci + ' · EARFCN ' + c.lte.earfcn ]);
 		e.innerHTML = rows.map(function(x) {
-			return '<div class="mud-r"><span class="mud-k">' + x[0] + '</span><span class="mud-v">' + M.esc(x[1]) + '</span></div>';
+			return '<div class="mud-srvline"><span class="k">' + x[0] + '</span><span class="v">' + M.esc(x[1]) + '</span></div>';
 		}).join('');
 		var nb = this.Q('neigh');
 		if (nb) nb.innerHTML = M.neighborRows(c, (this.lastLock || {}).cell || '');
@@ -240,7 +245,16 @@ return view.extend({
 		var eb = this.Q('lock-endc');
 		if (eb) { eb.className = 'mud-btn' + (l.endc === '1' ? ' on' : ''); eb.textContent = l.endc === '1' ? 'EN-DC ✓' : 'EN-DC'; }
 
+		/* 支持频段优先取模组能力（SPLBAND=4 / =0 解码），读不到才用静态表 */
+		var caps = l.caps || {};
 		[ 'nr', 'lte' ].forEach(function(rat) {
+			var capList = (caps[rat] || '').split(',').map(Number).filter(function(b) { return b > 0; });
+			if (capList.length) {
+				capList.sort(function(a, b) { return a - b; });
+				self.lockCand[rat] = capList;
+				var box = self.Q('lock-' + rat);
+				if (box) self.chipRow(box, rat, capList);
+			}
 			var locked = (l[rat] && l[rat].locked) || '';
 			var arr = locked ? locked.split(',').map(Number) : [];
 			var isAuto = arr.length === 0 || arr.length >= self.lockCand[rat].length;

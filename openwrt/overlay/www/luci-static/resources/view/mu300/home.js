@@ -64,7 +64,8 @@ return view.extend({
       <div class="mud-rows">
         <div class="mud-r"><span class="mud-k">IPv4 / IPv6</span><span class="mud-v" id="mud-ip">--</span></div>
         <div class="mud-r"><span class="mud-k">DNS</span><span class="mud-v" id="mud-dns">--</span></div>
-        <div class="mud-r"><span class="mud-k">APN · 会话</span><span class="mud-v" id="mud-apn">--</span></div>
+        <div class="mud-r"><span class="mud-k">APN</span><span class="mud-v" id="mud-apn">--</span></div>
+        <div class="mud-r"><span class="mud-k">会话时长</span><span class="mud-v" id="mud-sess">--</span></div>
         <div class="mud-r"><span class="mud-k">注册状态</span><span class="mud-v" id="mud-reg">--</span></div>
       </div>
     </div>
@@ -74,14 +75,22 @@ return view.extend({
         <div class="mud-r"><span class="mud-k">MCS 下/上</span><span class="mud-v" id="mud-mcs">--</span></div>
         <div class="mud-r"><span class="mud-k">BLER 下/上</span><span class="mud-v" id="mud-bler">--</span></div>
         <div class="mud-r"><span class="mud-k">频宽</span><span class="mud-v" id="mud-bw">--</span></div>
-        <div class="mud-r"><span class="mud-k">QCI · AMBR 下/上</span><span class="mud-v"><span id="mud-qci">--</span> · <span id="mud-ambr">--</span></span></div>
+        <div class="mud-r"><span class="mud-k">QCI</span><span class="mud-v" id="mud-qci">--</span></div>
+        <div class="mud-r"><span class="mud-k">AMBR 下/上</span><span class="mud-v" id="mud-ambr">--</span></div>
       </div>
     </div>
     <div class="mud-rows">
-      <div class="mud-r"><span class="mud-k">SSID · 信道</span><span class="mud-v" id="mud-ssid">--</span></div>
-      <div class="mud-r"><span class="mud-k">加密 · 隐藏 · 国家</span><span class="mud-v" id="mud-wsec">--</span></div>
-      <div class="mud-r"><span class="mud-k">AP · USB · 跟踪</span><span class="mud-v" id="mud-wsta">--</span></div>
-      <div class="mud-r"><span class="mud-k">LAN · 无线客户端</span><span class="mud-v" id="mud-lan">--</span></div>
+      <div class="mud-r"><span class="mud-k">SSID</span><span class="mud-v" id="mud-ssid">--</span></div>
+      <div class="mud-r"><span class="mud-k">信道</span><span class="mud-v" id="mud-chan">--</span></div>
+      <div class="mud-r"><span class="mud-k">加密</span><span class="mud-v" id="mud-wenc">--</span></div>
+      <div class="mud-r"><span class="mud-k">隐藏 SSID</span><span class="mud-v" id="mud-whid">--</span></div>
+      <div class="mud-r"><span class="mud-k">国家</span><span class="mud-v" id="mud-wcountry">--</span></div>
+      <div class="mud-r"><span class="mud-k">AP 状态</span><span class="mud-v" id="mud-whostapd">--</span></div>
+      <div class="mud-r"><span class="mud-k">USB 网络</span><span class="mud-v" id="mud-wusb">--</span></div>
+      <div class="mud-r"><span class="mud-k">连接跟踪</span><span class="mud-v" id="mud-conntrack">--</span></div>
+      <div class="mud-r"><span class="mud-k">LAN 地址</span><span class="mud-v" id="mud-lanip">--</span></div>
+      <div class="mud-r"><span class="mud-k">无线客户端</span><span class="mud-v" id="mud-wcl">--</span></div>
+      <div class="mud-r"><span class="mud-k">DHCP 租约</span><span class="mud-v" id="mud-wleases">--</span></div>
     </div>
   </div>
 </div>
@@ -104,13 +113,16 @@ return view.extend({
     </div>
     <div>
       <div class="mud-rows">
-        <div class="mud-r"><span class="mud-k">型号 · 系统</span><span class="mud-v" id="mud-model">--</span></div>
+        <div class="mud-r"><span class="mud-k">设备型号</span><span class="mud-v" id="mud-model">--</span></div>
+        <div class="mud-r"><span class="mud-k">系统</span><span class="mud-v" id="mud-fwos">--</span></div>
         <div class="mud-r"><span class="mud-k">调制解调器</span><span class="mud-v" id="mud-modem">--</span></div>
         <div class="mud-r"><span class="mud-k">运营商</span><span class="mud-v" id="mud-carr">--</span></div>
+        <div class="mud-r"><span class="mud-k">PLMN</span><span class="mud-v" id="mud-plmn">--</span></div>
         <div class="mud-r"><span class="mud-k">IMEI</span><span class="mud-v" id="mud-imei">--</span></div>
         <div class="mud-r"><span class="mud-k">IMSI</span><span class="mud-v" id="mud-imsi">--</span></div>
         <div class="mud-r"><span class="mud-k">ICCID</span><span class="mud-v" id="mud-iccid">--</span></div>
-        <div class="mud-r"><span class="mud-k">模组 · 固件</span><span class="mud-v" id="mud-fw">--</span></div>
+        <div class="mud-r"><span class="mud-k">模组</span><span class="mud-v" id="mud-fwmodel">--</span></div>
+        <div class="mud-r"><span class="mud-k">固件</span><span class="mud-v" id="mud-fw">--</span></div>
       </div>
       <div class="mud-chiprow"><span class="mud-chip" id="mud-reveal">显示卡号信息</span></div>
     </div>
@@ -222,7 +234,8 @@ return view.extend({
 		M.set('imei', mask(id && id.imei));
 		M.set('imsi', mask(id && id.imsi));
 		M.set('iccid', mask(id && id.iccid));
-		M.set('fw', id ? ((id.model || '--') + ' · ' + (id.fw || '--')) : '--');
+		M.set('fwmodel', id ? (id.model || '--') : '--');
+		M.set('fw', id ? (id.fw || '--') : '--');
 	},
 
 	repaintNeigh: function() {
@@ -326,7 +339,8 @@ return view.extend({
 		var w = i.wan || {};
 		M.v('ip').innerHTML = M.esc(w.ip4 || '--') + (w.ip6 ? '<br>' + M.esc(w.ip6) : '');
 		M.set('dns', w.dns || '--');
-		M.set('apn', (w.apn || '--') + (w.uptime ? ' · ' + M.fmtUptime(w.uptime) : ''));
+		M.set('apn', w.apn || '--');
+		M.set('sess', w.uptime ? M.fmtUptime(w.uptime) : '--');
 		var regmap = { 0: '未注册', 1: '已注册', 2: '搜索中', 3: '注册被拒', 4: '未知', 5: '已注册（漫游）', 7: '仅紧急', 8: '仅紧急', 10: '已注册' };
 		var reg = '--';
 		if (c && c.reg) {
@@ -350,21 +364,24 @@ return view.extend({
 		/* -- 慢档分区 */
 		if (slowChanged) {
 			this.repaintNeigh();
-			M.set('carr', oper + (c && c.operator && c.operator.plmn ? ' · ' + c.operator.plmn : ''));
+			M.set('carr', oper);
+			M.set('plmn', (c && c.operator && c.operator.plmn) || '--');
 			this.paintIdent(c);
 		}
 
 		/* -- 无线 · 局域网 · 设备 · SIM */
 		var wf = i.wifi || {};
-		M.set('ssid', (wf.ssid || '--') + (wf.channel ? ' · Ch ' + wf.channel : '') +
-			(wf.band ? '（' + wf.band + (wf.width ? ' · ' + wf.width : '') + '）' : ''));
-		M.set('wsec', (wf.enc || '--') + (wf.hidden == 1 ? ' · 已隐藏' : '') + (wf.country ? ' · ' + wf.country : ''));
-		M.set('wsta', (wf.hostapd ? 'AP 运行' : 'AP 未运行') +
-			' · USB ' + ((i.net && i.net.usb0 && i.net.usb0.up) ? '已连接' : '未连接') +
-			' · ' + (i.conns != null ? i.conns : '--') + ' 跟踪');
-		M.set('lan', (i.lan && i.lan.ip ? i.lan.ip : '--') +
-			' · 无线 ' + (wf.clients_n != null ? wf.clients_n : '--') + ' 台' +
-			' · 租约 ' + (i.lan ? i.lan.leases : '--'));
+		M.set('ssid', wf.ssid || '--');
+		M.set('chan', (wf.channel || '--') + (wf.band ? '（' + wf.band + (wf.width ? ' · ' + wf.width : '') + '）' : ''));
+		M.set('wenc', wf.enc || '--');
+		M.set('whid', wf.hidden == 1 ? '已隐藏' : '否');
+		M.set('wcountry', wf.country || '--');
+		M.set('whostapd', wf.hostapd ? '运行中' : '未运行');
+		M.set('wusb', (i.net && i.net.usb0 && i.net.usb0.up) ? '已连接' : '未连接');
+		M.set('conntrack', i.conns != null ? i.conns + ' 条' : '--');
+		M.set('lanip', (i.lan && i.lan.ip) || '--');
+		M.set('wcl', (wf.clients_n != null ? wf.clients_n : '--') + ' 台');
+		M.set('wleases', (i.lan ? i.lan.leases : '--') + ' 条');
 		M.v('clist').innerHTML = (wf.clients || []).map(function(cl) {
 			var l = cl.signal != null ? (cl.signal >= -55 ? '优秀' : cl.signal >= -67 ? '良好' : cl.signal >= -80 ? '一般' : '较差') : '未知';
 			return '<div class="mud-cli"><div class="t"><b>' + M.esc(cl.host || cl.ip || cl.mac) + '</b>' +
@@ -426,7 +443,8 @@ return view.extend({
 			M.set('batt', p.usb ? 'USB' : '--');
 			M.set('batt-l', '电源' + (p.volt != null ? ' · ' + p.volt + ' V' : ''));
 		}
-		M.set('model', (i.model || '--') + ' · ' + (i.fw || ''));
+		M.set('model', i.model || '--');
+		M.set('fwos', i.fw || '--');
 		M.set('modem', (i.modem && i.modem.alive ? '在线' : '无应答') + (i.modem && i.modem.atd ? '' : ' · mu300-atd 未运行'));
 
 		var b;

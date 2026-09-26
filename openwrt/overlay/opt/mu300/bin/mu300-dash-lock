@@ -130,6 +130,10 @@ do_get() {
     nrm=$(at 'AT+SPLBAND=3' | sed -n 's/^+SPLBAND: *//p' | head -n1)
     cell12=$(at 'AT+SPFORCEFRQ=12,3' | sed -n 's/^+SPFORCEFRQ: *//p' | head -n1)
     cell16=$(at 'AT+SPFORCEFRQ=16,3' | sed -n 's/^+SPFORCEFRQ: *//p' | head -n1)
+    # SPLBAND=4 answers the module's NR band CAPABILITY masks (measured:
+    # "+SPLBAND: 553,0,528" = n1 n5 n8 n28 n41 n79 on this unit). The middle
+    # zero mirrors the write form's constant, so A=field1 and B=field3.
+    nrcapm=$(at 'AT+SPLBAND=4' | sed -n 's/^+SPLBAND: *//p' | head -n1)
 
     # SPTESTMODE: m0,m1,primary,... (device answers six fields; the first three count)
     m0=$(echo "$tm" | cut -d, -f1); m1=$(echo "$tm" | cut -d, -f2); prim=$(echo "$tm" | cut -d, -f3)
@@ -148,8 +152,14 @@ do_get() {
     cell=${cn:-$cl}
 
     # "auto" for bands = nothing locked (empty masks or the full supported set)
-    printf '{"ts":%d,"mode":{"label":"%s","work":"%s","gran":"%s","m1":"%s","prim":"%s"},"endc":"%s","lte":{"locked":"%s","raw":"%s"},"nr":{"locked":"%s","raw":"%s"},"cell":"%s"}\n' \
-        "$(date +%s)" "$lbl" "${m0:-}" "${gran:-}" "$m1" "$prim" "${endc:-}" "${lte_b:-}" "${ltem:-}" "${nr_b:-}" "${nrm:-}" "${cell:-}" \
+    # caps = what the module can do: LTE from the =0 read (the unlocked mask IS
+    # the supported set) plus the static fallback list; NR from =4, decoded with
+    # the same tables, static fallback when the firmware does not answer
+    nr3cap=$(printf '%s' "$nrcapm" | awk -F',' '{ print $1 "," $3 ",0" }')
+    nrcap=$(nr_bands "$nr3cap")
+    ltecap=$(lte_bands "$ltem")
+    printf '{"ts":%d,"mode":{"label":"%s","work":"%s","gran":"%s","m1":"%s","prim":"%s"},"endc":"%s","lte":{"locked":"%s","raw":"%s"},"nr":{"locked":"%s","raw":"%s"},"cell":"%s","caps":{"nr":"%s","lte":"%s"}}\n' \
+        "$(date +%s)" "$lbl" "${m0:-}" "${gran:-}" "$m1" "$prim" "${endc:-}" "${lte_b:-}" "${ltem:-}" "${nr_b:-}" "${nrm:-}" "${cell:-}" "${nrcap:-}" "${ltecap:-}" \
         | tee "$LOCKCACHE.part" && mv "$LOCKCACHE.part" "$LOCKCACHE"
 }
 
