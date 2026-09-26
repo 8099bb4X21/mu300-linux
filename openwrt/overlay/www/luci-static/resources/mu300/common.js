@@ -120,7 +120,7 @@ var CSS = `
 .mud-card:hover{border-color:color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 30%,var(--hairline,var(--border,#e3e6ea)))}
 .mud-card>h3{margin:0 0 8px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
 .mud-card>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
-.mud-hero{display:flex;flex-wrap:wrap;gap:14px;align-items:center;background:var(--brand-subtle,var(--surface,#fff));margin-bottom:12px}
+.mud-hero{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center;background:var(--brand-subtle,var(--surface,#fff));margin-bottom:12px;padding:16px 20px}
 .mud-sec{padding:2px 2px 6px}
 .mud-sec>h3{margin:16px 0 10px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
 .mud-sec>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
@@ -140,14 +140,14 @@ var CSS = `
 .mud-lockbtn{padding:0 10px;border-radius:99px;border:1px solid var(--hairline,var(--border,#ccc));background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.72rem;cursor:pointer;line-height:1.7}
 .mud-lockbtn.on,.mud-lockbtn:active{background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
 .mud-lockbtn.locked{opacity:.45;pointer-events:none;background:var(--surface-sunken,rgba(127,127,127,.1));color:var(--text-muted,var(--text-light,#888));border-color:transparent}
-.mud-hero-l{flex:1 1 240px;min-width:0}
-.mud-hero-r{flex:0 0 auto;text-align:right}
-.mud-rat{font-size:1.7rem;font-weight:700;line-height:1.15;letter-spacing:.02em}
-.mud-op{color:var(--text-muted,var(--text-light,#777));margin-top:1px;font-size:.85rem}
-.mud-cellline{margin-top:5px;font-size:.78rem;color:var(--text-muted,var(--text-light,#777));font-variant-numeric:tabular-nums}
+.mud-hero-l{flex:1 1 260px;min-width:0;display:flex;flex-direction:column;gap:5px}
+.mud-hero-r{flex:0 0 auto;text-align:right;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+.mud-rat{font-size:1.7rem;font-weight:700;line-height:1.1;letter-spacing:.01em}
+.mud-op{color:var(--text-muted,var(--text-light,#777));font-size:.85rem}
+.mud-cellline{font-size:.78rem;color:var(--text-muted,var(--text-light,#777));font-variant-numeric:tabular-nums;line-height:1.55}
 .mud-rsrp{font-size:2.3rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
 .mud-rsrp small{font-size:.9rem;font-weight:500}
-.mud-chips{display:flex;gap:5px;justify-content:flex-end;margin-top:6px;flex-wrap:wrap}
+.mud-chips{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
 .mud-tag{display:inline-block;padding:1px 8px;border-radius:99px;background:var(--surface-sunken,rgba(127,127,127,.1));font-size:.74rem;font-weight:600;font-variant-numeric:tabular-nums}
 .mud-q{display:inline-block;min-width:3em;padding:1px 8px;border-radius:99px;font-size:.74rem;font-weight:600;text-align:center}
 .mud-rows{display:grid;gap:2px}
