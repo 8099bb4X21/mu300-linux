@@ -157,6 +157,15 @@ do_get() {
             $0 = substr($0, RSTART+RLENGTH+1) }
         print "[" out "]" }')
 
+    # guard: right after an SFUN restart the modem answers CFUN/CEREG but not the
+    # SPLBAND/SPTESTMODE reads yet - writing that as "nothing locked" clobbers the
+    # real state and the readback paints every chip unselected. When the lock
+    # reads came back empty but a cache exists, serve the old state instead.
+    if [ -z "$ltem$nrm$tm" ] && [ -s "$LOCKCACHE" ]; then
+        cat "$LOCKCACHE"
+        exit 0
+    fi
+
     # "auto" for bands = nothing locked (empty masks or the full supported set)
     # caps = what the module can do: LTE from the =0 read (the unlocked mask IS
     # the supported set) plus the static fallback list; NR from =4, decoded with
@@ -175,6 +184,17 @@ sfun_restart() {
     at 'AT+SFUN=5' 10 >/dev/null
     sleep 1
     at 'AT+SFUN=4' 30 >/dev/null
+    # after a stack restart the radio can come back OFF (+CFUN: 0 - measured on the
+    # device after a mode switch): nobody switches it on again and the box stays
+    # offline. Same cure as mobile-data's radio_on: SFUN=4, and if the radio is
+    # still off, SFUN=2 then SFUN=4 again.
+    n=0
+    while [ $n -lt 15 ]; do
+        at 'AT+CFUN?' 4 | grep -q '+CFUN: 1' && break
+        [ $((n % 5)) = 0 ] && { at 'AT+SFUN=4' 20 >/dev/null; sleep 2; at 'AT+SFUN=2' 8 >/dev/null; sleep 2; at 'AT+SFUN=4' 30 >/dev/null; }
+        n=$((n + 1)); sleep 2
+    done
+    at 'AT+CFUN?' 4 | grep -q '+CFUN: 1' || say "radio did not come back on after restart"
     # wait for registration to come back (the page polls; this is only for the log)
     n=0
     while [ $n -lt 20 ]; do
@@ -182,7 +202,23 @@ sfun_restart() {
         n=$((n + 1)); sleep 2
     done
     ifup wan 2>/dev/null
-    say "stack restarted, registration $([ $n -lt 20 ] && echo back || echo 'still waiting') "
+    say "stack restarted, radio $(at 'AT+CFUN?' 4 | grep -q '+CFUN: 1' && echo on || echo OFF), registration $([ $n -lt 20 ] && echo back || echo 'still waiting')"
+}
+
+# one apply at a time: overlapping SFUN dances (band lock + cell unlock + mode in
+# quick succession) leave the radio off. A second apply waits for the running one.
+apply_lock() {
+    local d=/run/mu300-dash-apply pid n=0
+    while ! mkdir "$d" 2>/dev/null; do
+        pid=$(cat "$d/pid" 2>/dev/null)
+        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+            n=$((n + 1)); [ "$n" -gt 90 ] && { say "another lock apply is still running"; exit 1; }
+            sleep 2
+            continue
+        fi
+        rm -rf "$d"
+    done
+    echo $$ > "$d/pid"
 }
 
 save_state() {  # save_state KEY VALUE - one small file per key, so applies never
@@ -192,6 +228,8 @@ save_state() {  # save_state KEY VALUE - one small file per key, so applies neve
 }
 
 do_apply() {  # do_apply KIND VALUE
+    apply_lock
+    trap 'rm -rf /run/mu300-dash-apply 2>/dev/null' EXIT INT TERM
     kind=$1; val=$2
     case $kind in
         mode)
@@ -280,12 +318,20 @@ do_apply() {  # do_apply KIND VALUE
     save_state "$kind" "$val"
     sfun_restart
     say "apply $kind=$val done"
-    # the cache must not keep serving the pre-apply state
-    setsid "$0" get fresh >/dev/null 2>&1 &
+    # the cache must not keep serving the pre-apply state; retry because the
+    # lock reads can lag registration by a few seconds after the restart
+    ( t=$$; n=0
+      while [ $n -lt 10 ]; do
+        sh "$0" get fresh >/dev/null 2>&1
+        grep -q '"cells"' "$LOCKCACHE" 2>/dev/null && grep -qE '"(nr|lte)":\{"locked":"[0-9]' "$LOCKCACHE" 2>/dev/null && break
+        n=$((n + 1)); sleep 3
+      done ) >/dev/null 2>&1 &
 }
 
 # ----------------------------------------------------------------- replay
 do_replay() {
+    apply_lock
+    trap 'rm -rf /run/mu300-dash-apply 2>/dev/null' EXIT INT TERM
     # boot hook: the AT settings do not all survive a modem power cycle, so re-send
     # what the dashboard last applied, then one stack restart at the end
     d=/etc/mu300/dash/lock-state.d

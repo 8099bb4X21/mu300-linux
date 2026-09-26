@@ -1,0 +1,67 @@
+#!/bin/sh
+# mu300-atwatch -- AT 通道看门狗。
+#
+# 背景（docs/FINDINGS.md 13b + 实测）：SFUN 协议栈重启或 CP 崩溃后，mu300-atd 手里的
+# 描述符接在一条已死的 SIPC 通道上，永远读不到回包；atd 自带的重开逻辑非常保守
+# （要 5 次无应答且 nr0 URC 静默 300 秒才动手，因为对一条活通道重开 = 彻底杀死它）。
+# 看门狗用同样的判据但更快：某通道连续 4 次（约 60 秒）探测无应答，且 nr0 的 URC
+# 日志也静默超过 60 秒（= 调制解调器整体没在说话，不是我们抢锁慢），就杀掉该通道
+# 的 atd 属主——procd 会立刻respawn 出新实例、对已重启的调制解调器重新开通道，
+# 这正是文档记载的唯一解法。
+#
+# 探测本身走 mu300-at（排队、不多占通道），每通道一条 AT，15 秒一轮。
+
+export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
+
+URCLOG=/run/mu300-at/urc/stty_nr0.log
+FAILFILE=/run/mu300-atwatch.fails
+mkdir -p /run 2>/dev/null; : > "$FAILFILE" 2>/dev/null
+
+modem_alive() {   # nr0 有 URC 写入 = 调制解调器在说话
+    [ -f "$URCLOG" ] || return 1
+    [ $(( $(date +%s) - $(date -r "$URCLOG" +%s 2>/dev/null || echo 0) )) -lt 60 ]
+}
+
+fails() { sed -n "s/^$1=//p" "$FAILFILE" 2>/dev/null | tail -n1; }
+setfail() { sed -i "s/^$1=.*/$1=$2/" "$FAILFILE" 2>/dev/null || echo "$1=$2" >> "$FAILFILE"; }
+
+for d in /run/mu300-at /run/mu300-at2 /run/mu300-at3; do
+    grep -q "^$(basename $d)=" "$FAILFILE" 2>/dev/null || echo "$(basename $d)=0" >> "$FAILFILE"
+done
+
+logger -t mu300-atwatch "watching $(grep -c = "$FAILFILE") AT channel(s), probe every 15 s"
+
+while :; do
+    for d in /run/mu300-at /run/mu300-at2 /run/mu300-at3; do
+        [ -p "$d/cmd" ] || continue
+        n=$(basename "$d")
+        if MU300_AT_DIR=$d mu300-at -t 3 "AT" >/dev/null 2>&1; then
+            [ "$(fails $n)" != 0 ] && logger -t mu300-atwatch "$n answers again (was $(fails $n) fails)"
+            setfail $n 0
+            continue
+        fi
+        f=$(( $(fails $n) + 1 ))
+        setfail $n $f
+        if [ "$f" -ge 4 ]; then
+            if modem_alive; then
+                # 调制解调器还在说话（URC 有动静）：大概率只是我们排队慢或暂时忙，不动通道
+                [ "$f" = 4 ] && logger -t mu300-atwatch "$n not answering ($f fails) but modem URCs flow - not touching the channel yet"
+            else
+                pid=$(cat "$d/owner/pid" 2>/dev/null)
+                logger -t mu300-atwatch "$n dead for $f probes and no URCs - restarting its mu300-atd (pid ${pid:-?})"
+                [ -n "$pid" ] && kill "$pid" 2>/dev/null
+                # procd respawn 出新实例即完成重开；没有 procd 管的手动实例就自己拉一个
+                sleep 5
+                [ -p "$d/cmd" ] || {
+                    case $n in
+                        mu300-at)   MU300_AT_DEV=/dev/stty_nr1 MU300_AT_DIR=$d setsid /opt/mu300/bin/mu300-atd >/dev/null 2>&1 & ;;
+                        mu300-at2)  MU300_AT_DEV=/dev/stty_nr2 MU300_AT_DIR=$d setsid /opt/mu300/bin/mu300-atd >/dev/null 2>&1 & ;;
+                        mu300-at3)  MU300_AT_DEV=/dev/stty_nr3 MU300_AT_DIR=$d setsid /opt/mu300/bin/mu300-atd >/dev/null 2>&1 & ;;
+                    esac
+                }
+                setfail $n 0
+            fi
+        fi
+    done
+    sleep 15
+done

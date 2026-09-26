@@ -88,15 +88,18 @@ return view.extend({
 		this.lockCand = { nr: NR_CAND, lte: LTE_CAND };
 		this.Q = function(id) { return root.querySelector('#mud-' + id); };
 
-		var apply = function(kind, val, what) {
-			if (!window.confirm('应用「' + what + '」？\n协议栈会重启（SFUN），蜂窝断开约半分钟。')) return;
-			self.note('正在后台应用 ' + what + ' …（SFUN 重启 + 重新驻网，约半分钟）');
+		var apply = function(kind, val, what, opts) {
+			opts = opts || {};
+			if (!window.confirm(opts.noSfun ? '应用「' + what + '」？' :
+				'应用「' + what + '」？\n协议栈会重启（SFUN），蜂窝断开约半分钟。')) return;
+			if (opts.optimistic) opts.optimistic();   /* 按钮立刻切到目标态，回读负责校正 */
+			self.note('正在后台应用 ' + what + ' …' + (opts.noSfun ? '' : '（SFUN 重启 + 重新驻网，约半分钟）'));
 			L.resolveDefault(M.callLockSet(kind, val)).then(function(r) {
 				r = r || {};
 				if (!r.ok) { self.note('失败：' + (r.error || '未知错误')); return; }
 				if (kind == 'endc') { self.note('已生效（EN-DC 不需要重启协议栈）'); return self.refreshSoon(); }
 				self.note('已后台执行：' + (r.op || kind) + '（SFUN 重启约半分钟），自动回读状态…');
-				self.readback();
+				self.readback(Date.now());
 			}, function() { self.note('调用失败'); });
 		};
 
@@ -107,12 +110,22 @@ return view.extend({
 			b.onclick = function() {
 				var m = b.getAttribute('data-mode');
 				if (m === (self.lastLock && self.lastLock.mode && self.lastLock.mode.label)) return;
-				apply('mode', m, '网络模式：' + b.textContent);
+				var btn = b;
+				apply('mode', m, '网络模式：' + b.textContent, { optimistic: function() {
+					Array.prototype.forEach.call(self.Q('lock-modes').querySelectorAll('.mud-btn'), function(x) {
+						x.className = x === btn ? 'mud-btn on' : 'mud-btn';
+					});
+				} });
 			};
 		});
 		this.Q('lock-endc').onclick = function() {
 			var on = self.lastLock && self.lastLock.endc === '1';
-			apply('endc', on ? 'off' : 'on', on ? '关闭 EN-DC（NSA 锚点）' : '开启 EN-DC（NSA 锚点）');
+			var btn = this;
+			apply('endc', on ? 'off' : 'on', on ? '关闭 EN-DC（NSA 锚点）' : '开启 EN-DC（NSA 锚点）',
+				{ noSfun: true, optimistic: function() {
+					btn.className = 'mud-btn' + (on ? '' : ' on');
+					btn.textContent = on ? 'EN-DC' : 'EN-DC ✓';
+				} });
 		};
 		this.Q('lock-refresh').onclick = function() {
 			self.note('正在直读调制解调器（最多几秒）…');
@@ -175,7 +188,7 @@ return view.extend({
 			L.resolveDefault(M.callLockSet('cell', 'off-' + rat)).then(function(r) {
 				r = r || {};
 				if (!r.ok) { self.note('解锁失败：' + (r.error || '未知错误')); return; }
-				self.readback();
+				self.readback(Date.now());
 			});
 		});
 
@@ -190,7 +203,7 @@ return view.extend({
 				r = r || {};
 				if (!r.ok) { self.note('锁定失败：' + (r.error || '未知错误')); return; }
 				self.note('已后台锁定 ' + key + '（SFUN 重启约半分钟），自动回读状态…');
-				self.readback();
+				self.readback(Date.now());
 			});
 		});
 
@@ -244,14 +257,16 @@ return view.extend({
 	},
 
 	/* 应用后自动回读：轮询缓存 lock_get 直到 ts 越过本次应用（后端 apply 后会 fresh 刷新缓存） */
-	readback: function() {
-		var self = this, tries = 0, t0 = Date.now();
+	/* 应用后自动回读：轮询缓存直到 ts 落在“点击应用”之后（SFUN 重启 + fresh 读
+	 * 最长约一两分钟；期间后端不会用空读数覆盖缓存），拿到新状态才重绘高亮 */
+	readback: function(t0ms) {
+		var self = this, tries = 0, t0 = t0ms || Date.now();
 		var step = function() {
 			L.resolveDefault(M.callLockGet()).then(function(l) {
 				l = l || {};
-				if ((l.ts && l.ts * 1000 > t0 - 30000) || ++tries > 12) {
+				if ((l.ts && l.ts * 1000 > t0) || ++tries > 40) {
 					self.lastLock = l; self.paint(); self.paintServing(self.lastCell);
-					self.note('状态已回读' + (l.mode ? '' : '（暂无数据，可手动刷新）'));
+					self.note((l.ts && l.ts * 1000 > t0) ? '状态已回读' : '回读超时，请点「刷新锁定状态」');
 				} else setTimeout(step, 2500);
 			});
 		};
