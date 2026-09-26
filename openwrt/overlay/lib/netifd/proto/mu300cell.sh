@@ -46,6 +46,21 @@ proto_mu300cell_setup() {
 	proto_init_update "$ifname" 1
 	proto_add_ipv4_address "$ip" "${prefix:-32}"
 	proto_add_ipv4_route "0.0.0.0" 0
+	# also report the SLAAC-learned v6 address so LuCI and netifd can see it:
+	# the carrier's RA is the only way this bearer ever gets its v6 (CGCONTRDP stays a
+	# placeholder), and without this netifd shows wan as having no v6 at all even though
+	# the kernel learned one. A short wait: the RA can arrive a few seconds after the v4
+	# address is configured; if it is not there yet the ndp-learn daemon will set it later.
+	v6addr=""
+	for n in 1 2 3 4 5; do
+		v6addr=$(ip -6 addr show "$ifname" scope global 2>/dev/null | sed -n 's/.*inet6 \([0-9a-f:]*\)\/.*/\1/p' | head -1)
+		[ -n "$v6addr" ] && break
+		sleep 2
+	done
+	if [ -n "$v6addr" ]; then
+		proto_add_ipv6_address "$v6addr" 64
+		proto_add_ipv6_route "::" 0 "" "" 4096
+	fi
 	if [ "${peerdns:-1}" != 0 ]; then
 		[ -n "$dns1" ] && proto_add_dns_server "$dns1"
 		[ -n "$dns2" ] && proto_add_dns_server "$dns2"
