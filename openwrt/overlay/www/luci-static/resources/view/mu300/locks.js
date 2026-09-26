@@ -24,7 +24,7 @@ return view.extend({
 		root.innerHTML = `
 <div class="mud-card mud-hero" style="flex-wrap:wrap;display:flex;gap:14px;align-items:center">
   <div style="flex:1 1 260px;min-width:0">
-    <div style="font-size:.78rem;color:var(--text-muted,var(--text-light,#777))">当前驻网（锁定前的参照）</div>
+    <div style="font-size:.78rem;color:var(--text-muted,var(--text-light,#777))">当前驻网</div>
     <div style="font-size:1.25rem;font-weight:700;margin-top:2px" id="mud-srv-rat">--</div>
     <div class="mud-cellline" id="mud-srv"></div>
   </div>
@@ -135,12 +135,15 @@ return view.extend({
 		};
 		this.chipRow(this.Q('lock-nr'), 'nr', NR_CAND);
 		this.chipRow(this.Q('lock-lte'), 'lte', LTE_CAND);
-		root.querySelectorAll('#mud-lock-nr .mud-chip, #mud-lock-lte .mud-chip').forEach(function(ch) {
-			ch.onclick = function() {
-				var rat = ch.getAttribute('data-rat'), b = ch.getAttribute('data-b');
+		/* 事件委托绑在容器上：paint() 依模组能力重建 chips 后点击依然有效 */
+		[ 'nr', 'lte' ].forEach(function(rat) {
+			self.Q('lock-' + rat).addEventListener('click', function(ev) {
+				var ch = ev.target;
+				if (!ch.getAttribute || !ch.getAttribute('data-b')) return;
+				var b = ch.getAttribute('data-b');
 				self.lockSel[rat][b] = !self.lockSel[rat][b];
 				ch.className = self.lockSel[rat][b] ? 'mud-chip on' : 'mud-chip';
-			};
+			});
 		});
 		var selBands = function(rat) {
 			return Object.keys(self.lockSel[rat]).filter(function(b) { return self.lockSel[rat][b]; })
