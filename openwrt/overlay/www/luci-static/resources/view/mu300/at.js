@@ -32,11 +32,12 @@ return view.extend({
       <button class="mud-btn" id="mud-at-go" style="padding:8px 18px">发送</button>
       <button class="mud-btn" id="mud-at-clear" style="padding:8px 12px">清屏</button>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 220px;gap:10px">
-      <div class="mud-term" id="mud-at-out"><span class="ln-meta">就绪。命令经 mu300-at 排队发出（nr1 专用通道，不与采集器争用）。</span></div>
+    <div class="mud-at-grid">
+      <div class="mud-term" id="mud-at-out"><span class="ln-meta">就绪。
+</span></div>
       <div>
         <div class="mud-note" style="margin:0 0 4px">会话历史（点击复用）</div>
-        <div class="mud-scroll" id="mud-at-hist" style="max-height:340px;font-family:var(--font-mono,monospace);font-size:.74rem"></div>
+        <div class="mud-scroll" id="mud-at-hist" style="font-family:var(--font-mono,monospace);font-size:.74rem"></div>
       </div>
     </div>
     <div>

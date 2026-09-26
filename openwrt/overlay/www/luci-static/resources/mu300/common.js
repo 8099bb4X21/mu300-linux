@@ -200,6 +200,9 @@ var CSS = `
 .mud-comp textarea{flex:1;resize:none;min-height:40px;max-height:120px}
 @media(max-width:700px){.mud-chat{flex-direction:column}.mud-convs{flex:none;max-height:150px}.mud-thread{border-left:none;padding-left:0;border-top:1px solid var(--hairline,var(--border,#ddd));padding-top:8px}}
 /* ---- 专业 AT 终端 ---- */
+.mud-at-grid{display:grid;grid-template-columns:1fr 220px;gap:10px}
+.mud-at-grid .mud-scroll{max-height:340px}
+@media(max-width:700px){.mud-at-grid{grid-template-columns:1fr}.mud-term{height:300px}.mud-at-grid .mud-scroll{max-height:120px}}
 .mud-term{font-family:var(--font-mono,monospace);font-size:.8rem;line-height:1.5;background:color-mix(in oklab,var(--surface,#14161a) 92%,var(--brand,#2f7bf6) 3%);color:var(--text,#d5d9de);border:1px solid var(--hairline,var(--border,#2a2d33));border-radius:var(--radius-base,.5rem);padding:12px;height:380px;overflow:auto;white-space:pre-wrap;word-break:break-all}
 .mud-term .ln-cmd{color:var(--brand,#6ab0ff);font-weight:600}
 .mud-term .ln-ok{color:var(--success,#57c98a);font-weight:600}
