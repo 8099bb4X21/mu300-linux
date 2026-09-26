@@ -71,10 +71,10 @@ return view.extend({
     <div>
       <div class="mud-rows">
         <div class="mud-r"><span class="mud-k">IPv4 / IPv6</span><span class="mud-v" id="mud-ip">--</span></div>
-        <div class="mud-r"><span class="mud-k">DNS</span><span class="mud-v" id="mud-dns">--</span></div>
         <div class="mud-r"><span class="mud-k">APN</span><span class="mud-v" id="mud-apn">--</span></div>
         <div class="mud-r"><span class="mud-k">会话时长</span><span class="mud-v" id="mud-sess">--</span></div>
         <div class="mud-r"><span class="mud-k">注册状态</span><span class="mud-v" id="mud-reg">--</span></div>
+        <div class="mud-r"><span class="mud-k">DNS</span><span class="mud-v" id="mud-dns">--</span></div>
       </div>
     </div>
     <div>
@@ -109,7 +109,6 @@ return view.extend({
         <div class="mud-r"><span class="mud-k">加密</span><span class="mud-v" id="mud-wenc">--</span></div>
         <div class="mud-r"><span class="mud-k">隐藏 SSID</span><span class="mud-v" id="mud-whid">--</span></div>
         <div class="mud-r"><span class="mud-k">国家</span><span class="mud-v" id="mud-wcountry">--</span></div>
-        <div class="mud-r"><span class="mud-k">AP 状态</span><span class="mud-v" id="mud-whostapd">--</span></div>
         <div class="mud-r"><span class="mud-k">USB 网络</span><span class="mud-v" id="mud-wusb">--</span></div>
         <div class="mud-r"><span class="mud-k">连接跟踪</span><span class="mud-v" id="mud-conntrack">--</span></div>
         <div class="mud-r"><span class="mud-k">LAN 地址</span><span class="mud-v" id="mud-lanip">--</span></div>
@@ -117,13 +116,13 @@ return view.extend({
         <div class="mud-r"><span class="mud-k">DHCP 租约</span><span class="mud-v" id="mud-wleases">--</span></div>
       </div>
       <div id="mud-clist" style="margin-top:8px"></div>
-      <div id="mud-leases" style="margin-top:6px"></div>
     </div>
     <div>
       <div class="mud-rows">
         <div class="mud-r"><span class="mud-k">设备型号</span><span class="mud-v" id="mud-model">--</span></div>
         <div class="mud-r"><span class="mud-k">系统</span><span class="mud-v" id="mud-fwos">--</span></div>
         <div class="mud-r"><span class="mud-k">调制解调器</span><span class="mud-v" id="mud-modem">--</span></div>
+        <div class="mud-r"><span class="mud-k">AP 状态</span><span class="mud-v" id="mud-whostapd">--</span></div>
         <div class="mud-r"><span class="mud-k">运营商</span><span class="mud-v" id="mud-carr">--</span></div>
         <div class="mud-r"><span class="mud-k">PLMN</span><span class="mud-v" id="mud-plmn">--</span></div>
         <div class="mud-r"><span class="mud-k">IMEI</span><span class="mud-v" id="mud-imei">--</span></div>
@@ -135,6 +134,7 @@ return view.extend({
       <div class="mud-chiprow"><span class="mud-chip" id="mud-reveal">显示卡号信息</span></div>
     </div>
   </div>
+  <div id="mud-leases" style="margin-top:10px"></div>
 </div>
 
 
