@@ -27,6 +27,12 @@ def add_tree(tar, src: Path, dest: str, seen: set, rename=None):
                 if rel is None:
                     continue
             arc = f'{dest}/{rel}'
+            # property-area files are named after SELinux contexts (u:object_r:xxx:s0); Windows cannot
+            # store ':' in filenames, so every ':' became U+F03A somewhere on the way through the host
+            # filesystem and bionic then cannot find the area ("Access denied finding property" for
+            # everything, modem_control gives up: "can't get modem type!"). The tar name is just a
+            # string: restore the colons here.
+            arc = arc.replace('', ':')
             if arc in seen:
                 continue
             seen.add(arc)
@@ -34,6 +40,11 @@ def add_tree(tar, src: Path, dest: str, seen: set, rename=None):
             info.uid = info.gid = 0
             info.uname = info.gname = 'root'
             if info.isfile():
+                # Windows has no POSIX execute bit, so gettarinfo reports data files for everything -
+                # including the vendor binaries the device chroots into and execs (modem_control and
+                # friends; without the bit they fail with status 126 and the PM watchdog is never
+                # disarmed). Anything under a bin/ directory is a program; everything else is data.
+                info.mode = 0o755 if Path(rel).parts and 'bin' in Path(rel).parts[:-1] else 0o644
                 with open(path, 'rb') as f:
                     tar.addfile(info, f)
             else:

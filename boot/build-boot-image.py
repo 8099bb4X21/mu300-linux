@@ -128,12 +128,19 @@ def main():
         dirs.add('android')
         for f in sorted(a.android_subset.rglob('*')):
             rel = 'android/' + str(f.relative_to(a.android_subset))
+            # see vendor-overlay.py: ':' in property-area filenames became U+F03A on Windows; restore it
+            rel = rel.replace('', ':')
             if f.is_symlink():
                 files[rel] = (os.readlink(f).encode(), stat.S_IFLNK | 0o777)
             elif f.is_dir():
                 dirs.add(rel)
             else:
-                files[rel] = (f.read_bytes(), stat.S_IFREG | (0o755 if os.access(f, os.X_OK) else 0o644))
+                # os.access(X_OK) is extension-based on Windows, so the vendor binaries (no extension)
+                # would lose their execute bit and fail with status 126 in the chroot; anything under
+                # a bin/ directory is a program, everything else is data
+                parts = f.relative_to(a.android_subset).parts
+                mode = 0o755 if 'bin' in parts[:-1] else 0o644
+                files[rel] = (f.read_bytes(), stat.S_IFREG | mode)
 
     cpio = bytearray()
     ino = 1

@@ -15,6 +15,9 @@ SRC=$TOP/android/magisk/mu300-linux-switch
 MOD=/data/adb/modules/mu300_linux_switch
 TMP=/data/local/tmp/mu300-magisk
 
+# Git Bash (MSYS) rewrites device paths (/data/local/tmp/...) into Windows paths before adb.exe sees
+# them, which breaks adb pull/push; exempt the Android prefixes (semicolon-separated; macOS/Linux ignore it)
+adb() { MSYS2_ARG_CONV_EXCL="/data;/dev;/system;/vendor;/odm;/sdcard;/storage;/apex" command adb "$@"; }
 su_do() { adb shell "su -c '$1'" 2>/dev/null | tr -d '\r'; }
 
 have_magisk() { [ -n "$(su_do 'magisk -v' || true)" ]; }
