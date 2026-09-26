@@ -133,6 +133,8 @@ copied from Android.
 | Make it faster, or cooler and quieter | `sudo mu300-toolkit profile performance` (also `eco`, `balanced`) |
 | Test stability under load | `sudo mu300-toolkit stress all 10` |
 | Check the mobile connection | `sudo mobile-data status` |
+| Read SMS (local pool, newest first) | `mu300-sms list`, then `mu300-sms show ID`; `mu300-smsd` keeps the pool in step with the SIM |
+| Send an SMS | `mu300-sms send 10086 你好` (UCS-2 submit, non-ASCII travels correctly) |
 | Set the APN | Ubuntu: `/etc/mu300/mobile-data.conf` (`MU300_APN`, `MU300_PDP_TYPE`). OpenWrt: LuCI → Network → Interfaces → wan, or `uci set network.wan.apn='…'; uci commit network; ifup wan`. Leave it empty to keep the context the SIM defines, which is what most carriers expect |
 | Change the Wi-Fi name or password | edit `/etc/mu300/hotspot.conf`, then `sudo systemctl restart mu300-hotspot` |
 | Connect the device to someone else's Wi-Fi | `sudo mu300-toolkit` → Network → Wi-Fi → "Join a network", or `sudo wifi-client scan` then `sudo wifi-client connect "NAME" "PASSWORD"` |

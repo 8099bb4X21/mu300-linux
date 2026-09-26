@@ -148,11 +148,11 @@ up_locked() {
     rm -f /run/mu300-mobile-data-down
     tty_setup
     radio_on
-    for n in $(seq 1 60); do
+    for n in $(seq 1 200); do
         at 'AT+CEREG?' | grep -qE '\+CEREG: [0-9],(1|5)' && break
         # the radio can be switched off again meanwhile (modem reset), so re-check it every 10 s
-        [ $((n % 5)) -eq 0 ] && radio_on
-        sleep 2
+        [ $((n % 33)) -eq 0 ] && radio_on
+        sleep 0.3 2>/dev/null || sleep 1
     done
     at 'AT+CEREG?' | grep -qE '\+CEREG: [0-9],(1|5)' || { echo "not registered on the network" >&2; exit 1; }
     # systemd has no way to pass an argument from a config file, so the APN can come from the environment too:
