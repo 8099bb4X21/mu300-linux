@@ -1,8 +1,11 @@
 #!/system/bin/sh
 # Device side of install.sh (runs as root on Android). Settings come from /data/local/tmp/mu300-install.env:
-#   OFF SIZE           free eMMC region (bytes) after the last GPT partition, as strings
+#   SD_MODE=0          rootfs in the free eMMC region after the last GPT partition (OFF SIZE, below)
+#   SD_MODE=1 SD_DEV   rootfs on the TF card: SD_DEV is the block device (/dev/block/mmcblk1p1 or mmcblk1)
+#                      and becomes ext4 with the label mu300sd, which is what boot/init mounts first
+#   OFF SIZE           free eMMC region (bytes) after the last GPT partition, as strings (SD_MODE=0)
 #   OFF_S SIZE_S       the same in 512-byte sectors (Android's mksh has 32-bit arithmetic: never compute with bytes)
-#   FORMAT=0|1         create the ext4 filesystem "mu300root" in that region
+#   FORMAT=0|1         create the ext4 filesystem (mu300root in the region / mu300sd on the card)
 #   OSES="ubuntu openwrt"  systems to (re)install from /data/local/tmp/mu300-<os>.tar.gz
 #                      (plus mu300-vendor-<os>.tar.gz with the device's own vendor files for prebuilt images)
 #   WIPE_LEGACY=0|1    remove a first-generation Ubuntu that lives directly in the filesystem root
@@ -17,6 +20,39 @@ T=/data/local/tmp
 . $T/mu300-install.env
 M=$T/mu300root
 say() { echo "[device] $*"; }
+
+if [ "${SD_MODE:-0}" = 1 ]; then
+    # --- the rootfs lives on the TF card: a real block device, so no region math and no loop.
+    # --- a foreign ext4 on the card is refused rather than formatted (everything else is formatted)
+    R=${SD_DEV:?SD_DEV is not set}
+    [ -b "$R" ] || { say "no block device $R (is the TF card inserted?)"; exit 1; }
+    # vold may have the card mounted as portable storage - not in this shell's /proc/mounts, because
+    # vold mounts public volumes in its own namespace, but mke2fs still refuses the mounted device.
+    # Ask vold itself, then clear anything left in this namespace.
+    vol=$(sm list-volumes 2>/dev/null | sed -n 's/^\(public:[^ ]*\) mounted.*/\1/p')
+    if [ -n "$vol" ]; then
+        say "asking vold to unmount $vol"
+        sm unmount "$vol" 2>/dev/null || true
+        if sm list-volumes 2>/dev/null | grep -q "^$vol mounted"; then
+            say "vold still has the card mounted ($vol); unmount it in Settings > Storage and retry"; exit 1
+        fi
+    fi
+    for m in $(grep -o "^/dev/block/mmcblk1[^ ]*" /proc/mounts 2>/dev/null); do
+        umount "$m" 2>/dev/null || umount -f "$m" 2>/dev/null
+    done
+    magic=$(dd if=$R bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    label=$(dd if=$R bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
+    if [ "$FORMAT" = 1 ]; then
+        if [ "$magic" = 53ef ] && [ "$label" != mu300sd ]; then say "refusing to format: foreign ext4 ($label) on the card"; exit 1; fi
+        say "creating ext4 mu300sd on $R"
+        mke2fs -t ext4 -L mu300sd -F "$R" >/dev/null
+    elif [ "$magic" != 53ef ] || [ "$label" != mu300sd ]; then
+        say "no mu300sd filesystem on $R (run with FORMAT=1)"; exit 1
+    fi
+    mkdir -p $M
+    mount -t ext4 -o noatime "$R" $M
+    trap 'sync; umount $M >/dev/null 2>&1; true' EXIT
+else
 
 # --- the region must not overlap any partition (checked again here, on the device itself)
 end=0
@@ -53,6 +89,8 @@ fi
 
 MU300_OFF=$OFF MU300_SIZE=$SIZE sh $T/android-mount-mu300root.sh $M
 trap 'sync; sh $T/android-mount-mu300root.sh -u $M >/dev/null 2>&1; true' EXIT
+
+fi
 
 if [ "$WIPE_LEGACY" = 1 ] && { [ -x $M/lib/systemd/systemd ] || [ -L $M/lib ]; }; then
     say "removing the root-level Ubuntu"
@@ -126,6 +164,9 @@ for os in $OSES; do
     fi
     rm -rf $M/$os && mv $M/$os.new $M/$os
     R=$M/$os
+    # the stock fstab mounts / by LABEL=mu300root (the internal free-eMMC region); on the TF card the root
+    # is mmcblk1p1, and an unpatched fstab makes systemd-remount-fs fail on every boot
+    [ "${SD_MODE:-0}" = 1 ] && [ -f $R/etc/fstab ] && sed -i "s|LABEL=mu300root|/dev/mmcblk1p1|" $R/etc/fstab
     mkdir -p $R/etc/mu300
     if [ -n "$ssid" ] && ! { [ "${UPDATE:-0}" = 1 ] && [ -s $R/etc/mu300/hotspot.conf ]; }; then
         umask 077

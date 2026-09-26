@@ -100,18 +100,25 @@ load_vendor_modules() {
 }
 
 
-# Locate misc now; whether slot a is restored is decided once the rootfs is known.
-misc=
-for n in $(seq 1 20); do
-    for u in /sys/class/block/mmcblk*p*/uevent; do
-        grep -qx PARTNAME=misc "$u" 2>/dev/null || continue
-        misc=/dev/$(basename "$(dirname "$u")")
-    done
-    [ -n "$misc" ] && [ -b "$misc" ] && break
+# misc and boot_b only exist once the storage drivers are up: the search used to run before
+# load_vendor_modules and burned its 20 retries on a /sys with no mmcblk0 at all, so restore_slot_a
+# silently never found misc and the persistent log never found boot_b. Look for both after the modules.
+find_misc_and_bootb() {
     misc=
-    sleep 1
-    mdev -s
-done
+    for n in $(seq 1 20); do
+        for u in /sys/class/block/mmcblk*p*/uevent; do
+            grep -qx PARTNAME=misc "$u" 2>/dev/null || continue
+            misc=/dev/$(basename "$(dirname "$u")")
+        done
+        [ -n "$misc" ] && [ -b "$misc" ] && break
+        misc=
+        sleep 1
+        mdev -s
+    done
+    for u in /sys/class/block/mmcblk*p*/uevent; do
+        grep -qx PARTNAME=boot_b "$u" 2>/dev/null && bootb=/dev/$(basename "$(dirname "$u")")
+    done
+}
 
 write_misc_bc() {  # write_misc_bc FILE STAGE
     [ -n "$misc" ] || { log "stage=misc-NOT-FOUND"; return 1; }
@@ -122,13 +129,6 @@ write_misc_bc() {  # write_misc_bc FILE STAGE
 }
 restore_slot_a() { write_misc_bc /etc/misc-bc-slot-a.bin misc-restored; }
 
-for u in /sys/class/block/mmcblk*p*/uevent; do
-    grep -qx PARTNAME=boot_b "$u" 2>/dev/null && bootb=/dev/$(basename "$(dirname "$u")")
-done
-log "stage=persist-target dev=${bootb:-none}"
-persist
-(while :; do sleep 15; persist; done) &
-
 hostname mu300-linux
 ifconfig lo 127.0.0.1 up
 setup_usb_gadget() {
@@ -136,30 +136,36 @@ setup_usb_gadget() {
     mount -t configfs configfs /config
     g=/config/usb_gadget/linux
     mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
-    # The USB network function: whichever of these the kernel actually has. Creating one it was not built with
-    # fails here, and a gadget that is never bound leaves the device with no console and no network at all - which
-    # is exactly what an "improvement" to NCM cost once.
-    netfunc=
+    # The USB network functions: whichever of these the kernel actually has. Creating one it was not built with
+    # fails here; a function that could not be created is simply skipped. ECM serves macOS/Linux hosts, NCM the
+    # Windows inbox driver (Windows has no ECM class driver, so without NCM a Windows host gets no network at
+    # all) - both may coexist in one configuration and each host binds only its own.
+    netfuncs=
     for f in ${MU300_USBNET:-ecm ncm}; do
-        mkdir -p "$g/functions/$f.usb0" 2>/dev/null && { netfunc=$f; break; }
+        mkdir -p "$g/functions/$f.usb$f" 2>/dev/null && netfuncs="$netfuncs $f"
     done
-    [ -n "$netfunc" ] || log "stage=usb-no-net-function (console only)"
+    [ -n "$netfuncs" ] || log "stage=usb-no-net-function (console only)"
     echo 0x0525 > "$g/idVendor"
     echo 0xa4a1 > "$g/idProduct"
     echo 0x0200 > "$g/bcdUSB"
     echo MU300LINUX > "$g/strings/0x409/serialnumber"
     echo Linux > "$g/strings/0x409/manufacturer"
     echo "MU300 Linux USB Ethernet" > "$g/strings/0x409/product"
-    echo "Linux ${netfunc:-no} net + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
+    echo "Linux${netfunc:- no} net (${netfuncs:-none}) + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
     echo 250 > "$g/configs/c.1/MaxPower"
-    if [ -n "$netfunc" ]; then
-        echo 02:50:00:00:77:01 > "$g/functions/$netfunc.usb0/dev_addr"
-        echo 02:50:00:00:77:02 > "$g/functions/$netfunc.usb0/host_addr"
-        ln -s "$g/functions/$netfunc.usb0" "$g/configs/c.1/f1"
-    fi
-    # USB serial console alongside ECM: recovery/debug access that does not depend on networking
-    mkdir -p "$g/functions/acm.GS0" && ln -s "$g/functions/acm.GS0" "$g/configs/c.1/f2"
-    log "stage=usb-net-function ${netfunc:-none}"
+    i=1; mac=1
+    for f in $netfuncs; do
+        # ECM keeps the original pair (macOS' ECM driver reacts badly to a later link notification);
+        # the NCM pair is offset by 2 so the two interfaces never share a MAC
+        echo 02:50:00:00:77:0$((mac + 1)) > "$g/functions/$f.usb$f/dev_addr"
+        echo 02:50:00:00:77:0$((mac + 2)) > "$g/functions/$f.usb$f/host_addr"
+        mac=$((mac + 2))
+        ln -s "$g/functions/$f.usb$f" "$g/configs/c.1/f$i"
+        i=$((i + 1))
+    done
+    # USB serial console alongside the network: recovery/debug access that does not depend on networking
+    mkdir -p "$g/functions/acm.GS0" && ln -s "$g/functions/acm.GS0" "$g/configs/c.1/f$i"
+    log "stage=usb-net-function${netfuncs:-none}"
     log "stage=usb-wait-udc"
     for n in $(seq 1 40); do
         [ -e /sys/class/udc/25100000.dwc3 ] && break
@@ -178,21 +184,42 @@ setup_usb_gadget() {
     log "stage=usb-bind-done rc=$?"
     persist
 
-    # Bring usb0 up immediately after binding, before the host selects the ECM data interface:
+    # Bring the network links up immediately after binding, before the host selects a data interface:
     # f_ecm reports the link state in its first CONNECT notification, and macOS' ECM driver does not
     # pick up a later "connected" notification (v10 left usb0 down until systemd ran -> host "inactive").
-    ifconfig usb0 up
+    for u in usb0 usb1 usb2; do [ -e /sys/class/net/$u ] && ifconfig $u up; done
+
+    # Temporary DHCP from the initramfs: the host asks for a lease the moment the gadget enumerates
+    # and gives up after a few attempts - long before the real system's dnsmasq exists (measured:
+    # over a minute later). Short leases, so the real server takes over cleanly; killed before
+    # switch_root so the two never answer at the same time.
+    for u in usb0 usb1; do
+        [ -e /sys/class/net/$u ] || continue
+        cat > /run/udhcpd-$u.conf <<EOF
+start 192.168.77.50
+end 192.168.77.200
+interface $u
+option subnet 255.255.255.0
+option router 192.168.77.1
+option lease 30
+lease_file /run/udhcpd-$u.leases
+EOF
+        touch /run/udhcpd-$u.leases
+        udhcpd /run/udhcpd-$u.conf 2>/dev/null &
+    done
 }
 
 # The vendor modules first, the gadget last. The host starts asking for a DHCP lease the moment the gadget
 # appears and gives up after a few seconds, so the closer the gadget comes to the system that answers (the DHCP
 # server starts right after switch_root), the more reliably the host gets an address.
 load_vendor_modules
+find_misc_and_bootb
+log "stage=persist-target dev=${bootb:-none} misc=${misc:-none}"
+persist
+(while :; do sleep 15; persist; done) &
 setup_usb_gadget
 ROOT_OFFSET=27762098176   # linux-boot/rootfs-region.env; outside every GPT partition
 mkdir -p /newroot
-# busybox mount only sets up a loop for regular files; for a block device the loop options would
-# be handed to ext4 (EINVAL), so attach the loop explicitly and verify its offset
 # The ext4 area holds one or more systems: /ubuntu, /openwrt (selected by /.mu300/boot-os), or a single
 # Ubuntu directly in its root (first installs). Pick one and remember how to start it.
 has_init() { [ -x "$1/lib/systemd/systemd" ] || [ -x "$1/sbin/init" ]; }
@@ -205,12 +232,43 @@ pick_root() {
     done
 }
 mkdir -p /disk
-rootloop=$(losetup -f 2>/run/rootmount.err)
-if [ -n "$rootloop" ] && losetup -o $ROOT_OFFSET "$rootloop" /dev/mmcblk0 2>>/run/rootmount.err \
-   && [ "$(cat /sys/block/${rootloop#/dev/}/loop/offset)" = "$ROOT_OFFSET" ] \
-   && [ "$(dd if="$rootloop" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' ')" = 53ef ] \
-   && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err \
-   && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
+# A TF card rootfs (ext4 label mu300sd) wins over the internal region: on the 32 GB variant the card is
+# the only place for the rootfs, and on any variant taking the card out means booting the internal system.
+# /sys/class/mmc_host/mmc1/mmc1:* exists the moment the driver has detected a card, so an empty slot costs
+# this loop nothing; the block device follows within about a second (one init retry was measured on
+# insertion), and once a card's node exists its label does not change, so there is nothing left to wait for.
+sd_root=
+foreign=
+for n in $(seq 1 5); do
+    ls /sys/class/mmc_host/mmc1/mmc1:* >/dev/null 2>&1 || break
+    for d in /dev/mmcblk1p1 /dev/mmcblk1; do
+        [ -b "$d" ] || continue
+        if [ "$(dd if="$d" bs=1 skip=1144 count=7 2>/dev/null)" = mu300sd ]; then sd_root=$d; break 2; fi
+        foreign=$d
+    done
+    [ -n "$foreign" ] && break
+    mdev -s
+    sleep 1
+done
+rootloop=
+root_mounted=0
+if [ -n "$sd_root" ]; then
+    rootloop=$sd_root
+    mount -t ext4 -o noatime "$sd_root" /disk 2>>/run/rootmount.err && root_mounted=1
+    log "stage=sd-root dev=$sd_root ok=$root_mounted"
+fi
+# busybox mount only sets up a loop for regular files; for a block device the loop options would
+# be handed to ext4 (EINVAL), so attach the loop explicitly and verify its offset
+if [ $root_mounted = 0 ]; then
+    rootloop=$(losetup -f 2>/run/rootmount.err)
+    if [ -n "$rootloop" ] && losetup -o $ROOT_OFFSET "$rootloop" /dev/mmcblk0 2>>/run/rootmount.err \
+       && [ "$(cat /sys/block/${rootloop#/dev/}/loop/offset)" = "$ROOT_OFFSET" ] \
+       && [ "$(dd if="$rootloop" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' ')" = 53ef ] \
+       && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err; then
+        root_mounted=1
+    fi
+fi
+if [ $root_mounted = 1 ] && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
     # A way back to Android with no computer and no keyboard: cut the power during boot N times in a row (N is
     # .mu300/boot-attempts, 5 without it). Every boot counts up here and mu300-next-boot --rearm clears the count
     # once the system is really up, so only boots that never got that far add up. LK does the same with the
@@ -258,6 +316,7 @@ if [ -n "$rootloop" ] && losetup -o $ROOT_OFFSET "$rootloop" /dev/mmcblk0 2>>/ru
     log "stage=switch-root root=$rootdir init=$init os=$(sed -n 's/^PRETTY_NAME=//p' /newroot/etc/os-release)"
     persist
     kill $(jobs -p) 2>/dev/null
+    killall udhcpd 2>/dev/null
     for p in /proc/[0-9]*; do [ "${p#/proc/}" = 1 ] || kill -9 "${p#/proc/}" 2>/dev/null; done
     umount /config 2>/dev/null
     mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run

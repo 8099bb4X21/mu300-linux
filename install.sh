@@ -68,6 +68,15 @@ fetch() {
     curl -fL --retry 3 --progress-bar -o "$_o" "$_u"
 }
 
+# Git Bash (MSYS) rewrites arguments that look like POSIX paths (/data/local/tmp/...) into Windows paths
+# (C:/Program Files/Git/data/...) before adb.exe sees them, which breaks adb pull/push of device paths.
+# MSYS2_ARG_CONV_EXCL exempts a path prefix from that; its list is SEMICOLON-separated (a colon would
+# make the whole string one entry that matches nothing). Host paths (/d/... or relative) still convert
+# as they should. macOS and Linux ignore the variable, so this changes nothing there.
+adb() {
+    MSYS2_ARG_CONV_EXCL="/data;/dev;/system;/vendor;/odm;/sdcard;/storage;/apex;/proc;/sys" command adb "$@"
+}
+
 # adb shell/exec-out read stdin; never let them eat the answers typed (or piped) into this script
 su_do() { adb shell "su -c '$1'" </dev/null | tr -d '\r'; }
 
@@ -89,8 +98,13 @@ dev_pull() {  # dev_pull DEVICE_PATH LOCAL_PATH   (DEVICE_PATH may be a block de
 # ---------------------------------------------------------------- preflight
 say "Checking host tools and device"
 need="adb"
-[ $CHECK_ONLY = 1 ] || { [ $MODE = build ] && need="adb docker python3 lz4" || need="adb python3 lz4 curl"; }
+[ $CHECK_ONLY = 1 ] || { [ $MODE = build ] && need="adb docker python3" || need="adb python3 curl"; }
 for c in $need; do command -v $c >/dev/null || die "$c not found"; done
+# the boot ramdisk needs lz4: the command, or the python module build-boot-image.py falls back to (the
+# documented Windows path is "pip install lz4", which installs no lz4 command)
+if [ $CHECK_ONLY = 0 ]; then
+    command -v lz4 >/dev/null || python3 -c 'import lz4.block' >/dev/null 2>&1 || die "lz4 not found (the lz4 command, or: pip install lz4)"
+fi
 if [ $CHECK_ONLY = 0 ] && [ $MODE = build ]; then
     [ -f "$KOUT/Image" ] && ls "$KOUT"/modules/*.ko >/dev/null 2>&1 || die "kernel outputs missing in $KOUT (run kernel/build-all.sh)"
 fi
@@ -227,28 +241,60 @@ gib() { awk -v b="$1" 'BEGIN { printf "%.1f GiB", b / 1073741824 }'; }
 # keeps the previous one as <os>.old while the new one is unpacked, so allow for two of each plus working room.
 NEED_OPENWRT=$((800 * 1024 * 1024)); NEED_UBUNTU=$((1600 * 1024 * 1024)); NEED_BOTH=$((2400 * 1024 * 1024))
 echo "eMMC: $(gib $((disk * 512))) ($disk sectors), partitions end at $(gib $((last_end * 512))) (sector $last_end), free after them: $(gib $SIZE)"
+
+# ---------------------------------------------------------------- TF card as the rootfs
+# The TF slot (mmc1, UHS-I) is a removable home for the rootfs: on the 32 GB variant it is the only one
+# that does not rewrite the partition table, and on any variant pulling the card out is itself a way back
+# to the internal system. The card (or its first partition) becomes ext4 with the label mu300sd, which is
+# what boot/init mounts before it tries the internal region.
+SD_MODE=0; sd_dev=
+if [ "$(su_do 'ls -d /sys/block/mmcblk1 2>/dev/null')" ]; then
+    if [ "$(su_do '[ -b /dev/block/mmcblk1p1 ] && echo y')" = y ]; then
+        sd_dev=/dev/block/mmcblk1p1; sd_sect=$(su_do 'cat /sys/block/mmcblk1/mmcblk1p1/size')
+    else
+        sd_dev=/dev/block/mmcblk1; sd_sect=$(su_do 'cat /sys/block/mmcblk1/size')
+    fi
+    sd_size=$((sd_sect * 512))
+    if [ $sd_size -ge $((700 * 1024 * 1024)) ]; then
+        sd_default=no; [ $SIZE -lt $((700 * 1024 * 1024)) ] && sd_default=yes
+        ask sd "Put the Linux filesystem on the TF card ($sd_dev, $(gib $sd_size)) instead of the internal storage? (yes/no)" $sd_default
+        if [ "$sd" = yes ]; then
+            SD_MODE=1; SIZE=$sd_size
+        fi
+    else
+        echo "TF card present but too small ($(gib $sd_size)); ignoring it"
+    fi
+fi
 # Smaller eMMC variants leave less room behind userdata, and how much is needed depends on the choice further
 # down - OpenWrt alone fits in a few hundred megabytes. So refuse only what cannot hold anything at all, and
 # check the real requirement once the systems are known. There is nowhere else to put this region on these
 # devices: userdata is metadata-encrypted (dm-default-key), so an image file inside it cannot be read from
 # Linux, and the spare-looking blackbox and fulldumpdb partitions are written by the firmware itself.
-if [ $SIZE -lt $((700 * 1024 * 1024)) ]; then
+if [ $SD_MODE = 0 ] && [ $SIZE -lt $((700 * 1024 * 1024)) ]; then
     offer_repartition   # exits, either by installing nothing or by rebooting for a second pass
 fi
-# an existing installation defines the region (it may have been created with a slightly different size)
-existing=no
-for cand in $OFF 27762098176; do
-    m=$(su_do "dd if=/dev/block/mmcblk0 bs=1 skip=$((cand + 1080)) count=2 2>/dev/null | od -An -tx1" | tr -d ' ')
-    l=$(su_do "dd if=/dev/block/mmcblk0 bs=1 skip=$((cand + 1144)) count=16 2>/dev/null" | tr -d '\000')
-    if [ "$m" = 53ef ] && [ "$l" = mu300root ]; then
-        blocks=$(su_do "dd if=/dev/block/mmcblk0 bs=1 skip=$((cand + 1028)) count=4 2>/dev/null | od -An -tu4" | tr -d ' ')
-        OFF=$cand; SIZE=$((blocks * 4096)); existing=yes; break
-    fi
-done
-echo "Linux region: offset $OFF, $(gib $SIZE), existing mu300root filesystem: $existing"
-# unpartitioned space should be unused: sample 16 x 1 MiB across the region and count non-zero bytes
 DIRTY=0
-if [ $existing = no ]; then
+existing=no
+if [ $SD_MODE = 1 ]; then
+    # the label mu300sd is what boot/init looks for; an installation already on the card is kept or replaced
+    m=$(su_do "dd if=$sd_dev bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1" | tr -d ' ')
+    l=$(su_do "dd if=$sd_dev bs=1 skip=1144 count=16 2>/dev/null" | tr -d '\000')
+    [ "$m" = 53ef ] && [ "$l" = mu300sd ] && existing=yes
+    echo "Linux filesystem: TF card $sd_dev, $(gib $SIZE), existing mu300sd: $existing"
+else
+    # an existing installation defines the region (it may have been created with a slightly different size)
+    for cand in $OFF 27762098176; do
+        m=$(su_do "dd if=/dev/block/mmcblk0 bs=1 skip=$((cand + 1080)) count=2 2>/dev/null | od -An -tx1" | tr -d ' ')
+        l=$(su_do "dd if=/dev/block/mmcblk0 bs=1 skip=$((cand + 1144)) count=16 2>/dev/null" | tr -d '\000')
+        if [ "$m" = 53ef ] && [ "$l" = mu300root ]; then
+            blocks=$(su_do "dd if=/dev/block/mmcblk0 bs=1 skip=$((cand + 1028)) count=4 2>/dev/null | od -An -tu4" | tr -d ' ')
+            OFF=$cand; SIZE=$((blocks * 4096)); existing=yes; break
+        fi
+    done
+    echo "Linux region: offset $OFF, $(gib $SIZE), existing mu300root filesystem: $existing"
+fi
+# unpartitioned space should be unused: sample 16 x 1 MiB across the region and count non-zero bytes
+if [ $SD_MODE = 0 ] && [ $existing = no ]; then
     step=$(( SIZE / 1048576 / 16 ))
     probe=""; i=0
     while [ $i -lt 16 ]; do probe="$probe $(( OFF / 1048576 + i * step ))"; i=$((i + 1)); done
@@ -257,6 +303,8 @@ if [ $existing = no ]; then
 fi
 if [ $existing = yes ]; then
     verdict="OK: a MU300 Linux installation is already present (it can be kept or replaced)"
+elif [ $SD_MODE = 1 ]; then
+    verdict="OK: the TF card is free; creating the filesystem erases whatever is on it"
 elif [ "$DIRTY" -gt 0 ]; then
     verdict="WARNING: the unpartitioned space is not empty; it may be used by this firmware. Installing overwrites it"
 elif [ $SIZE -ge $((20 * 1024 * 1024 * 1024)) ]; then
@@ -369,8 +417,12 @@ if [ $MODE = prebuilt ]; then
 if [ -z "$RELEASE" ]; then
     if [ -n "${MU300_RELEASE_URL:-}" ]; then RELEASE=custom
     else
-        RELEASE=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+        RELEASE=$(curl -fsSL --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
             | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+        # api.github.com rate-limits unauthenticated clients per IP (a 403); the releases page redirect
+        # answers the same question without the API
+        [ -n "$RELEASE" ] || RELEASE=$(curl -fsSLI --max-time 30 "https://github.com/$REPO/releases/latest" 2>/dev/null | tr -d '\r' \
+            | sed -n 's/^[Ll]ocation:.*\/tag\/\(.*\)$/\1/p' | tail -n1)
         [ -n "$RELEASE" ] || die "cannot find the newest release of $REPO (set MU300_RELEASE=<tag> to pick one)"
     fi
 fi
@@ -449,7 +501,13 @@ PWHASH=$(printf '%s' "$pw1" | docker run --rm -i mu300-ubuntu:24.04 openssl pass
 fi
 
 say "Building the boot image"
-sed "s/^ROOT_OFFSET=[0-9]*/ROOT_OFFSET=$OFF/" "$TOP/boot/init" > "$WORK/init"
+if [ $SD_MODE = 1 ]; then
+    # the TF card rootfs is found by its label; ROOT_OFFSET stays at its built-in default and is only
+    # the fallback for a device whose internal region also holds an installation
+    cp "$TOP/boot/init" "$WORK/init"
+else
+    sed "s/^ROOT_OFFSET=[0-9]*/ROOT_OFFSET=$OFF/" "$TOP/boot/init" > "$WORK/init"
+fi
 python3 "$TOP/boot/build-boot-image.py" --stock-boot "$WORK/dumps/boot_a.img" --misc-head "$WORK/dumps/misc-head.bin" \
   --kernel "$KOUT/Image" --modules "$KOUT/modules" --init "$WORK/init" --busybox "$BUSYBOX" \
   --logdw "$LOGDW" --ueventd-perms "$TOP/android-vendor/ueventd-perms.sh" \
@@ -460,10 +518,15 @@ say "Ready to install"
 echo "  source:         $([ $MODE = prebuilt ] && echo "prebuilt release $RELEASE + vendor files from this device" || echo "local build")"
 echo "  systems:        $OSES (boots: $BOOT_OS)"
 echo "  default boot:   $([ $DEFAULT_LINUX = 1 ] && echo "Linux (Android after $BOOT_ATTEMPTS failed boots in a row)" || echo Android, Linux on demand)"
-echo "  filesystem:     $([ $FORMAT = 1 ] && echo "CREATE new ext4 (erases the Linux region)" || echo "keep existing")"
+fs_desc="keep existing"; [ $FORMAT = 1 ] && fs_desc="CREATE new ext4 ($([ $SD_MODE = 1 ] && echo "erases the TF card" || echo "erases the Linux region"))"
+echo "  filesystem:     $fs_desc"
 [ $UPDATE = 1 ] && echo "  update:         settings and user data of the chosen systems are kept, everything else is replaced"
 [ $UPDATE = 0 ] && [ $FORMAT = 0 ] && echo "  note:           the chosen systems are installed fresh; their previous files and settings are replaced"
-echo "  writes:         Linux region at offset $OFF, boot_b, 32 bytes of misc (boot_a, GPT and userdata are not touched)"
+if [ $SD_MODE = 1 ]; then
+    echo "  writes:         TF card $sd_dev, boot_b, 32 bytes of misc (the eMMC, GPT, userdata and boot_a are not touched)"
+else
+    echo "  writes:         Linux region at offset $OFF, boot_b, 32 bytes of misc (boot_a, GPT and userdata are not touched)"
+fi
 ask confirm "Type INSTALL to continue" no
 [ "$confirm" = INSTALL ] || die "cancelled"
 
@@ -478,8 +541,8 @@ for os in $OSES; do
     fi
 done
 env=$(mktemp)
-printf 'OFF=%s\nSIZE=%s\nOFF_S=%s\nSIZE_S=%s\nFORMAT=%s\nOSES="%s"\nWIPE_LEGACY=%s\nUPDATE=%s\nBOOT_OS=%s\nDEFAULT_LINUX=%s\nBOOT_ATTEMPTS=%s\nIMPORT_HOTSPOT=%s\nPWHASH='"'"'%s'"'"'\n' \
-  "$OFF" "$SIZE" "$((OFF / 512))" "$((SIZE / 512))" "$FORMAT" "$OSES" "$WIPE_LEGACY" "$UPDATE" "$BOOT_OS" "$DEFAULT_LINUX" "$BOOT_ATTEMPTS" "$IMPORT_HOTSPOT" "$PWHASH" > "$env"
+printf 'OFF=%s\nSIZE=%s\nOFF_S=%s\nSIZE_S=%s\nSD_MODE=%s\nSD_DEV=%s\nFORMAT=%s\nOSES="%s"\nWIPE_LEGACY=%s\nUPDATE=%s\nBOOT_OS=%s\nDEFAULT_LINUX=%s\nBOOT_ATTEMPTS=%s\nIMPORT_HOTSPOT=%s\nPWHASH='"'"'%s'"'"'\n' \
+  "$OFF" "$SIZE" "$((OFF / 512))" "$((SIZE / 512))" "$SD_MODE" "$sd_dev" "$FORMAT" "$OSES" "$WIPE_LEGACY" "$UPDATE" "$BOOT_OS" "$DEFAULT_LINUX" "$BOOT_ATTEMPTS" "$IMPORT_HOTSPOT" "$PWHASH" > "$env"
 adb push "$env" $T/mu300-install.env >/dev/null; rm -f "$env"
 su_do "sh $T/android-install.sh" | tee "$WORK/device-install.log"
 grep -q MU300-INSTALL-OK "$WORK/device-install.log" || die "installation on the device failed; boot_b and misc were not changed"
