@@ -1,14 +1,14 @@
 {
  "luci-app-mu300dash": {
-  "description": "MU300 状态看板：系统/蜂窝/网络状态与快捷控制",
+  "description": "MU300 状态看板：系统/蜂窝/网络状态、快捷控制、网络锁定与 AT 调试",
   "read": {
    "ubus": {
-    "mu300dash": [ "status", "act", "at", "at_history" ]
+    "mu300dash": [ "*" ]
    }
   },
   "write": {
    "ubus": {
-    "mu300dash": [ "status", "act", "at", "at_history" ]
+    "mu300dash": [ "*" ]
    }
   }
  }

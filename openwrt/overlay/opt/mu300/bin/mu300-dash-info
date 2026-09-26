@@ -54,25 +54,23 @@ temp_hottest() {
 }
 
 # ------------------------------------------------------- a ubus scalar field
-# one unique key per call is enough for the fields used here; first match wins
-jval() {
-    awk -v k="\"$1\"" 'index($0, k) { sub(/^[^:]*:[ \t]*/, ""); gsub(/[",]/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); print; exit }'
-}
+# the ubus CLI pretty-prints with spaces, so sed on the literal key; first match
+# wins (the fields used here appear once, ipv4 before ipv6 in the address blocks)
+jval() { printf '%s' "$1" | sed -n "s/.*\"$2\": *\"\{0,1\}\([^,\"}\]*\).*/\1/p" | head -n1; }
 
 # ----------------------------------------------------------------- WAN (ubus)
 WANJSON=$(t3 ubus call network.interface.wan status)
 WAN6JSON=$(t3 ubus call network.interface.wan6 status)
-# "ipv4-address":[{"address":"10.x.x.x","mask":...}] -> the first address
-jaddr4() { printf '%s' "$1" | awk -F'"address":"' 'NF>1 { split($2, a, "\""); print a[1]; exit }'; }
-jarr_dns() { printf '%s' "$1" | awk -F'"dns-server":' 'NF>1 { split($2, a, "]"); gsub(/[^0-9a-fA-F:. ]/, "", a[1]); gsub(/^ +| +$/, "", a[1]); gsub(/ +/, ",", a[1]); print a[1]; exit }'; }
+jaddr4() { printf '%s' "$1" | sed -n 's/.*"address": *"\([^"]*\)".*/\1/p' | head -n1; }
+jarr_dns() { printf '%s' "$1" | sed -n 's/.*"dns-server": *\[\([^]]*\)\].*/\1/p' | tr -d '"' ; }
 
-wan_up=$(printf '%s' "$WANJSON" | jval '"up"' | tr 'a-z' 'A-Z')
-[ "$wan_up" = "TRUE" ] && wan_up=1 || wan_up=0
-wan_uptime=$(printf '%s' "$WANJSON" | jval '"uptime"')
-wan_proto=$(printf '%s' "$WANJSON" | jval '"proto"')
+wan_up=$(jval "$WANJSON" up)
+[ "$wan_up" = "true" ] && wan_up=1 || wan_up=0
+wan_uptime=$(jval "$WANJSON" uptime)
+wan_proto=$(jval "$WANJSON" proto)
 wan_ip4=$(jaddr4 "$WANJSON")
-wan6_up=$(printf '%s' "$WAN6JSON" | jval '"up"' | tr 'a-z' 'A-Z')
-[ "$wan6_up" = "TRUE" ] && wan6_up=1 || wan6_up=0
+wan6_up=$(jval "$WAN6JSON" up)
+[ "$wan6_up" = "true" ] && wan6_up=1 || wan6_up=0
 wan6_ip=$(t2 ip -6 -br addr show sipa_eth0 2>/dev/null | awk '{for(i=3;i<=NF;i++) if($i ~ /^[2-3]/){split($i,s,"/");print s[1];exit}}')
 wan_dns=$(jarr_dns "$WANJSON")
 apn=$(t3 uci -q get network.wan.apn)

@@ -134,13 +134,29 @@ m_at_history() {
         "$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' "$HIST" 2>/dev/null | awk 'NR>1 { printf "\\n" } { printf "%s", $0 }')"
 }
 
+m_lock_set() {
+    local kind val
+    kind=$(inp '@.kind')
+    val=$(inp '@.val')
+    case "$kind" in
+        mode|endc|lte|nr|cell) ;;
+        *) printf '{"ok":0,"error":"unknown lock kind"}\n'; return ;;
+    esac
+    # applying restarts the protocol stack (SFUN 5 -> 4): half a minute without
+    # cellular - exactly the thing that must never run inside a request
+    setsid "$DASH/mu300-dash-lock" apply "$kind" "$val" >/dev/null 2>&1 &
+    printf '{"ok":1,"started":1,"op":"lock %s=%s"}\n' "$kind" "$val"
+}
+
 do_list() {
     cat <<EOF
 {
 	"status": { },
 	"act": { "op": "String", "arg": "String" },
 	"at": { "cmd": "String" },
-	"at_history": { }
+	"at_history": { },
+	"lock_get": { },
+	"lock_set": { "kind": "String", "val": "String" }
 }
 EOF
 }
@@ -155,6 +171,8 @@ call)
         act)        m_act ;;
         at)         m_at ;;
         at_history) m_at_history ;;
+        lock_get)   "$DASH/mu300-dash-lock" get 2>/dev/null || printf '{"error":"lock read failed"}\n' ;;
+        lock_set)   m_lock_set ;;
         *)          printf '{"ok":0,"error":"no such method"}\n' ;;
     esac
     ;;

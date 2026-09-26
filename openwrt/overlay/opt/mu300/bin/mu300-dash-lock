@@ -1,0 +1,302 @@
+#!/bin/sh
+# mu300-dash-lock -- read and apply the modem's lock settings for the dashboard:
+#   mu300-dash-lock get                 read everything (5 short AT commands), emit JSON
+#   mu300-dash-lock apply KIND VALUE    write one setting, then restart the protocol stack
+#   mu300-dash-lock replay              boot hook: re-apply everything saved in the state file
+#
+# KIND / VALUE:
+#   mode  auto | 4g | sa | nsa          network mode lock (SPTESTMODE + SP5GRAN)
+#   endc  on | off                      EN-DC / NSA anchor permission (SPENDC; note OFF is value 2)
+#   lte   "1,3,5" or ""                 LTE band lock (SPLBAND); empty = automatic
+#   nr    "78,41" or ""                 NR band lock (SPLBAND); empty = automatic
+#   cell  auto | off | "nr:627264,393" | "lte:1650,211"   serving-cell lock (SPFORCEFRQ)
+#
+# All encodings are the ones the ufi_tools standalone mode uses against this modem
+# family, cross-checked against this device's own read-backs (see the header of
+# /usr/libexec/rpcd/mu300dash). Field layouts verified on the device:
+#   +SPTESTMODE: 134,134,0,...   mode slot0, mode slot1, primary, (extra fields ignored)
+#   +SP5GRAN: 1                  1 = SA capable
+#   +ENDC: 1                     1 = EN-DC allowed
+#   +SPLBAND: <5 masks>          read=0; masks for band bases [49,33,17,1,65], bit n = base+n
+#   +SPLBAND: <3 masks>          read=3; NR tables A (n1..n74), B (n34..n79), super (n75..n86)
+#   +SPFORCEFRQ: 12,3[,fr,pci]   LTE read; 16,3 NR read; no pair = no lock
+#
+# Applying anything restarts the protocol stack (AT+SFUN=5, then AT+SFUN=4) - the
+# same sequence the official web UI and mobile-data's sim-reset use - so the new
+# setting takes effect. Cellular drops for half a minute; the data watchdog or the
+# explicit `ifup wan` below brings the connection back.
+#
+# The last applied state is saved to /etc/mu300/dash/lock-state.json and replayed
+# once at boot by /etc/init.d/mu300-dash (these AT settings do not all survive a
+# full modem power cycle; ufi_tools solves this the same way - replay at boot).
+
+export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
+
+AT=${MU300_AT:-mu300-at}
+STATE=/etc/mu300/dash/lock-state.json
+LOG=/tmp/mu300-dash/lock.log
+mkdir -p /etc/mu300/dash /tmp/mu300-dash 2>/dev/null
+
+at() { "$AT" -t "${2:-6}" "$1" 2>/dev/null | tr -d '\r'; }
+say() { logger -t mu300-dash "$*" 2>/dev/null; echo "$(date '+%H:%M:%S') $*" >> "$LOG" 2>/dev/null; tail -n 30 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"; }
+qs() { [ -n "$1" ] && printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n')" || echo null; }
+
+# ------------------------------------------------------------------ codecs
+# LTE band <-> five 16-bit masks over bases [49,33,17,1,65] (order = the modem's)
+lte_masks() {  # lte_masks "1,3,5" -> "m49,m33,m17,m1,m65"
+    # bit = band - base (B1 -> base 1 bit 0, B41 -> base 33 bit 8): verified against
+    # this device's own read-back (bands 1,3,5,8,34,38,39,40,41 = 0,482,0,149,0)
+    echo "$1" | tr -d ' ' | awk -F',' '
+        BEGIN { split("49 33 17 1 65", off, " ") }
+        {
+            for (i = 1; i <= NF; i++) {
+                b = $i + 0; if (b <= 0) continue
+                for (j = 1; j <= 5; j++)
+                    if (b >= off[j] && b - off[j] <= 15) m[j] += lshift(1, b - off[j])
+            }
+            printf "%d,%d,%d,%d,%d", m[1], m[2], m[3], m[4], m[5]
+        }'
+}
+lte_bands() {  # lte_bands "m49,m33,m17,m1,m65" -> "1,3,5,..."
+    echo "$1" | awk -F',' '
+        BEGIN { split("49 33 17 1 65", off, " ") }
+        {
+            out = ""
+            for (j = 1; j <= 5; j++) {
+                m = $j + 0
+                for (n = 0; n < 16; n++)
+                    if (int(m / lshift(1, n)) % 2 == 1) { b = off[j] + n; if (out == "") out = b; else out = out "," b }
+            }
+            print out
+        }'
+}
+# NR band <-> masks over the vendor tables: A = bits of mask1, B = mask2, S = mask3
+nr_tables_init() { :; }
+NR_A="1 2 3 5 7 8 12 20 25 28 66 70 71 74"
+NR_B="34 38 39 40 41 50 51 77 78 79"
+NR_S="75 76 80 81 82 83 84 86"
+nr_masks() {  # nr_masks "78,41" -> "mA,mB,mS"
+    echo "$1" | tr -d ' ' | awk -v A="$NR_A" -v B="$NR_B" -v S="$NR_S" -F',' '
+        {
+            for (i = 1; i <= NF; i++) {
+                b = $i + 0; if (b <= 0) continue
+                nA = split(A, tA, " "); for (j = 1; j <= nA; j++) if (tA[j] == b) mA += lshift(1, j - 1)
+                nB = split(B, tB, " "); for (j = 1; j <= nB; j++) if (tB[j] == b) mB += lshift(1, j - 1)
+                nS = split(S, tS, " "); for (j = 1; j <= nS; j++) if (tS[j] == b) mS += lshift(1, j - 1)
+            }
+            printf "%d,%d,%d", mA, mB, mS
+        }'
+}
+nr_bands() {  # nr_bands "mA,mB,mS" -> "78,41,..."
+    echo "$1" | awk -v A="$NR_A" -v B="$NR_B" -v S="$NR_S" -F',' '
+        function mask(tbl, m,   n, t, out, j) {
+            n = split(tbl, t, " "); out = ""
+            for (j = 1; j <= n; j++)
+                if (int(m / lshift(1, j - 1)) % 2 == 1) { if (out == "") out = t[j]; else out = out "," t[j] }
+            return out
+        }
+        { r = mask(A, $1 + 0); s = mask(B, $2 + 0); t = mask(S, $3 + 0)
+          u = r; if (s != "") u = (u == "" ? s : u "," s); if (t != "") u = (u == "" ? t : u "," t)
+          print u }'
+}
+
+mode_label() {  # mode_label WORKMODE GRAN  (decode per ufi_tools toAppMode, slot 0)
+    case $1 in
+        3)   echo 4g ;;
+        134) echo auto ;;
+        128|131) [ "$2" = 1 ] && echo sa || echo nsa ;;
+        *)   echo auto ;;
+    esac
+}
+mode_pair() {  # mode_pair LABEL -> "workmode gran"  (encode per ufi_tools modeConfigForSlot0)
+    case $1 in
+        4g)   echo "3 1" ;;
+        sa)   echo "128 1" ;;
+        nsa)  echo "131 0" ;;
+        *)    echo "134 1" ;;
+    esac
+}
+
+# --------------------------------------------------------------------- get
+do_get() {
+    tm=$(at 'AT+SPTESTMODE?' | sed -n 's/^+SPTESTMODE: *//p' | head -n1)
+    gran=$(at 'AT+SP5GRAN?' | sed -n 's/^+SP5GRAN: *//p' | head -n1 | tr -cd '0-9')
+    endc=$(at 'AT+SPENDC?' | sed -n 's/^+ENDC: *//p' | head -n1 | tr -cd '0-9')
+    ltem=$(at 'AT+SPLBAND=0' | sed -n 's/^+SPLBAND: *//p' | head -n1)
+    nrm=$(at 'AT+SPLBAND=3' | sed -n 's/^+SPLBAND: *//p' | head -n1)
+    cell12=$(at 'AT+SPFORCEFRQ=12,3' | sed -n 's/^+SPFORCEFRQ: *//p' | head -n1)
+    cell16=$(at 'AT+SPFORCEFRQ=16,3' | sed -n 's/^+SPFORCEFRQ: *//p' | head -n1)
+
+    # SPTESTMODE: m0,m1,primary,... (device answers six fields; the first three count)
+    m0=$(echo "$tm" | cut -d, -f1); m1=$(echo "$tm" | cut -d, -f2); prim=$(echo "$tm" | cut -d, -f3)
+    [ -n "$m1" ] || m1=134; [ -n "$prim" ] || prim=0
+    lbl=$(mode_label "$m0" "$gran")
+
+    # NR read: normally three masks A,B,S; some firmwares answer four fields - then
+    # the extra one sits between A and B (same shape as the write A,0,B,S)
+    nr3=$(echo "$nrm" | awk -F',' 'NF>=4 {print $1","$3","$4; exit} {print}')
+    lte_b=$(lte_bands "$ltem")
+    nr_b=$(nr_bands "$nr3")
+
+    # cell locks: "12,3" alone = none; a pair follows when locked
+    cl=$(echo "$cell12" | awk -F',' 'NF>=4 {print "lte:" $3 "," $4}')
+    cn=$(echo "$cell16" | awk -F',' 'NF>=4 {print "nr:" $3 "," $4}')
+    cell=${cn:-$cl}
+
+    # "auto" for bands = nothing locked (empty masks or the full supported set)
+    printf '{"ts":%d,"mode":{"label":"%s","work":"%s","gran":"%s","m1":"%s","prim":"%s"},"endc":"%s","lte":{"locked":"%s","raw":"%s"},"nr":{"locked":"%s","raw":"%s"},"cell":"%s"}\n' \
+        "$(date +%s)" "$lbl" "${m0:-}" "${gran:-}" "$m1" "$prim" "${endc:-}" "${lte_b:-}" "${ltem:-}" "${nr_b:-}" "${nrm:-}" "${cell:-}"
+}
+
+# ------------------------------------------------------------------ apply
+sfun_restart() {
+    say "restarting the protocol stack (SFUN 5 -> 4)"
+    at 'AT+SFUN=5' 10 >/dev/null
+    sleep 1
+    at 'AT+SFUN=4' 30 >/dev/null
+    # wait for registration to come back (the page polls; this is only for the log)
+    n=0
+    while [ $n -lt 20 ]; do
+        at 'AT+CEREG?' 4 | grep -qE '\+CEREG: [0-9],(1|5)' && break
+        n=$((n + 1)); sleep 2
+    done
+    ifup wan 2>/dev/null
+    say "stack restarted, registration $([ $n -lt 20 ] && echo back || echo 'still waiting') "
+}
+
+save_state() {  # save_state KEY VALUE - one small file per key, so applies never
+                 # overwrite each other, and replay reads exactly what was applied
+    mkdir -p /etc/mu300/dash/lock-state.d 2>/dev/null
+    printf '%s' "$2" > /etc/mu300/dash/lock-state.d/"$1"
+}
+
+do_apply() {  # do_apply KIND VALUE
+    kind=$1; val=$2
+    case $kind in
+        mode)
+            set -- $(mode_pair "$val"); m0=$1; gran=$2
+            # keep slot1 and the primary-SIM field as the modem reported them
+            tm=$(at 'AT+SPTESTMODE?' | sed -n 's/^+SPTESTMODE: *//p' | head -n1)
+            m1=$(echo "$tm" | cut -d, -f2); prim=$(echo "$tm" | cut -d, -f3)
+            [ -n "$m1" ] || m1=134; [ -n "$prim" ] || prim=0
+            [ -n "$gran" ] && at "AT+SP5GRAN=$gran" 6 >/dev/null
+            at "AT+SPTESTMODE=$m0,$m1,$prim" 6 >/dev/null
+            say "network mode -> $val (SPTESTMODE $m0, SP5GRAN ${gran:-kept})"
+            ;;
+        endc)
+            case $val in on) v=1 ;; off) v=2 ;; esac   # OFF is 2 here, not 0 (measured)
+            at "AT+SPENDC=$v" 6 >/dev/null
+            say "EN-DC -> $val (SPENDC=$v)"
+            ;;
+        lte)
+            if [ -n "$val" ]; then
+                at "AT+SPLBAND=1,$(lte_masks "$val")" 6 >/dev/null
+            else
+                at 'AT+SPLBAND=1,0,0,0,0,0' 6 >/dev/null
+            fi
+            say "LTE bands -> ${val:-automatic}"
+            ;;
+        nr)
+            if [ -n "$val" ]; then
+                at "AT+SPLBAND=2,$(nr_masks "$val" | awk -F, '{print $1",0,"$2","$3}')" 6 >/dev/null
+            else
+                at 'AT+SPLBAND=2,0,0,0,0' 6 >/dev/null
+            fi
+            say "NR bands -> ${val:-automatic}"
+            ;;
+        cell)
+            case $val in
+                off)
+                    at 'AT+SPFORCEFRQ=12,4' 6 >/dev/null
+                    at 'AT+SPFORCEFRQ=16,4' 6 >/dev/null
+                    say "cell lock removed"
+                    ;;
+                auto)  # lock whatever the current serving cell is
+                    c=$(cat /tmp/mu300-dash/cell.json 2>/dev/null) || c=
+                    fr=$(printf '%s' "$c" | jsonfilter -e '@.nr.arfcn' 2>/dev/null)
+                    pc=$(printf '%s' "$c" | jsonfilter -e '@.nr.pci' 2>/dev/null)
+                    if [ -n "$fr" ] && [ "$fr" != null ] && [ "$fr" -gt 0 ] 2>/dev/null; then
+                        val="nr:$fr,$pc"
+                    else
+                        fr=$(printf '%s' "$c" | jsonfilter -e '@.lte.earfcn' 2>/dev/null)
+                        pc=$(printf '%s' "$c" | jsonfilter -e '@.lte.pci' 2>/dev/null)
+                        if [ -n "$fr" ] && [ "$fr" != null ] && [ "$fr" -gt 0 ] 2>/dev/null; then
+                            val="lte:$fr,$pc"
+                        else
+                            say "cell lock: no serving cell to lock to"
+                            printf '{"ok":0,"error":"no serving cell to lock to"}\n'
+                            exit 1
+                        fi
+                    fi
+                    rat=${val%%:*}; pair=${val#*:}; fr=${pair%,*}; pc=${pair#*,}
+                    case $rat in nr) p=16 ;; *) p=12 ;; esac
+                    at "AT+SPFORCEFRQ=$p,6,$fr,$pc" 6 >/dev/null
+                    say "cell lock -> $val (SPFORCEFRQ=$p,6,$fr,$pc)"
+                    ;;
+                *:*)
+                    rat=${val%%:*}; pair=${val#*:}; fr=${pair%,*}; pc=${pair#*,}
+                    case $rat in nr) p=16 ;; *) p=12 ;; esac
+                    at "AT+SPFORCEFRQ=$p,6,$fr,$pc" 6 >/dev/null
+                    say "cell lock -> $val"
+                    ;;
+            esac
+            ;;
+        *)
+            echo "unknown kind $kind" >&2; exit 2
+            ;;
+    esac
+    save_state "$kind" "$val"
+    sfun_restart
+    say "apply $kind=$val done"
+}
+
+# ----------------------------------------------------------------- replay
+do_replay() {
+    # boot hook: the AT settings do not all survive a modem power cycle, so re-send
+    # what the dashboard last applied, then one stack restart at the end
+    d=/etc/mu300/dash/lock-state.d
+    ls "$d"/mode "$d"/endc "$d"/lte "$d"/nr >/dev/null 2>&1 || exit 0
+    # the modem needs to be up first (mu300-vendor boots it in parallel)
+    n=0
+    while [ $n -lt 60 ]; do
+        [ -n "$(at 'AT+CFUN?' 4 | grep '^+CFUN:')" ] && break
+        n=$((n + 1)); sleep 2
+    done
+    for kind in endc mode lte nr; do
+        [ -s "$d/$kind" ] || continue
+        val=$(cat "$d/$kind")
+        say "replay $kind=$val"
+        do_apply_quiet "$kind" "$val"
+    done
+    sfun_restart
+    say "replay done"
+}
+# apply without the per-item stack restart (replay does one at the end)
+do_apply_quiet() {
+    kind=$1; val=$2
+    case $kind in
+        mode)
+            set -- $(mode_pair "$val"); m0=$1; gran=$2
+            tm=$(at 'AT+SPTESTMODE?' | sed -n 's/^+SPTESTMODE: *//p' | head -n1)
+            m1=$(echo "$tm" | cut -d, -f2); prim=$(echo "$tm" | cut -d, -f3)
+            [ -n "$m1" ] || m1=134; [ -n "$prim" ] || prim=0
+            [ -n "$gran" ] && at "AT+SP5GRAN=$gran" 6 >/dev/null
+            at "AT+SPTESTMODE=$m0,$m1,$prim" 6 >/dev/null
+            ;;
+        endc) case $val in on) v=1 ;; off) v=2 ;; esac; at "AT+SPENDC=$v" 6 >/dev/null ;;
+        lte)
+            if [ -n "$val" ]; then at "AT+SPLBAND=1,$(lte_masks "$val")" 6 >/dev/null
+            else at 'AT+SPLBAND=1,0,0,0,0,0' 6 >/dev/null; fi ;;
+        nr)
+            if [ -n "$val" ]; then at "AT+SPLBAND=2,$(nr_masks "$val" | awk -F, '{print $1",0,"$2","$3}')" 6 >/dev/null
+            else at 'AT+SPLBAND=2,0,0,0,0' 6 >/dev/null; fi ;;
+        cell) : ;;   # a cell lock is by definition temporary; never replay it
+    esac
+}
+
+case "${1:-}" in
+    get)    do_get ;;
+    apply)  do_apply "${2:-}" "${3:-}" ;;
+    replay) do_replay ;;
+    *)      echo "usage: $0 get | apply KIND VALUE | replay" >&2; exit 2 ;;
+esac

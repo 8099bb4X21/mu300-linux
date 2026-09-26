@@ -89,6 +89,7 @@ CEREG=$(at 'AT+CEREG?' | grep '^+CEREG:' | head -n1)
 C5GREG=$(at 'AT+C5GREG?' | grep '^+C5GREG:' | head -n1)
 CESQ=$(at 'AT+CESQ' | grep '^+CESQ:' | head -n1)
 SP_LTE=$(at 'AT+SPENGMD=0,6,0' | grep -v '^AT' | grep -- '-' | head -n1)
+SP_LTEPHY=$(at 'AT+SPENGMD=0,0,6' | grep -v '^AT' | grep -- '-' | head -n1)
 SP_NR=$(at 'AT+SPENGMD=0,14,1' | grep -v '^AT' | grep -- '-' | head -n1)
 SP_LN=$(at 'AT+SPENGMD=0,6,6' | grep -v '^AT' | grep -- '-' | head -n1)
 SP_NRNB=$(at 'AT+SPQ5GNCELLEX' | sed -n 's/^+SPQ5GNCELLEX: *//p' | head -n1)
@@ -110,20 +111,23 @@ fi
 # dB values are centi-units and are divided by 100 inside the awk fragments below.
 # (No backslash line continuations inside the awk: comma-newline is portable,
 # busybox awk does not promise the GNU one.)
-sp_fragment() {  # sp_fragment MODE LINE  (MODE: lte | nr | ltenb)
+sp_fragment() {  # sp_fragment MODE LINE [PHYLINE]  (MODE: lte | nr | ltenb)
     [ -n "$2" ] || { echo null; return; }
-    awk -v mode="$1" -v line="$2" '
-        function norm(l,   s, n, i) {
+    awk -v mode="$1" -v line="$2" -v phy="${3:-}" '
+        function norm(l, arr,   s, n, i) {
             s = l; gsub(/\r/, "", s)
             gsub(/,-/, ",+", s); gsub(/--/, "-+", s); sub(/^-/, "+", s)
             n = split(s, raw, "-")
-            for (i = 1; i <= n; i++) { t[i-1] = raw[i]; gsub(/ /, "", t[i-1]) }
+            for (i = 1; i <= n; i++) { arr[i-1] = raw[i]; gsub(/ /, "", arr[i-1]) }
             return n
         }
         # scalar part of a token, sign restored ("+11747" -> -11747)
         function f(x,   v) { v = x; sub(/,.*/, "", v); gsub(/\+/, "-", v); return (v == "" || v == "NA" || v == "N/A") ? "" : v+0 }
         function num(x) { return (x == "") ? "null" : x }
         function c1(x) { if (x == "") return "null"; return sprintf("%.1f", x/100) }
+        # large ids (NR cell id is 36 bits) must not go through %d: busybox awk
+        # casts to int32 and the dashboard showed them negative (measured)
+        function u64(x) { if (x == "") return "null"; return sprintf("%.0f", x) }
         function lteband(fr,   a,b,r,i,n) {
             n = split("1:0-599 2:600-1199 3:1200-1949 4:1950-2399 5:2400-2649 7:2750-3449 8:3450-3799 12:5010-5179 13:5180-5279 14:5280-5379 17:5730-5849 18:5850-5999 19:6000-6149 20:6150-6449 25:8040-8689 26:8690-9039 27:9040-9209 28:9210-9659 30:9770-9869 31:9870-9919 33:36000-36199 34:36200-36349 35:36350-36949 36:36950-37549 37:37550-37749 38:37750-38249 39:38250-38649 40:38650-39649 41:39650-41589 42:41590-43589 43:43590-45589 44:45590-46589 46:46790-54539 47:54540-55239 48:55240-56739 49:56740-58239 50:58240-59089 51:59090-59139 65:65536-66435 66:66436-67335", a, " ")
             for (i = 1; i <= n; i++) { split(a[i], b, ":"); split(b[2], r, "-")
@@ -137,7 +141,7 @@ sp_fragment() {  # sp_fragment MODE LINE  (MODE: lte | nr | ltenb)
             return 0
         }
         BEGIN {
-            n = norm(line)
+            n = norm(line, t)
             if (mode == "lte") {
                 band = f(t[0]); earfcn = f(t[1]); pci = f(t[2])
                 if ((band == 0 || band == "") && earfcn == 0 && pci == 0) { print "null"; exit }
@@ -148,16 +152,38 @@ sp_fragment() {  # sp_fragment MODE LINE  (MODE: lte | nr | ltenb)
                 enb = f(t[11]); cidl = f(t[12])
                 tac = f(t[28]); if (tac == "" || tac == 0) tac = f(t[29])
                 ca = t[13]
-                printf "{\"band\":%d,\"earfcn\":%d,\"pci\":%d,\"rsrp\":%s,\"rsrq\":%s,\"bw\":\"%s\",\"enb\":%s,\"cid\":%s,\"tac\":\"%s\",\"ca\":\"%s\"}",
+                # 0,0,6 carries the LTE PHY: token 2 = SINR (centi-dB), 3/4 = the UL/DL
+                # MCS histograms (the dominant index is the live MCS), 5/6 = BLER.
+                # Layout per ufi_tools, range-guarded: this device answers all zeros
+                # while camped on 5G SA (no LTE anchor), and an idle histogram is all
+                # zeros too - both mean "no reading", not "0 dB".
+                psinr = pmcs = pumcs = publer = pdbler = ""
+                if (phy != "") {
+                    np = norm(phy, u)
+                    s2 = f(u[2])
+                    if (s2 != "" && s2 >= -2000 && s2 <= 4000) psinr = sprintf("%.1f", s2/100)
+                    publer = c1(f(u[5])); pdbler = c1(f(u[6]))
+                    for (dir = 3; dir <= 4; dir++) {
+                        m2 = split(u[dir], h, ","); best = -1; bestn = 0; total = 0
+                        for (i = 1; i <= m2; i++) { hv = h[i]+0; total += hv
+                            if (hv > bestn) { bestn = hv; best = i - 1 } }
+                        if (total > 0 && best >= 0) {
+                            if (dir == 4) pmcs = best; else pumcs = best
+                        }
+                    }
+                }
+                printf "{\"band\":%d,\"earfcn\":%d,\"pci\":%d,\"rsrp\":%s,\"rsrq\":%s,\"bw\":\"%s\",\"enb\":%s,\"cid\":%s,\"tac\":\"%s\",\"ca\":\"%s\",\"sinr\":%s,\"dl_mcs\":%s,\"ul_mcs\":%s,\"dl_bler\":%s,\"ul_bler\":%s}",
                     band, earfcn, pci, c1(f(t[3])), c1(f(t[4])), bw, num(enb), num(cidl),
-                    (tac=="")?"":sprintf("%x",tac), (index(ca,"DL_CA")?"DL_CA":"")
+                    (tac=="")?"":sprintf("%x",tac), (index(ca,"DL_CA")?"DL_CA":""),
+                    (psinr == "" ? "null" : psinr),
+                    (pmcs == "" ? "null" : pmcs), (pumcs == "" ? "null" : pumcs), pdbler, publer
             } else if (mode == "nr") {
                 band = f(t[0]); arfcn = f(t[1]); pci = f(t[2])
                 if ((band == 0 || band == "") && arfcn == 0 && pci == 0) { print "null"; exit }
                 bw = f(t[7])
                 printf "{\"band\":%d,\"arfcn\":%d,\"pci\":%d,\"rsrp\":%s,\"rsrq\":%s,\"sinr\":%s,\"bw_mhz\":%s,\"gnb\":%s,\"cid\":%s,\"ul_mcs\":%s,\"dl_mcs\":%s,\"ul_bler\":%s,\"dl_bler\":%s}",
                     band, arfcn, pci, c1(f(t[3])), c1(f(t[4])), c1(f(t[15])), num(bw),
-                    num(f(t[8])), num(f(t[9])), num(f(t[16])), num(f(t[17])), c1(f(t[18])), c1(f(t[19]))
+                    u64(f(t[8])), u64(f(t[9])), num(f(t[16])), num(f(t[17])), c1(f(t[18])), c1(f(t[19]))
             } else {   # ltenb: eight 12-field slots, first four are EARFCN/PCI/RSRP/RSRQ
                 out = ""
                 for (s = 0; s < 8; s++) {
@@ -230,7 +256,7 @@ qos_fragment() {  # "+CGEQOSRDP: 1,9,..OK" (this modem glues OK onto the line)
               ($8 != "" && $8 > 0) ? sprintf("%.1f", $8/1000) : "null" }'
 }
 
-LTE=$(sp_fragment lte "$SP_LTE")
+LTE=$(sp_fragment lte "$SP_LTE" "$SP_LTEPHY")
 NR=$(sp_fragment nr "$SP_NR")
 LN=$(sp_fragment ltenb "$SP_LN")
 NN=$(nr_neighbours "$SP_NRNB")

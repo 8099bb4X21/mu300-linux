@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+# Re-apply the dashboard's saved modem locks (network mode / EN-DC / band locks)
+# once after boot: these AT settings do not all survive a modem power cycle, so
+# whatever /opt/mu300/bin/mu300-dash-lock last applied is replayed here. The lock
+# replay itself waits for the modem to answer, so it can start early.
+START=96
+USE_PROCD=1
+export PATH="$PATH:/opt/mu300/busybox-bin"
+
+start_service() {
+	[ -d /etc/mu300/dash/lock-state.d ] || return 0
+	procd_open_instance lockreplay
+	procd_set_param command /opt/mu300/bin/mu300-dash-lock replay
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
