@@ -1,0 +1,165 @@
+#!/bin/sh
+# mu300dash -- the rpcd backend of the LuCI dashboard (luci-app-mu300dash).
+#
+# Called by LuCI as:  ubus call mu300dash <method> '{...}'
+#   rpcd runs this script as:  mu300dash call <method>   with the params JSON on stdin,
+#   and `mu300dash list` must print the method declaration blob.
+# The reply is one JSON line on stdout.
+#
+# Methods:
+#   status [refresh]  system snapshot (mu300-dash-info, fast, no AT) + the cellular
+#                     cache (mu300-dash-cell) with its age. A stale cache triggers a
+#                     background refresh (setsid) - the call itself NEVER waits for AT:
+#                     LuCI's /admin/ubus endpoint kills a call after 30 s, and an AT
+#                     round inside a page request starves the dial watchdog (V50 lesson).
+#   act op [arg]      mu300-dash-act; slow ops run detached via setsid and return
+#                     immediately ("started":1), fast ones run inline.
+#   at cmd            one raw AT command through mu300-at, with the same guards the
+#                     V50 panel used: must start with AT, no ";" command chaining, and
+#                     AT+SPENGMD=0,1,0 is hard-denied (it switches the port into
+#                     streaming mode and kills the AT channel until a reboot).
+#                     Reply includes the raw modem output; last 40 commands are kept
+#                     in /tmp/mu300-dash/at-history.
+#   at_history        that history, raw text.
+#
+# The AT lock wait is capped well below the 30 s endpoint limit so a busy channel
+# answers "busy" instead of dying; the frontend simply retries those.
+
+export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
+
+DASH=${MU300_DASH_BIN:-/opt/mu300/bin}
+DIR=${MU300_DASH_DIR:-/tmp/mu300-dash}
+CELL=$DIR/cell.json
+COLLECT_LCK=$DIR/collect.lck
+HIST=$DIR/at-history
+TTL=${MU300_DASH_TTL:-20}
+MU300_AT_LOCK_WAIT=12
+export MU300_AT_LOCK_WAIT
+
+INPUT=$(cat 2>/dev/null)
+inp() {  # inp JSONPATH [default] -> param value
+    _v=$(printf '%s' "$INPUT" | jsonfilter -e "$1" 2>/dev/null)
+    case $_v in ''|null) _v=${2-} ;; esac
+    printf '%s' "$_v"
+}
+esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r'; }
+now() { date +%s; }
+collecting() {
+    _p=$(cat "$COLLECT_LCK/pid" 2>/dev/null)
+    [ -n "$_p" ] && [ -d "/proc/$_p" ] &&
+        tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null | grep -q mu300-dash-cell
+}
+
+m_status() {
+    local info age busy=0
+    info=$("$DASH/mu300-dash-info" 2>/dev/null)
+    [ -n "$info" ] || info='{"error":"mu300-dash-info failed"}'
+    age=-1
+    if [ -s "$CELL" ]; then
+        age=$(( $(now) - $(date -r "$CELL" +%s 2>/dev/null || echo 0) ))
+    fi
+    collecting && busy=1
+    if [ "$age" -gt "$TTL" ] && [ "$busy" = 0 ]; then
+        # kick a background refresh; the page gets the current (stale) data now and
+        # the fresh round lands within a couple of seconds
+        setsid "$DASH/mu300-dash-cell" >/dev/null 2>&1 &
+        busy=1
+    fi
+    if [ -s "$CELL" ]; then
+        printf '{"info":%s,"cell":%s,"cell_age":%d,"refreshing":%d}\n' \
+            "$info" "$(cat "$CELL")" "$age" "$busy"
+    else
+        printf '{"info":%s,"cell":null,"cell_age":%d,"refreshing":%d}\n' "$info" "$age" "$busy"
+    fi
+}
+
+m_act() {
+    local op arg
+    op=$(inp '@.op')
+    arg=$(inp '@.arg')
+    case "$op" in
+        radio)      # the SFUN dance can run half a minute: never inside the request
+            setsid "$DASH/mu300-dash-act" radio "$arg" >/dev/null 2>&1 &
+            printf '{"ok":1,"started":1,"op":"radio %s"}\n' "$arg"
+            ;;
+        modem-reset|reboot|vpn)
+            setsid "$DASH/mu300-dash-act" "$op" "$arg" >/dev/null 2>&1 &
+            printf '{"ok":1,"started":1,"op":"%s"}\n' "$op$arg"
+            ;;
+        data|wifi)
+            "$DASH/mu300-dash-act" "$op" "$arg" 2>/dev/null || true
+            ;;
+        *)
+            printf '{"ok":0,"error":"unknown op"}\n'
+            ;;
+    esac
+}
+
+m_at() {
+    local cmd reply
+    cmd=$(inp '@.cmd')
+    case "$cmd" in
+        AT+SPENGMD=0,1,0)
+            printf '{"ok":0,"error":"denied: this command wedges the AT port until a reboot"}\n'
+            return
+            ;;
+        AT*|at*) ;;
+        *)
+            printf '{"ok":0,"error":"must be an AT command"}\n'
+            return
+            ;;
+    esac
+    case "$cmd" in *';'*)
+        printf '{"ok":0,"error":"no \";\" command chaining"}\n'
+        return
+        ;;
+    esac
+    # mu300-at itself gives up waiting for the lock and says so; turn that into a
+    # retryable "busy" instead of letting the page show a dead console
+    reply=$(mu300-at -t 8 "$cmd" 2>&1)
+    case "$reply" in *"mu300-at: busy"*)
+        printf '{"ok":0,"busy":1,"error":"AT 通道正忙，命令未发出，请重试"}\n'
+        return
+        ;;
+    esac
+    mkdir -p "$DIR" 2>/dev/null
+    printf '%s %s\n' "$(date '+%m-%d %H:%M:%S')" "$cmd" >> "$HIST"
+    tail -n 40 "$HIST" > "$HIST.t" 2>/dev/null && mv "$HIST.t" "$HIST"
+    printf '{"ok":1,"cmd":"%s","reply":"%s"}\n' "$(esc "$cmd")" \
+        "$(printf '%s' "$reply" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'NR>1 { printf "\\n" } { printf "%s", $0 }')"
+}
+
+m_at_history() {
+    printf '{"history":"%s"}\n' \
+        "$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' "$HIST" 2>/dev/null | awk 'NR>1 { printf "\\n" } { printf "%s", $0 }')"
+}
+
+do_list() {
+    cat <<EOF
+{
+	"status": { },
+	"act": { "op": "String", "arg": "String" },
+	"at": { "cmd": "String" },
+	"at_history": { }
+}
+EOF
+}
+
+case "${1:-}" in
+list)
+    do_list
+    ;;
+call)
+    case ${2:-} in
+        status)     m_status ;;
+        act)        m_act ;;
+        at)         m_at ;;
+        at_history) m_at_history ;;
+        *)          printf '{"ok":0,"error":"no such method"}\n' ;;
+    esac
+    ;;
+*)
+    echo "usage: $0 {list|call <method>}" >&2
+    exit 2
+    ;;
+esac

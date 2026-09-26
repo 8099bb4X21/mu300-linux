@@ -1,0 +1,13 @@
+{
+	"admin/home": {
+		"title": "状态看板",
+		"order": 5,
+		"action": {
+			"type": "view",
+			"path": "mu300/home"
+		},
+		"depends": {
+			"acl": [ "luci-app-mu300dash" ]
+		}
+	}
+}
