@@ -162,6 +162,7 @@ var CSS = `
 .mud-kpi{background:var(--surface-sunken,rgba(127,127,127,.06));border-radius:var(--radius-base,.5rem);padding:9px 12px}
 .mud-kpi b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums;font-weight:700;line-height:1.25}
 .mud-kpi span{font-size:.68rem;color:var(--text-muted,var(--text-light,#777))}
+.mud-sub{font-size:.68rem;color:var(--text-muted,var(--text-light,#777));font-variant-numeric:tabular-nums;margin-top:3px}
 .mud-meter{height:5px;border-radius:3px;background:var(--surface-sunken,rgba(127,127,127,.15));overflow:hidden;margin:3px 0 1px}
 .mud-meter i{display:block;height:100%;border-radius:3px}
 .mud-freq{display:flex;align-items:center;font-size:.76rem;font-variant-numeric:tabular-nums;padding:1px 0}

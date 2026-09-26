@@ -96,7 +96,7 @@ return view.extend({
   <div class="mud-temp" id="mud-temps"></div>
   <div class="mud-kpis" style="margin-top:8px">
     <div class="mud-kpi"><b id="mud-cpu">--</b><span>CPU 占用</span><div class="mud-meter"><i id="mud-cpu-bar" style="background:var(--brand,var(--primary,#3b82f6))"></i></div></div>
-    <div class="mud-kpi"><b id="mud-ram">--</b><span>内存</span><div class="mud-meter"><i id="mud-ram-bar" style="background:var(--info,#0ea5e9)"></i></div></div>
+    <div class="mud-kpi"><b id="mud-ram">--</b><span>内存</span><div class="mud-meter"><i id="mud-ram-bar" style="background:var(--info,#0ea5e9)"></i></div><div class="mud-sub" id="mud-ram-sub">--</div></div>
     <div class="mud-kpi"><b id="mud-disk">--</b><span>存储</span><div class="mud-meter"><i id="mud-disk-bar" style="background:var(--warning,#f59e0b)"></i></div></div>
     <div class="mud-kpi"><b id="mud-batt">--</b><span id="mud-batt-l">电源</span></div>
   </div>
@@ -433,6 +433,7 @@ return view.extend({
 		if (i.mem && i.mem.total_kb) {
 			var used = i.mem.total_kb - i.mem.avail_kb, pct = Math.round(used * 100 / i.mem.total_kb);
 			M.set('ram', pct + '%'); M.v('ram-bar').style.width = pct + '%';
+			M.set('ram-sub', '共 ' + M.fmtBytes(i.mem.total_kb * 1024) + ' · 余 ' + M.fmtBytes(i.mem.avail_kb * 1024));
 		}
 		if (i.storage && i.storage.total_kb) {
 			var pct2 = Math.round(i.storage.used_kb * 100 / i.storage.total_kb);
