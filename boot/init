@@ -218,6 +218,22 @@ log "stage=persist-target dev=${bootb:-none} misc=${misc:-none}"
 persist
 (while :; do sleep 15; persist; done) &
 setup_usb_gadget
+
+# Early Wi-Fi: the WCN firmware needs minutes to warm up before it will beacon, and that
+# clock only starts when wcn_bsp loads. Loading it here (initramfs, right after the gadget)
+# instead of mu300-hw in the rootfs starts the warm-up ~35 s earlier, in parallel with the
+# rest of the boot; the driver also reads its firmware directly from the wcnmodem partition,
+# which needs the by-name links before it probes.
+mkdir -p /dev/block/by-name
+for u in /sys/class/block/mmcblk0p*/uevent; do
+    d=$(basename "$(dirname "$u")"); n=$(sed -n 's/^PARTNAME=//p' "$u" 2>/dev/null)
+    ln -sf /dev/$d /dev/block/$d; [ -n "$n" ] && ln -sf /dev/$d /dev/block/by-name/$n
+done
+for m in wcn_bsp sprd_wlan_combo; do
+    f=/linux-modules/$m.ko
+    [ -f "$f" ] && insmod "$f" 2>/dev/null && log "stage=early-wifi $m loaded"
+done
+mdev -s
 ROOT_OFFSET=27762098176   # linux-boot/rootfs-region.env; outside every GPT partition
 mkdir -p /newroot
 # The ext4 area holds one or more systems: /ubuntu, /openwrt (selected by /.mu300/boot-os), or a single

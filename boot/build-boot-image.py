@@ -100,6 +100,7 @@ def main():
     ap.add_argument('--logdw', required=True, type=Path, help='tools/logdw build (static arm64)')
     ap.add_argument('--ueventd-perms', required=True, type=Path)
     ap.add_argument('--android-subset', type=Path, help='directory produced by android-vendor/extract-subset.sh')
+    ap.add_argument('--firmware', type=Path, help='wifi firmware dir (wcnmodem.bin, wifi_board_config*.ini...) copied to lib/firmware for early wifi bring-up')
     ap.add_argument('--out', required=True, type=Path)
     a = ap.parse_args()
 
@@ -118,7 +119,12 @@ def main():
         'etc/misc-bc-slot-b-trial.bin': (slot_b_bc, stat.S_IFREG | 0o644),
         'etc/module-order': (a.module_order.read_bytes(), stat.S_IFREG | 0o644),
     }
-    dirs = {'bin', 'sbin', 'etc', 'proc', 'sys', 'dev', 'run', 'tmp', 'root', 'config', 'linux-modules'}
+    dirs = {'bin', 'sbin', 'etc', 'proc', 'sys', 'dev', 'run', 'tmp', 'root', 'config', 'linux-modules', 'lib/firmware'}
+    if a.firmware and a.firmware.is_dir():
+        for f in sorted(a.firmware.rglob('*')):
+            if f.is_file():
+                rel = 'lib/firmware/' + str(f.relative_to(a.firmware))
+                files[rel] = (f.read_bytes(), stat.S_IFREG | 0o644)
     for name in a.module_order.read_text().split():
         ko = a.modules / name
         if not ko.exists():
