@@ -191,6 +191,15 @@ up_locked() {
     if [ "${MU300_PDP_TYPE:-IP}" = IP ] && [ -w "/proc/sys/net/ipv6/conf/$IFACE/disable_ipv6" ]; then
         echo 1 > "/proc/sys/net/ipv6/conf/$IFACE/disable_ipv6"
     fi
+    # IPV4V6: the carrier's RA is the only way this bearer ever gets its IPv6 address - measured on
+    # China Telecom IoT (ctiot): CGCONTRDP/CGPADDR keep a ::1-style placeholder forever even with the
+    # context active AND CGDATA connected, but with accept_ra enabled the kernel solicits and the
+    # GGSN answers with a real 240e::/20 prefix (SLAAC, default route included). 2, not 1: this is a
+    # router (forwarding on), and netifd leaves the knob at 0 for a v4-only proto.
+    if [ "${MU300_PDP_TYPE:-IP}" != IP ]; then
+        [ -w "/proc/sys/net/ipv6/conf/$IFACE/disable_ipv6" ] && echo 0 > "/proc/sys/net/ipv6/conf/$IFACE/disable_ipv6"
+        [ -w "/proc/sys/net/ipv6/conf/$IFACE/accept_ra" ] && echo 2 > "/proc/sys/net/ipv6/conf/$IFACE/accept_ra"
+    fi
     if [ "${MU300_NETIFD:-0}" = 1 ]; then
         # OpenWrt: netifd (proto mu300cell) configures the address, routes, DNS and firewall itself
         printf 'IFACE=%s\nIP=%s\nPREFIX=%s\nDNS1=%s\nDNS2=%s\n' "$IFACE" "$ip4" "$prefix" "$dns1" "$dns2"

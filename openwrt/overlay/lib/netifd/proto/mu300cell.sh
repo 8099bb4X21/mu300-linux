@@ -57,6 +57,15 @@ proto_mu300cell_setup() {
 	# router solicitations and multicast into it for nothing. See docs/FINDINGS.md 13f.
 	[ "${pdptype:-IP}" = IP ] && [ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
 		echo 1 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
+	# With a dual-stack context the IPv6 address only ever arrives by SLAAC from the carrier's RA
+	# (CGCONTRDP stays a placeholder - measured on ctiot), and netifd keeps accept_ra at 0 for this
+	# v4-only proto, so the solicitation is never sent. 2 = accept even while forwarding.
+	[ "${pdptype:-IP}" != IP ] && {
+		[ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
+			echo 0 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
+		[ -w "/proc/sys/net/ipv6/conf/$ifname/accept_ra" ] &&
+			echo 2 > "/proc/sys/net/ipv6/conf/$ifname/accept_ra"
+	}
 	[ -w /sys/class/leds/sc27xx:blue/brightness ] && echo 255 > /sys/class/leds/sc27xx:blue/brightness
 	logger -t mu300cell "connected: $ip/${prefix:-32} on $ifname"
 }

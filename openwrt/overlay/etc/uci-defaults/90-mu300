@@ -10,7 +10,37 @@ delete network.wan6
 set network.wan=interface
 set network.wan.proto='mu300cell'
 set network.wan.apn=''
+set network.wan.pdptype='IPV4V6'
 UCI
+# IPv6 the way this carrier actually serves it (China Telecom IoT, measured): the context is
+# dual-stack but CGCONTRDP only ever shows a placeholder - the real public address arrives by
+# SLAAC from the carrier's RA on the bearer, and clients get that same /64 relayed onto the LAN.
+# - wan.pdptype IPV4V6 + mu300cell.sh enable accept_ra=2 on the bearer (the RA is solicited)
+# - network.wan6 (device sipa_eth0) + dhcp.wan6 master: odhcpd relays RS/RA both ways,
+#   so clients SLAAC real public addresses out of the carrier's /64
+# - firewall masq6: egress NAT66 through the device's own public address (the carrier routes
+#   one address per bearer; Android's tethering does the same)
+# - lan ip6assign + a ULA: a local range for the LAN itself
+# - ndp-learn (init.d/mu300-ndp) pins host routes for each client public address: without
+#   them NAT66 replies follow sipa_eth0's connected /64 and never reach the client
+uci -q batch <<UCI
+set network.wan6=interface
+set network.wan6.device='sipa_eth0'
+set network.wan6.proto='none'
+set network.lan.ip6assign='60'
+set network.globals.ula_prefix='fd66:1126:7956::/48'
+set dhcp.wan6=dhcp
+set dhcp.wan6.interface='wan6'
+set dhcp.wan6.master='1'
+set dhcp.wan6.ra='relay'
+set dhcp.wan6.dhcpv6='relay'
+set dhcp.wan6.ndp='relay'
+set dhcp.lan.ra='relay'
+set dhcp.lan.dhcpv6='relay'
+set dhcp.lan.ndp='relay'
+UCI
+zone=$(uci -q show firewall | sed -n "s/^\(firewall\.@zone\[[0-9]*\]\)\.name='wan'$/\1/p")
+[ -n "$zone" ] && uci -q set $zone.masq6='1'
 # the armsr default bridges eth0; the MU300 LAN bridge carries the USB gadget (Wi-Fi joins via wireless config)
 dev=$(uci -q show network | sed -n "s/^network\.\(@device\[[0-9]*\]\)\.name='br-lan'$/\1/p" | head -1)
 if [ -n "$dev" ]; then
@@ -19,5 +49,7 @@ if [ -n "$dev" ]; then
 fi
 uci commit system
 uci commit network
+uci commit dhcp
+uci commit firewall
 grep -q '^ttyGS0:' /etc/inittab || echo 'ttyGS0::askfirst:/usr/libexec/login.sh' >> /etc/inittab
 exit 0
