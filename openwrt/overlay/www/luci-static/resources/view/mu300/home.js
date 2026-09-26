@@ -96,7 +96,7 @@ return view.extend({
   <div class="mud-temp" id="mud-temps"></div>
   <div class="mud-kpis" style="margin-top:8px">
     <div class="mud-kpi"><b id="mud-cpu">--</b><span>CPU 占用</span><div class="mud-meter"><i id="mud-cpu-bar" style="background:var(--brand,var(--primary,#3b82f6))"></i></div></div>
-    <div class="mud-kpi"><b id="mud-ram">--</b><span>内存</span><div class="mud-meter"><i id="mud-ram-bar" style="background:var(--info,#0ea5e9)"></i></div><div class="mud-sub" id="mud-ram-sub">--</div></div>
+    <div class="mud-kpi"><b id="mud-ram">--</b><span>内存 · <span class="mud-sub" id="mud-ram-sub">--</span></span><div class="mud-meter"><i id="mud-ram-bar" style="background:var(--info,#0ea5e9)"></i></div></div>
     <div class="mud-kpi"><b id="mud-disk">--</b><span>存储</span><div class="mud-meter"><i id="mud-disk-bar" style="background:var(--warning,#f59e0b)"></i></div></div>
     <div class="mud-kpi"><b id="mud-batt">--</b><span id="mud-batt-l">电源</span></div>
   </div>
@@ -109,6 +109,7 @@ return view.extend({
         <div class="mud-r"><span class="mud-k">加密</span><span class="mud-v" id="mud-wenc">--</span></div>
         <div class="mud-r"><span class="mud-k">隐藏 SSID</span><span class="mud-v" id="mud-whid">--</span></div>
         <div class="mud-r"><span class="mud-k">国家</span><span class="mud-v" id="mud-wcountry">--</span></div>
+        <div class="mud-r"><span class="mud-k">AP 状态</span><span class="mud-v" id="mud-whostapd">--</span></div>
         <div class="mud-r"><span class="mud-k">USB 网络</span><span class="mud-v" id="mud-wusb">--</span></div>
         <div class="mud-r"><span class="mud-k">连接跟踪</span><span class="mud-v" id="mud-conntrack">--</span></div>
         <div class="mud-r"><span class="mud-k">LAN 地址</span><span class="mud-v" id="mud-lanip">--</span></div>
@@ -122,7 +123,6 @@ return view.extend({
         <div class="mud-r"><span class="mud-k">设备型号</span><span class="mud-v" id="mud-model">--</span></div>
         <div class="mud-r"><span class="mud-k">系统</span><span class="mud-v" id="mud-fwos">--</span></div>
         <div class="mud-r"><span class="mud-k">调制解调器</span><span class="mud-v" id="mud-modem">--</span></div>
-        <div class="mud-r"><span class="mud-k">AP 状态</span><span class="mud-v" id="mud-whostapd">--</span></div>
         <div class="mud-r"><span class="mud-k">运营商</span><span class="mud-v" id="mud-carr">--</span></div>
         <div class="mud-r"><span class="mud-k">PLMN</span><span class="mud-v" id="mud-plmn">--</span></div>
         <div class="mud-r"><span class="mud-k">IMEI</span><span class="mud-v" id="mud-imei">--</span></div>
