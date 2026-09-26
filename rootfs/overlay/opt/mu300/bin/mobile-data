@@ -146,8 +146,10 @@ up() {
 up_locked() {
     modem_stack || { echo "no modem stack in this kernel ($(uname -r))" >&2; exit 3; }
     rm -f /run/mu300-mobile-data-down
+    led-status modem 2>/dev/null || true
     tty_setup
     radio_on
+    led-status registering 2>/dev/null || true
     for n in $(seq 1 200); do
         at 'AT+CEREG?' | grep -qE '\+CEREG: [0-9],(1|5)' && break
         # the radio can be switched off again meanwhile (modem reset), so re-check it every 10 s
@@ -231,13 +233,16 @@ table ip mu300_nat {
     }
 }
 NFT
-    led 255
+    # LED: white for 5G NR (the CEREG AcT field ends in 13 for E-UTRA-NR dual connectivity),
+    # blue for everything else (LTE/3G/2G)
+    acct=$(at 'AT+CEREG?' 2>/dev/null | tail -1)
+    case "$acct" in *13) led-status online-5g 2>/dev/null ;; *) led-status online-4g 2>/dev/null ;; esac
     echo "mobile data up on $IFACE ($(at 'AT+COPS?' | sed -n 's/^+COPS: [0-9],[0-9],"\([^"]*\)".*/\1/p'))"
 }
 
 down() {
     touch /run/mu300-mobile-data-down   # tells watch not to reconnect
-    led 0
+    led-status offline 2>/dev/null
     nft delete table ip mu300_nat 2>/dev/null || true
     ip route del default dev "$IFACE" 2>/dev/null || true
     ip addr flush dev "$IFACE" 2>/dev/null || true

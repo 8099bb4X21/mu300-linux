@@ -1,0 +1,130 @@
+#!/bin/sh
+# MU300/V50 status LED controller.
+#
+# The F50 has three LED channels under sc27xx:*, where "green" is physically WHITE
+# (verified: the vendor's own userspace treats it as white). The V50 has separate
+# /sys/class/leds/{red,white,blue}/ paths. This script auto-detects both.
+#
+# States (one multi-color LED, priority order):
+#   boot           blue fast blink     - "Linux is booting" (clearly not Android)
+#   modem          blue slow blink     - modem CP initializing
+#   registering    white blink         - registering on the network
+#   online-4g      solid blue          - data connected, LTE
+#   online-5g      solid white         - data connected, 5G NR
+#   offline        solid red           - booted, no data
+#   thermal        red blink           - SoC above 85C (overrides network color)
+#   wifi-flash     white double-blink  - one-shot: WiFi just came up (then restores)
+#
+# Usage:  led-status <state>          set a state
+#         led-status wifi-on/off     persistent green-white tint for WiFi (mixes with network color)
+#         led-status current         print the last set state
+
+export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
+
+# --- detect LED paths (F50 sc27xx vs V50 plain)
+if [ -d /sys/class/leds/sc27xx:blue ]; then
+    LED_R=/sys/class/leds/sc27xx:red/brightness
+    LED_W=/sys/class/leds/sc27xx:green/brightness   # physically white on the F50
+    LED_B=/sys/class/leds/sc27xx:blue/brightness
+elif [ -d /sys/class/leds/blue ]; then
+    LED_R=/sys/class/leds/red/brightness
+    LED_W=/sys/class/leds/white/brightness
+    LED_B=/sys/class/leds/blue/brightness
+else
+    exit 0
+fi
+[ -w "$LED_B" ] || exit 0
+
+STATE_FILE=/run/led-status.state
+WIFI_FILE=/run/led-status.wifi
+BLINK_PID=/run/led-status.blink.pid
+
+# stop any previous user-space blinker
+[ -f "$BLINK_PID" ] && kill "$(cat "$BLINK_PID")" 2>/dev/null
+rm -f "$BLINK_PID"
+
+# clear hardware triggers (a trigger left on would fight our brightness writes)
+for f in $(dirname "$LED_R")/trigger $(dirname "$LED_W")/trigger $(dirname "$LED_B")/trigger; do
+    echo none > "$f" 2>/dev/null
+done
+
+set_rgb() {  # R W B (0-255)
+    echo "${1:-0}" > "$LED_R" 2>/dev/null
+    echo "${2:-0}" > "$LED_W" 2>/dev/null
+    echo "${3:-0}" > "$LED_B" 2>/dev/null
+}
+
+start_blink() {  # R W B ON_MS OFF_MS
+    _r=$1; _w=$2; _b=$3; _on=$4; _off=$5
+    (
+        while :; do
+            echo "$_r" > "$LED_R" 2>/dev/null
+            echo "$_w" > "$LED_W" 2>/dev/null
+            echo "$_b" > "$LED_B" 2>/dev/null
+            usleep "$_on" 2>/dev/null || sleep 1
+            echo 0 > "$LED_R" 2>/dev/null
+            echo 0 > "$LED_W" 2>/dev/null
+            echo 0 > "$LED_B" 2>/dev/null
+            usleep "$_off" 2>/dev/null || sleep 1
+        done
+    ) &
+    echo $! > "$BLINK_PID"
+}
+
+# restore the steady-state color (network status + optional WiFi tint)
+restore_steady() {
+    state=$(cat "$STATE_FILE" 2>/dev/null || echo offline)
+    case "$state" in
+        online-4g)   set_rgb 0 0 255 ;;
+        online-5g)   set_rgb 0 255 0 ;;
+        offline)     set_rgb 255 0 0 ;;
+        *)           set_rgb 0 0 255 ;;
+    esac
+    # WiFi tint: add a faint white when the AP is up, so "4G + WiFi" and "4G only" differ
+    if [ -f "$WIFI_FILE" ] && [ "$(cat "$WIFI_FILE")" = on ]; then
+        cur_w=$(cat "$LED_W" 2>/dev/null || echo 0)
+        [ "$cur_w" -lt 80 ] && echo 80 > "$LED_W" 2>/dev/null
+    fi
+}
+
+case "${1:-}" in
+boot)           # fast blue blink: Linux booting (not Android - different rhythm)
+    echo boot > "$STATE_FILE"
+    set_rgb 0 0 0
+    start_blink 0 0 255 150000 150000 ;;
+modem)          # slow blue blink: CP initializing
+    echo modem > "$STATE_FILE"
+    set_rgb 0 0 0
+    start_blink 0 0 255 500000 500000 ;;
+registering)    # white blink: registering on the network
+    echo registering > "$STATE_FILE"
+    set_rgb 0 0 0
+    start_blink 0 255 0 300000 300000 ;;
+online-4g)      # solid blue: LTE data
+    echo online-4g > "$STATE_FILE"
+    restore_steady ;;
+online-5g)      # solid white: 5G NR data
+    echo online-5g > "$STATE_FILE"
+    restore_steady ;;
+offline)        # solid red: no data
+    echo offline > "$STATE_FILE"
+    restore_steady ;;
+thermal)        # red blink: SoC too hot (called by thermal-guard)
+    start_blink 255 0 0 200000 200000 ;;
+wifi-on)
+    echo on > "$WIFI_FILE"
+    # one-shot double white flash, then back to steady state
+    set_rgb 0 255 0; usleep 120000 2>/dev/null || sleep 1
+    set_rgb 0 0 0;   usleep 120000 2>/dev/null || sleep 1
+    set_rgb 0 255 0; usleep 120000 2>/dev/null || sleep 1
+    set_rgb 0 0 0;   sleep 1
+    restore_steady ;;
+wifi-off)
+    echo off > "$WIFI_FILE"
+    restore_steady ;;
+current)
+    cat "$STATE_FILE" 2>/dev/null || echo boot ;;
+*)
+    echo "usage: $0 boot|modem|registering|online-4g|online-5g|offline|thermal|wifi-on|wifi-off|current" >&2
+    exit 1 ;;
+esac

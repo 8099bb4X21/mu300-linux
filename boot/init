@@ -57,6 +57,15 @@ persist() {
 }
 log "stage=init-start pid=$$"
 
+# Boot LED: blue fast blink - says "this is Linux booting" before anything else works.
+(
+    B=/sys/class/leds/sc27xx:blue/brightness
+    while :; do
+        echo 255 > "$B" 2>/dev/null; sleep 0.15
+        echo 0 > "$B" 2>/dev/null; sleep 0.15
+    done
+) &
+
 mkdir -p /dev/pts
 mount -t devpts -o mode=0620,ptmxmode=0666 devpts /dev/pts
 ln -sf pts/ptmx /dev/ptmx

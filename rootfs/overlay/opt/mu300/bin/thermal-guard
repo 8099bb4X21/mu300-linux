@@ -37,11 +37,15 @@ while :; do
     t=$(hottest)
     if [ "$t" -ge "$CRIT" ]; then
         logger -t thermal-guard "critical temperature ${t} mC, powering off"
+        led-status thermal 2>/dev/null
         poweroff
     elif [ "$t" -ge "$HOT" ]; then
         for p in /sys/devices/system/cpu/cpufreq/policy*; do step "$p" -1; done
+        # red blink while hot; led-status restores the network color when it cools
+        led-status thermal 2>/dev/null
         logger -t thermal-guard "hot (${t} mC): lowered cpufreq limits"
     elif [ "$t" -le "$COOL" ]; then
+        led-status current >/dev/null 2>&1 && led-status "$(led-status current)" 2>/dev/null
         for p in /sys/devices/system/cpu/cpufreq/policy*; do
             [ "$(cat $p/scaling_max_freq)" -lt "$(cat $p/cpuinfo_max_freq)" ] && step "$p" 1
         done
