@@ -45,14 +45,20 @@ return view.extend({
 
 <div class="mud-sec">
   <h3>频段锁定</h3>
-  <div class="mud-rows" style="max-width:640px">
-    <div class="mud-r"><span class="mud-k">NR 频段</span><span class="mud-v" id="mud-lock-nrline">--</span></div>
+  <div class="mud-cols">
+    <div>
+      <div class="mud-rows">
+        <div class="mud-r"><span class="mud-k">NR 频段</span><span class="mud-v" id="mud-lock-nrline">--</span></div>
+      </div>
+      <div class="mud-chiprow" id="mud-lock-nr"></div>
+    </div>
+    <div>
+      <div class="mud-rows">
+        <div class="mud-r"><span class="mud-k">LTE 频段</span><span class="mud-v" id="mud-lock-lteline">--</span></div>
+      </div>
+      <div class="mud-chiprow" id="mud-lock-lte"></div>
+    </div>
   </div>
-  <div class="mud-chiprow" id="mud-lock-nr"></div>
-  <div class="mud-rows" style="margin-top:6px;max-width:640px">
-    <div class="mud-r"><span class="mud-k">LTE 频段</span><span class="mud-v" id="mud-lock-lteline">--</span></div>
-  </div>
-  <div class="mud-chiprow" id="mud-lock-lte"></div>
   <div class="mud-ctl" style="margin-top:8px;max-width:360px">
     <button class="mud-btn" id="mud-lock-nr-apply">应用 NR 频段</button>
     <button class="mud-btn" id="mud-lock-lte-apply">应用 LTE 频段</button>

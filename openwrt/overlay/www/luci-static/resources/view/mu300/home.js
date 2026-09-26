@@ -53,9 +53,17 @@ return view.extend({
 
 <div class="mud-sec">
   <h3>链路与流量</h3>
+  <div class="mud-charts">
+    <div class="mud-chart" style="color:var(--brand,var(--primary,#2f7bf6))">
+      <div class="t"><b id="mud-dl">--</b><span>下行速率</span></div>
+      <div class="c" id="mud-spark-dl"></div>
+    </div>
+    <div class="mud-chart" style="color:var(--success,#2FBF71)">
+      <div class="t"><b id="mud-ul">--</b><span>上行速率</span></div>
+      <div class="c" id="mud-spark-ul"></div>
+    </div>
+  </div>
   <div class="mud-kpis">
-    <div class="mud-kpi"><b id="mud-dl" style="color:var(--brand,var(--primary,#2f7bf6))">--</b><span>下行速率</span><div style="color:var(--brand,var(--primary,#2f7bf6))" id="mud-spark-dl"></div></div>
-    <div class="mud-kpi"><b id="mud-ul" style="color:var(--success,#2FBF71)">--</b><span>上行速率</span><div style="color:var(--success,#2FBF71)" id="mud-spark-ul"></div></div>
     <div class="mud-kpi"><b id="mud-rx">--</b><span>累计接收</span></div>
     <div class="mud-kpi"><b id="mud-tx">--</b><span>累计发送</span></div>
   </div>
@@ -134,9 +142,8 @@ return view.extend({
   <h3>快捷控制</h3>
   <div class="mud-ctl" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
     <button class="mud-btn" id="mud-btn-data">数据连接</button>
-    <button class="mud-btn" id="mud-btn-radio">无线电</button>
+    <button class="mud-btn" id="mud-btn-radio">蜂窝射频</button>
     <button class="mud-btn" id="mud-btn-wifi">Wi-Fi 热点</button>
-    <button class="mud-btn" id="mud-btn-vpn">VPN</button>
     <button class="mud-btn warn" id="mud-btn-modem">重启调制解调器</button>
     <button class="mud-btn warn" id="mud-btn-reboot">重启设备</button>
   </div>
@@ -175,17 +182,13 @@ return view.extend({
 		};
 		q('btn-radio').onclick = function() {
 			var on = self.lastCell && self.lastCell.cfun === 1;
-			if (on && !window.confirm('关闭无线电？蜂窝连接会中断。')) return;
-			if (!on && !window.confirm('打开无线电？将执行 SFUN 上电序列（最多约 1 分钟）。')) return;
+			if (on && !window.confirm('关闭蜂窝射频？蜂窝连接会中断。')) return;
+			if (!on && !window.confirm('打开蜂窝射频？将执行 SFUN 上电序列（最多约 1 分钟）。')) return;
 			act('radio', on ? 'off' : 'on');
 		};
 		q('btn-wifi').onclick = function() {
 			var on = self.lastInfo && self.lastInfo.wifi && self.lastInfo.wifi.up;
 			act('wifi', on ? 'off' : 'on');
-		};
-		q('btn-vpn').onclick = function() {
-			var up = self.lastInfo && self.lastInfo.vpn && self.lastInfo.vpn.up;
-			act('vpn', up ? 'stop' : 'start');
 		};
 		q('btn-modem').onclick = function() {
 			if (!window.confirm('重启调制解调器？蜂窝连接会中断 1-2 分钟。')) return;
@@ -448,10 +451,8 @@ return view.extend({
 		M.set('modem', (i.modem && i.modem.alive ? '在线' : '无应答') + (i.modem && i.modem.atd ? '' : ' · mu300-atd 未运行'));
 
 		var b;
-		b = M.v('btn-data'); b.className = 'mud-btn' + (w.up ? ' on' : ''); b.textContent = w.up ? '数据连接 ✓' : '数据连接';
-		b = M.v('btn-radio'); b.className = 'mud-btn' + (c && c.cfun === 1 ? ' on' : ''); b.textContent = c && c.cfun === 1 ? '无线电 ✓' : '无线电';
-		b = M.v('btn-wifi'); b.className = 'mud-btn' + (wf.up ? ' on' : ''); b.textContent = wf.up ? 'Wi-Fi 热点 ✓' : 'Wi-Fi 热点';
-		var vp = i.vpn || {};
-		b = M.v('btn-vpn'); b.className = 'mud-btn' + (vp.up ? ' on' : ''); b.textContent = vp.up ? 'VPN ✓' : 'VPN';
+		b = M.v('btn-data'); b.className = 'mud-btn' + (w.up ? ' on' : ''); b.textContent = '数据连接';
+		b = M.v('btn-radio'); b.className = 'mud-btn' + (c && c.cfun === 1 ? ' on' : ''); b.textContent = '蜂窝射频';
+		b = M.v('btn-wifi'); b.className = 'mud-btn' + (wf.up ? ' on' : ''); b.textContent = 'Wi-Fi 热点';
 	}
 });

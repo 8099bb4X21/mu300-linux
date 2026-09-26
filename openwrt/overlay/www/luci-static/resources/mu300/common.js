@@ -120,7 +120,7 @@ var CSS = `
 .mud-card:hover{border-color:color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 30%,var(--hairline,var(--border,#e3e6ea)))}
 .mud-card>h3{margin:0 0 8px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
 .mud-card>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
-.mud-hero{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:14px;align-items:center;background:var(--brand-subtle,var(--surface,#fff))}
+.mud-hero{display:flex;flex-wrap:wrap;gap:14px;align-items:center;background:var(--brand-subtle,var(--surface,#fff));margin-bottom:12px}
 .mud-sec{padding:2px 2px 6px}
 .mud-sec>h3{margin:16px 0 10px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
 .mud-sec>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
@@ -130,6 +130,13 @@ var CSS = `
 .mud-srvline{display:flex;flex-wrap:wrap;gap:4px 10px;padding:2px 0;font-size:.84rem}
 .mud-srvline .k{color:var(--text-muted,var(--text-light,#777));flex:0 0 auto}
 .mud-srvline .v{font-variant-numeric:tabular-nums;font-weight:500}
+.mud-charts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.mud-chart{background:transparent;border-radius:var(--radius-base,.5rem);padding:2px 4px 0}
+.mud-chart .t{display:flex;align-items:baseline;gap:8px}
+.mud-chart .t b{font-size:1.2rem;font-weight:700;font-variant-numeric:tabular-nums}
+.mud-chart .t span{font-size:.72rem;color:var(--text-muted,var(--text-light,#777))}
+.mud-chart .c{height:40px;margin-top:2px}
+.mud-chart .c svg{display:block;width:100%;height:100%}
 .mud-lockbtn{padding:0 10px;border-radius:99px;border:1px solid var(--hairline,var(--border,#ccc));background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.72rem;cursor:pointer;line-height:1.7}
 .mud-lockbtn.on,.mud-lockbtn:active{background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
 .mud-lockbtn.locked{opacity:.45;pointer-events:none;background:var(--surface-sunken,rgba(127,127,127,.1));color:var(--text-muted,var(--text-light,#888));border-color:transparent}
@@ -233,14 +240,28 @@ function set(id, text, color) {
 }
 function spark(el, arr, min, max, win) {
 	if (!el || !arr || arr.length < 2) return;
-	var w = 100, h = 24, pts = [];
+	var w = 100, h = 34, pts = [];
 	for (var i = 0; i < arr.length; i++) {
-		var x = i / (win - 1) * w;
-		var y = h - Math.max(0, Math.min(1, (arr[i] - min) / (max - min || 1))) * (h - 2) - 1;
-		pts.push(x.toFixed(1) + ',' + y.toFixed(1));
+		pts.push([ i / (win - 1) * w,
+			h - Math.max(0, Math.min(1, (arr[i] - min) / (max - min || 1))) * (h - 3) - 1.5 ]);
 	}
+	/* Catmull-Rom 转三次贝塞尔：折线变平滑曲线 */
+	var d = 'M' + pts[0][0].toFixed(1) + ',' + pts[0][1].toFixed(1);
+	for (var i = 0; i < pts.length - 1; i++) {
+		var p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+		d += 'C' + (p1[0] + (p2[0] - p0[0]) / 6).toFixed(1) + ',' + (p1[1] + (p2[1] - p0[1]) / 6).toFixed(1) +
+			' ' + (p2[0] - (p3[0] - p1[0]) / 6).toFixed(1) + ',' + (p2[1] - (p3[1] - p1[1]) / 6).toFixed(1) +
+			' ' + p2[0].toFixed(1) + ',' + p2[1].toFixed(1);
+	}
+	var last = pts.length - 1;
+	var area = d + ' L' + pts[last][0].toFixed(1) + ',' + h + ' L' + pts[0][0].toFixed(1) + ',' + h + ' Z';
+	var gid = 'mudg-' + (el.id || Math.floor(Math.random() * 1e6));
 	el.innerHTML = '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
-		'<polyline points="' + pts.join(' ') + '" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>';
+		'<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
+		'<stop offset="0" stop-color="currentColor" stop-opacity=".32"/>' +
+		'<stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>' +
+		'<path d="' + area + '" fill="url(#' + gid + ')"/>' +
+		'<path d="' + d + '" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>';
 }
 
 /* 邻区表（主页与网络锁定页共用）：NR 置顶按 RSRP 排序，行尾带锁定按钮。
