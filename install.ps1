@@ -489,7 +489,10 @@ if ($OSES.Count -eq 2) {
     if ($BOOT_OS -notin @('ubuntu', 'openwrt')) { Die (T 'invalid system') }
 }
 $UBUNTU = '24.04'
-if ($OSES -contains 'ubuntu') {
+# the U30 Air runs only 5.4 for now (under a mainline kernel its USB does not come up, FINDINGS 33c), and Ubuntu
+# 26.04 needs a mainline kernel: neither question is asked there
+if ($DEVICE -eq 'u30air') { Write-Host ('  ' + (T 'U30 Air: kernel 5.4 and Ubuntu 24.04 (the mainline kernels, which Ubuntu 26.04 needs, do not bring up its USB yet)')) }
+if ($OSES -contains 'ubuntu' -and $DEVICE -eq 'f50') {
     Say (T 'Which Ubuntu?')
     Write-Host ('  ' + (T '1) 24.04 LTS  the longest tested, supported until 2029'))
     Write-Host ('  ' + (T '2) 26.04 LTS  BETA: the newest (systemd 259, newer packages), supported until 2031; tested less'))
@@ -523,6 +526,8 @@ if ($DEFAULT_LINUX -eq 1) {
 }
 $IMPORT_HOTSPOT = if ((Ask (T "Copy Android's hotspot name and password to Linux? (yes/no)") 'yes') -eq 'yes') { 1 } else { 0 }
 $gpu = Ask (T 'Include the Mali GPU (OpenCL) userspace (~90 MiB)? (yes/no)') 'yes'
+$KERNEL = if ($DEVICE -eq 'f50') { $null } else { '5.4' }
+if (-not $KERNEL) {
 Say (T 'Which kernel?')
 Write-Host ('  ' + (T "1) 5.4   Unisoc's vendor kernel (Android 12 base): the longest tested, everything this project supports"))
 Write-Host ('  ' + (T '2) 6.18  mainline Linux, current long-term (LTS) release: newer drivers and security fixes, the same'))
@@ -530,7 +535,6 @@ Write-Host ('  ' + (T '         functions (hotspot, mobile data, SMS, Bluetooth,
 Write-Host ('  ' + (T '3) 7.2   the newest stable mainline Linux (7.2 for now): the newest drivers, the same functions'))
 Write-Host ('  ' + (T '         as 6.18; tested less than 6.18'))
 Write-Host ('  ' + (T 'This can be changed later on the device: sudo mu300-update kernel 5.4|6.18|7.2'))
-$KERNEL = $null
 while (-not $KERNEL) {
     switch (Ask (T 'Kernel') '1') {
         { $_ -in '1', '5.4' } {
@@ -542,6 +546,7 @@ while (-not $KERNEL) {
         { $_ -in '3', '7.2' } { $KERNEL = '7.2' }
         default { Write-Host ('  ' + (T 'enter 1, 2 or 3')) }
     }
+}
 }
 $FORMAT = 0; $WIPE_LEGACY = 0; $UPDATE = 0
 if ($existing -eq 'no') {
