@@ -153,10 +153,8 @@ up() {
 up_locked() {
     modem_stack || { echo "no modem stack in this kernel ($(uname -r))" >&2; exit 3; }
     rm -f /run/mu300-mobile-data-down
-    led-status modem 2>/dev/null || true
     tty_setup
     radio_on
-    led-status registering 2>/dev/null || true
     for n in $(seq 1 200); do
         at 'AT+CEREG?' | grep -qE '\+CEREG: [0-9],(1|5)' && break
         # the radio can be switched off again meanwhile (modem reset), so re-check it every 10 s
@@ -209,6 +207,14 @@ up_locked() {
         [ -w "/proc/sys/net/ipv6/conf/$IFACE/disable_ipv6" ] && echo 0 > "/proc/sys/net/ipv6/conf/$IFACE/disable_ipv6"
         [ -w "/proc/sys/net/ipv6/conf/$IFACE/accept_ra" ] && echo 2 > "/proc/sys/net/ipv6/conf/$IFACE/accept_ra"
     fi
+    # Select the steady network colour before returning to netifd. Previously
+    # this lived after the return, so every OpenWrt connection stayed forever
+    # in the earlier "modem" blink state.
+    act=$(at 'AT+CEREG?' 2>/dev/null | grep '+CEREG:' | head -1 | awk -F',' '{print $NF}' | tr -d '" ')
+    case "$act" in
+        11|12|13|15) led-status online-5g 2>/dev/null || true ;;
+        *)           led-status online-4g 2>/dev/null || true ;;
+    esac
     if [ "${MU300_NETIFD:-0}" = 1 ]; then
         # OpenWrt: netifd (proto mu300cell) configures the address, routes, DNS and firewall itself
         printf 'IFACE=%s\nIP=%s\nPREFIX=%s\nDNS1=%s\nDNS2=%s\n' "$IFACE" "$ip4" "$prefix" "$dns1" "$dns2"
@@ -240,14 +246,6 @@ table ip mu300_nat {
     }
 }
 NFT
-    # LED: white for 5G NR, blue for LTE/3G/2G. CEREG's AcT is the last comma-separated
-    # field: 11/13 = E-UTRA-NR dual connectivity (NSA), 12/15 = NR standalone (SA);
-    # this carrier reports 11. 7 is plain LTE, below that is 3G/2G.
-    act=$(at 'AT+CEREG?' 2>/dev/null | grep '+CEREG:' | head -1 | awk -F',' '{print $NF}' | tr -d '" ')
-    case "$act" in
-        11|12|13|15) led-status online-5g 2>/dev/null ;;
-        *)           led-status online-4g 2>/dev/null ;;
-    esac
     echo "mobile data up on $IFACE ($(at 'AT+COPS?' | sed -n 's/^+COPS: [0-9],[0-9],"\([^"]*\)".*/\1/p'))"
 }
 

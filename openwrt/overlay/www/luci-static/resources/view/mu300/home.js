@@ -25,20 +25,16 @@ return view.extend({
 		this._bootEl = root;
 		root.className = 'mud mud-booting';
 		root.innerHTML = this.html();
-		/* 官方状态页同款载入指示：居中转圈，首份带时间戳的快照落地后整体淡出 */
-		var veil = document.createElement('div');
-		veil.className = 'mud-veil';
-		veil.innerHTML = '<div class="mud-veil-in"><span class="mud-spin"></span>正在载入视图…</div>';
-		root.appendChild(veil);
-		this._veil = veil;
 		this.wire(root);
 		var self = this;
-		/* 首屏不等蜂窝缓存：sysinfo 是纯本地快照（毫秒级），先把系统/网络/无线全部画出来；
-		 * 蜂窝字段（RAT/RSRP/邻区…）由 1.5 s 的完整 status 轮询随后补上 */
-		L.resolveDefault(M.callSysinfo()).then(function(info) {
-			self.update({ info: info || {} });
+		/* 立即取一次完整状态；不要同时重复执行 sysinfo 与 status 两轮本地采集。 */
+		var first = L.resolveDefault(M.callStatus());
+		first.then(function(st) {
+			self.update(st || {});
+			first = null;
 		});
 		poll.add(function() {
+			if (first) return first;
 			return L.resolveDefault(M.callStatus()).then(function(st) { self.update(st || {}); });
 		}, POLL_S);
 		return root;
@@ -261,17 +257,20 @@ return view.extend({
 	update: function(st) {
 		var i = st.info || {};
 		this.lastInfo = i;
-		/* 第一份带时间戳的快照落地后解除 loading 呼吸态与载入遮罩 */
 		if (i.ts && this._bootEl) {
-			this._bootEl.classList.remove('mud-booting'); this._bootEl = null;
-			if (this._veil) { var v = this._veil; v.classList.add('mud-veil-out');
-				setTimeout(function() { v.remove(); }, 250); this._veil = null; }
+			this._bootEl.classList.remove('mud-booting');
+			this._bootEl = null;
 		}
 		/* 快档覆盖：sig（服务小区/注册，1.5 s 级）盖在慢档缓存 c 的对应字段上 */
 		var c = st.cell || null;
 		var s = st.sig || null;
 		if (s && !s.error && (!c || !c.ts || (s.ts || 0) >= c.ts)) {
-			c = c ? Object.assign({}, c, {
+			if (c && s.partial) {
+				/* 核心首包先更新驻网状态，但不让临时 CESQ 空值擦掉上一份工程信号。 */
+				c = Object.assign({}, c, {
+					ts: s.ts, cfun: s.cfun, reg: s.reg, reg5g: s.reg5g
+				});
+			} else c = c ? Object.assign({}, c, {
 				ts: s.ts, cfun: s.cfun, reg: s.reg, reg5g: s.reg5g,
 				sig_src: s.sig_src, sig: s.sig, lte: s.lte, nr: s.nr
 			}) : s;

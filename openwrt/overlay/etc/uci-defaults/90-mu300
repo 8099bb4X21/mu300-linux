@@ -39,11 +39,25 @@ set dhcp.lan.ndp='relay'
 UCI
 zone=$(uci -q show firewall | sed -n "s/^\(firewall\.@zone\[[0-9]*\]\)\.name='wan'$/\1/p")
 [ -n "$zone" ] && uci -q set $zone.masq6='1'
+# Before netifd creates br-lan, the early management address lives directly on
+# usb0. Give that local-only path the same input policy as LAN; forwarding stays
+# blocked, and once bridged packets enter through br-lan as usual.
+early=$(uci -q show firewall | sed -n "s/^\(firewall\.@zone\[[0-9]*\]\)\.name='earlyusb'$/\1/p")
+if [ -z "$early" ]; then
+	early=$(uci add firewall zone)
+	uci set firewall.$early.name='earlyusb'
+	uci add_list firewall.$early.device='usb0'
+	uci set firewall.$early.input='ACCEPT'
+	uci set firewall.$early.output='ACCEPT'
+	uci set firewall.$early.forward='REJECT'
+fi
 # the armsr default bridges eth0; the MU300 LAN bridge carries the USB gadget (Wi-Fi joins via wireless config)
 dev=$(uci -q show network | sed -n "s/^network\.\(@device\[[0-9]*\]\)\.name='br-lan'$/\1/p" | head -1)
 if [ -n "$dev" ]; then
 	uci -q delete network.$dev.ports
 	uci add_list network.$dev.ports='usb0'
+	# Do not wait for the wireless bridge member before creating the wired LAN.
+	uci set network.$dev.bridge_empty='1'
 fi
 uci commit system
 uci commit network

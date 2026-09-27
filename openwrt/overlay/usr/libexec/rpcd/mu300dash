@@ -70,11 +70,11 @@ m_status() {
     # a full round in flight also writes the fast cache, so it counts for both.
     if collecting; then busy=1; fbusy=1; fi
     fast_busy && fbusy=1
-    if [ "$sage" -gt "$TTL_FAST" ] && [ "$fbusy" = 0 ]; then
+    if { [ "$sage" -lt 0 ] || [ "$sage" -gt "$TTL_FAST" ]; } && [ "$fbusy" = 0 ]; then
         setsid "$DASH/mu300-dash-cell" fast >/dev/null 2>&1 &
         fbusy=1
     fi
-    if [ "$cage" -gt "$TTL" ] && [ "$busy" = 0 ]; then
+    if { [ "$cage" -lt 0 ] || [ "$cage" -gt "$TTL" ]; } && [ "$busy" = 0 ]; then
         setsid "$DASH/mu300-dash-cell" >/dev/null 2>&1 &
         busy=1
     fi
@@ -83,6 +83,23 @@ m_status() {
         "$([ -s "$CELL" ] && cat "$CELL" || echo null)" \
         "$([ -s "$SIGF" ] && cat "$SIGF" || echo null)" \
         "$cage" "$sage" "$busy"
+}
+
+# Live serving-cell snapshot for views where stale radio readings are actively
+# misleading (notably the lock page hero). This intentionally uses an isolated
+# temporary directory and returns the just-completed AT round, never cell.json
+# or sig.json from an earlier request. The dedicated nr3 AT daemon serializes it
+# safely with the slower dashboard collector.
+m_signal() {
+    local live="$DIR/live.$$"
+    mkdir -p "$live" 2>/dev/null
+    MU300_DASH_DIR="$live" "$DASH/mu300-dash-cell" fast >/dev/null 2>&1
+    if [ -s "$live/sig.json" ]; then
+        cat "$live/sig.json"
+    else
+        printf '{"error":"live signal read failed"}\n'
+    fi
+    rm -rf "$live"
 }
 
 m_act() {
@@ -262,6 +279,7 @@ do_list() {
 {
 	"sysinfo": { },
 	"status": { },
+	"signal": { },
 	"act": { "op": "String", "arg": "String" },
 	"at": { "cmd": "String" },
 	"at_history": { },
@@ -284,6 +302,7 @@ call)
     case ${2:-} in
         sysinfo)    m_sysinfo ;;
         status)     m_status ;;
+        signal)     m_signal ;;
         act)        m_act ;;
         at)         m_at ;;
         at_history) m_at_history ;;

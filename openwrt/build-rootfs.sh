@@ -115,12 +115,33 @@ mkdir -p $R/etc/mu300
 cp /in/vpn.conf.example $R/etc/mu300/vpn.conf.example
 printf "%s\n" "${MU300_VERSION:-dev}" > $R/etc/mu300/image-version
 # enable the services (rc.common "enable" needs ubus, which is not running in the build container)
-for s in mu300-vendor mu300-hw mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-ndp mu300-smsd mu300-dash mu300-atwatch; do
+for s in mu300-vendor mu300-hw mu300-usb-ready mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-ndp mu300-smsd mu300-dash mu300-atwatch; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
 # busybox PATH is /usr/sbin:/usr/bin:/sbin:/bin, so the commands go into /usr/bin
 for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-vpn wifi-client; do ln -sf /opt/mu300/bin/$c $R/usr/bin/$c; done
+# Bind mounts from Windows/WSL commonly present every repository file as uid 1000
+# and mode 0777.  Do not bake those host-side metadata into the image: executable
+# helpers stay executable, while LuCI assets and data files must not be writable by
+# service users.
+chown -R 0:0 $R/opt/mu300
+find $R/opt/mu300/bin -type f -exec chmod 0755 {} \;
+[ ! -d $R/opt/mu300/lib ] || find $R/opt/mu300/lib -type f -exec chmod 0644 {} \;
+for p in $R/etc/init.d/mu300-* $R/etc/hotplug.d/iface/10-mu300-usb \
+         $R/etc/profile.d/mu300.sh $R/etc/uci-defaults/90-mu300 \
+         $R/lib/netifd/proto/mu300cell*.sh $R/lib/preinit/05_mu300_early_recorder \
+         $R/sbin/sysupgrade $R/usr/libexec/rpcd/mu300dash; do
+    chown 0:0 $p; chmod 0755 $p
+done
+for p in $R/usr/share/luci/menu.d/luci-app-mu300dash.json \
+         $R/usr/share/rpcd/acl.d/luci-app-mu300dash.json; do
+    chown 0:0 $p; chmod 0644 $p
+done
+chown -R 0:0 $R/www/luci-static/resources/mu300 $R/www/luci-static/resources/view/mu300
+chown 0:0 $R/www/luci-static/resources/protocol/mu300cell.js
+chmod 0644 $R/www/luci-static/resources/mu300/*.js $R/www/luci-static/resources/view/mu300/*.js \
+           $R/www/luci-static/resources/protocol/mu300cell.js
 # no kernel of its own: OpenWrt kmods (6.12) and grub are unused on this device
 rm -rf $R/lib/modules/6.* $R/boot
 # out-of-tree modules for the experimental mainline kernel (upstream/)

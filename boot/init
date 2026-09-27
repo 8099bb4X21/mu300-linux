@@ -57,15 +57,6 @@ persist() {
 }
 log "stage=init-start pid=$$"
 
-# Boot LED: blue fast blink - says "this is Linux booting" before anything else works.
-(
-    B=/sys/class/leds/sc27xx:blue/brightness
-    while :; do
-        echo 255 > "$B" 2>/dev/null; sleep 0.15
-        echo 0 > "$B" 2>/dev/null; sleep 0.15
-    done
-) &
-
 mkdir -p /dev/pts
 mount -t devpts -o mode=0620,ptmxmode=0666 devpts /dev/pts
 ln -sf pts/ptmx /dev/ptmx
@@ -74,6 +65,20 @@ mount -t tmpfs tmpfs /tmp
 mount -t debugfs debugfs /sys/kernel/debug
 echo /bin/mdev > /proc/sys/kernel/hotplug
 mdev -s
+
+# Boot chase. /run survives switch_root, so normal userspace can stop this exact
+# process instead of leaving an orphan blinker fighting the final network LED.
+(
+    R=/sys/class/leds/sc27xx:red/brightness
+    W=/sys/class/leds/sc27xx:green/brightness
+    B=/sys/class/leds/sc27xx:blue/brightness
+    while :; do
+        echo 255 > "$R" 2>/dev/null; echo 0 > "$W" 2>/dev/null; echo 0 > "$B" 2>/dev/null; sleep 0.12
+        echo 0 > "$R" 2>/dev/null; echo 255 > "$W" 2>/dev/null; echo 0 > "$B" 2>/dev/null; sleep 0.12
+        echo 0 > "$R" 2>/dev/null; echo 0 > "$W" 2>/dev/null; echo 255 > "$B" 2>/dev/null; sleep 0.12
+    done
+) &
+echo $! > /run/led-status.blink.pid
 log "stage=devfs-ready"
 
 # Turn hangs into panics; the vendor kernel reboots after a panic.
@@ -199,19 +204,24 @@ setup_usb_gadget() {
     # its link state in its first CONNECT notification, and macOS did not pick up a later one).
     for u in usb0 usb1 usb2; do [ -e /sys/class/net/$u ] && ifconfig $u up; done
 
+    # udhcpd cannot answer a useful lease from an unnumbered interface. Give NCM
+    # the final LAN address now, before the host's first DHCP request.
+    [ -e /sys/class/net/usb0 ] && ifconfig usb0 192.168.77.1 netmask 255.255.255.0 up
+
     # Temporary DHCP from the initramfs: the host asks for a lease the moment the gadget enumerates
     # and gives up after a few attempts - long before the real system's dnsmasq exists (measured:
-    # over a minute later). Short leases, so the real server takes over cleanly; killed before
-    # switch_root so the two never answer at the same time.
-    for u in usb0 usb1; do
+    # over a minute later). The lease must survive the rootfs handoff: a 30-second
+    # lease expired exactly while netifd was creating br-lan and forced Windows
+    # through a second DHCP cycle. The rootfs early server is stopped at LAN ifup.
+    for u in usb0; do
         [ -e /sys/class/net/$u ] || continue
         cat > /run/udhcpd-$u.conf <<EOF
-start 192.168.77.50
+start 192.168.77.200
 end 192.168.77.200
 interface $u
 option subnet 255.255.255.0
 option router 192.168.77.1
-option lease 30
+option lease 600
 lease_file /run/udhcpd-$u.leases
 EOF
         touch /run/udhcpd-$u.leases

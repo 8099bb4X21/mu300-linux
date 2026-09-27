@@ -1,0 +1,15 @@
+#!/bin/sh
+# Keep the USB host usable across switch_root. The initramfs DHCP server only
+# lives for ~0.6 s after NCM binds, which is shorter than Windows needs to load
+# its driver and ask for a lease. Restart it immediately in the real rootfs;
+# the LAN ifup hook stops it when dnsmasq/netifd take ownership.
+mu300_early_usb() {
+	[ -e /sys/class/net/usb0 ] || return 0
+	/opt/mu300/bin/led-status boot 2>/dev/null
+	/opt/mu300/bin/busybox ifconfig usb0 192.168.77.1 netmask 255.255.255.0 up
+	[ -r /run/udhcpd-usb0.conf ] || return 0
+	/opt/mu300/bin/busybox udhcpd -f /run/udhcpd-usb0.conf >/dev/null 2>&1 &
+	echo $! > /run/mu300-early-udhcpd.pid
+}
+
+boot_hook_add preinit_essential mu300_early_usb

@@ -30,7 +30,7 @@ for mk in tree.rglob("Makefile"):
 
 lines, missing = [], []
 for name in order.read_text().split():
-    name = name.removesuffix(".ko")
+    name = name[:-3] if name.endswith(".ko") else name
     if name in SKIP:
         continue
     if name in PATCHED_IN:

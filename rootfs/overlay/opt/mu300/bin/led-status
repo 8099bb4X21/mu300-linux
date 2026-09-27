@@ -6,17 +6,15 @@
 # /sys/class/leds/{red,white,blue}/ paths. This script auto-detects both.
 #
 # States (one multi-color LED, priority order):
-#   boot           blue fast blink     - "Linux is booting" (clearly not Android)
-#   modem          blue slow blink     - modem CP initializing
-#   registering    white blink         - registering on the network
+#   boot           red/white/blue chase - Linux is booting
 #   online-4g      solid blue          - data connected, LTE
 #   online-5g      solid white         - data connected, 5G NR
 #   offline        solid red           - booted, no data
 #   thermal        red blink           - SoC above 85C (overrides network color)
-#   wifi-flash     white double-blink  - one-shot: WiFi just came up (then restores)
+#   wifi-on        remember AP state   - never contaminates the exact network colour
 #
 # Usage:  led-status <state>          set a state
-#         led-status wifi-on/off     persistent green-white tint for WiFi (mixes with network color)
+#         led-status wifi-on/off     remember the hotspot state
 #         led-status current         print the last set state
 
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
@@ -39,6 +37,13 @@ STATE_FILE=/run/led-status.state
 WIFI_FILE=/run/led-status.wifi
 BLINK_PID=/run/led-status.blink.pid
 
+# Status reads must be side-effect free. In particular, dashboards and event
+# handlers may query this during boot and must not stop the chase animation.
+if [ "${1:-}" = current ]; then
+    cat "$STATE_FILE" 2>/dev/null || echo boot
+    exit 0
+fi
+
 # stop any previous user-space blinker
 [ -f "$BLINK_PID" ] && kill "$(cat "$BLINK_PID")" 2>/dev/null
 rm -f "$BLINK_PID"
@@ -54,6 +59,15 @@ set_rgb() {  # R W B (0-255)
     echo "${3:-0}" > "$LED_B" 2>/dev/null
 }
 
+pause_us() {
+    # The rootfs intentionally does not install every BusyBox applet symlink.
+    # Invoke the bundled binary directly so missing `usleep` cannot turn an LED
+    # animation into a CPU-burning tight loop.
+    /opt/mu300/bin/busybox usleep "$1" 2>/dev/null && return 0
+    command -v usleep >/dev/null 2>&1 && usleep "$1" 2>/dev/null && return 0
+    sleep 1
+}
+
 start_blink() {  # R W B ON_MS OFF_MS
     _r=$1; _w=$2; _b=$3; _on=$4; _off=$5
     (
@@ -61,17 +75,29 @@ start_blink() {  # R W B ON_MS OFF_MS
             echo "$_r" > "$LED_R" 2>/dev/null
             echo "$_w" > "$LED_W" 2>/dev/null
             echo "$_b" > "$LED_B" 2>/dev/null
-            usleep "$_on" 2>/dev/null || sleep 1
+            pause_us "$_on"
             echo 0 > "$LED_R" 2>/dev/null
             echo 0 > "$LED_W" 2>/dev/null
             echo 0 > "$LED_B" 2>/dev/null
-            usleep "$_off" 2>/dev/null || sleep 1
+            pause_us "$_off"
         done
     ) &
     echo $! > "$BLINK_PID"
 }
 
-# restore the steady-state color (network status + optional WiFi tint)
+start_chase() {
+    (
+        while :; do
+            echo 255 > "$LED_R" 2>/dev/null; echo 0 > "$LED_W" 2>/dev/null; echo 0 > "$LED_B" 2>/dev/null; pause_us 120000
+            echo 0 > "$LED_R" 2>/dev/null; echo 255 > "$LED_W" 2>/dev/null; echo 0 > "$LED_B" 2>/dev/null; pause_us 120000
+            echo 0 > "$LED_R" 2>/dev/null; echo 0 > "$LED_W" 2>/dev/null; echo 255 > "$LED_B" 2>/dev/null; pause_us 120000
+        done
+    ) &
+    echo $! > "$BLINK_PID"
+}
+
+# Restore the exact steady-state network colour. The F50 exposes one RGB lamp,
+# so mixing a WiFi tint here makes LTE look cyan and offline look orange.
 restore_steady() {
     state=$(cat "$STATE_FILE" 2>/dev/null || echo offline)
     case "$state" in
@@ -80,18 +106,13 @@ restore_steady() {
         offline)     set_rgb 255 0 0 ;;
         *)           set_rgb 0 0 255 ;;
     esac
-    # WiFi tint: add a faint white when the AP is up, so "4G + WiFi" and "4G only" differ
-    if [ -f "$WIFI_FILE" ] && [ "$(cat "$WIFI_FILE")" = on ]; then
-        cur_w=$(cat "$LED_W" 2>/dev/null || echo 0)
-        [ "$cur_w" -lt 80 ] && echo 80 > "$LED_W" 2>/dev/null
-    fi
 }
 
 case "${1:-}" in
-boot)           # fast blue blink: Linux booting (not Android - different rhythm)
+boot)           # visible chase throughout boot
     echo boot > "$STATE_FILE"
     set_rgb 0 0 0
-    start_blink 0 0 255 150000 150000 ;;
+    start_chase ;;
 modem)          # slow blue blink: CP initializing
     echo modem > "$STATE_FILE"
     set_rgb 0 0 0
@@ -113,11 +134,6 @@ thermal)        # red blink: SoC too hot (called by thermal-guard)
     start_blink 255 0 0 200000 200000 ;;
 wifi-on)
     echo on > "$WIFI_FILE"
-    # one-shot double white flash, then back to steady state
-    set_rgb 0 255 0; usleep 120000 2>/dev/null || sleep 1
-    set_rgb 0 0 0;   usleep 120000 2>/dev/null || sleep 1
-    set_rgb 0 255 0; usleep 120000 2>/dev/null || sleep 1
-    set_rgb 0 0 0;   sleep 1
     restore_steady ;;
 wifi-off)
     echo off > "$WIFI_FILE"

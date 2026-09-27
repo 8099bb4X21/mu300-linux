@@ -33,7 +33,6 @@ proto_mu300cell_setup() {
 	if [ -z "$ip" ]; then
 		logger -t mu300cell "attach failed: $(cat /tmp/mu300cell.err)"
 		proto_notify_error "$config" ATTACH_FAILED
-		sleep 20
 		proto_setup_failed "$config"
 		return 1
 	fi
@@ -43,52 +42,44 @@ proto_mu300cell_setup() {
 	dns2=$(echo "$out" | sed -n 's/^DNS2=//p')
 
 	ip link set "$ifname" up
+	# netifd treats this as a v4 protocol, so forwarding leaves accept_ra at 0.  Enable
+	# IPv6 and accept RAs before waiting for the carrier address.  Doing this after
+	# proto_send_update races the only initial RA: the kernel eventually learns the
+	# address (ndp-learn re-solicits), but netifd permanently reports an empty wan v6.
+	if [ "${pdptype:-IP}" != IP ]; then
+		[ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
+			echo 0 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
+		[ -w "/proc/sys/net/ipv6/conf/$ifname/accept_ra" ] && {
+			echo 0 > "/proc/sys/net/ipv6/conf/$ifname/accept_ra"
+			echo 2 > "/proc/sys/net/ipv6/conf/$ifname/accept_ra"
+		}
+	fi
 	proto_init_update "$ifname" 1
 	proto_add_ipv4_address "$ip" "${prefix:-32}"
 	proto_add_ipv4_route "0.0.0.0" 0
-	# also report the SLAAC-learned v6 address so LuCI and netifd can see it:
-	# the carrier's RA is the only way this bearer ever gets its v6 (CGCONTRDP stays a
-	# placeholder), and without this netifd shows wan as having no v6 at all even though
-	# the kernel learned one. A short wait: the RA can arrive a few seconds after the v4
-	# address is configured; if it is not there yet the ndp-learn daemon will set it later.
-	v6addr=""
-	for n in 1 2 3 4 5; do
-		v6addr=$(ip -6 addr show "$ifname" scope global 2>/dev/null | sed -n 's/.*inet6 \([0-9a-f:]*\)\/.*/\1/p' | head -1)
-		[ -n "$v6addr" ] && break
-		sleep 2
-	done
-	if [ -n "$v6addr" ]; then
-		proto_add_ipv6_address "$v6addr" 64
-		proto_add_ipv6_route "::" 0 "" "" 4096
-	fi
 	if [ "${peerdns:-1}" != 0 ]; then
 		[ -n "$dns1" ] && proto_add_dns_server "$dns1"
 		[ -n "$dns2" ] && proto_add_dns_server "$dns2"
 	fi
 	proto_send_update "$config"
+	# Do not hold WAN setup open waiting for an RA. A netlink listener reports the
+	# current SLAAC address immediately and every later address change to netifd.
+	[ "${pdptype:-IP}" != IP ] && proto_run_command "$config" \
+		/lib/netifd/proto/mu300cell-v6.sh "$config" "$ifname" "$ip" \
+		"${prefix:-32}" "$dns1" "$dns2" "${peerdns:-1}"
 	# After proto_send_update, not before: netifd turns IPv6 back on as it configures the interface, so
 	# mobile-data setting this itself has no effect on OpenWrt. The bearer is IPv4-only (the context is
 	# "IP", the way Android's RIL asks for it), and an interface left with a link-local address sends
 	# router solicitations and multicast into it for nothing. See docs/FINDINGS.md 13f.
 	[ "${pdptype:-IP}" = IP ] && [ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
 		echo 1 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
-	# With a dual-stack context the IPv6 address only ever arrives by SLAAC from the carrier's RA
-	# (CGCONTRDP stays a placeholder - measured on ctiot), and netifd keeps accept_ra at 0 for this
-	# v4-only proto, so the solicitation is never sent. 2 = accept even while forwarding.
-	[ "${pdptype:-IP}" != IP ] && {
-		[ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
-			echo 0 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
-		[ -w "/proc/sys/net/ipv6/conf/$ifname/accept_ra" ] &&
-			echo 2 > "/proc/sys/net/ipv6/conf/$ifname/accept_ra"
-	}
-	[ -w /sys/class/leds/sc27xx:blue/brightness ] && echo 255 > /sys/class/leds/sc27xx:blue/brightness
 	logger -t mu300cell "connected: $ip/${prefix:-32} on $ifname"
 }
 
 proto_mu300cell_teardown() {
 	local config="$1"
-	/opt/mu300/bin/mobile-data down >/dev/null 2>&1
 	proto_kill_command "$config"
+	/opt/mu300/bin/mobile-data down >/dev/null 2>&1
 }
 
 [ -n "$INCLUDE_ONLY" ] || add_protocol mu300cell

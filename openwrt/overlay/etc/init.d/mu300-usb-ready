@@ -1,0 +1,12 @@
+#!/bin/sh /etc/rc.common
+# uhttpd has registered with procd at S50. Re-enumerate immediately so Windows
+# binds NCM after the real rootfs exists; readiness loops replace the old 2+3 s
+# blind sleeps, and the early DHCP server answers the host at once.
+START=51
+
+start() {
+	# netifd has cleared the initramfs address but its vendor coldplug path has
+	# not made br-lan yet. Keep the management address on the existing NCM port.
+	/opt/mu300/bin/busybox ifconfig usb0 192.168.77.1 netmask 255.255.255.0 up
+	/opt/mu300/bin/mu300-usb-reset --ready
+}

@@ -1,13 +1,14 @@
 'use strict';
 'require view';
+'require poll';
 'require mu300.common as M';
 
 /* 网络锁定 -- 模式 / 频段 / 小区 / EN-DC，全部经 ubus mu300dash lock_set -> 后端
  * mu300-dash-lock（编码按 ufi_tools 权威实现），应用后 SFUN 重启协议栈并落盘，
  * 开机由 init.d/mu300-dash 回放。
  *
- * 当前驻网与邻区来自 status 的蜂窝缓存：打开页面时若缓存已陈旧，短轮询几次等
- * 新鲜数据落地（status 本身会踢后台采集），通常一秒内到位；之后停止轮询。
+ * 当前驻网 hero 每 2 秒执行一次独立的实时 AT 快照，不读取蜂窝缓存；运营商与
+ * 邻区等低频元数据只在打开页面时从 status 取一次。
  * 邻区表每行带「锁定」按钮，与主页共用 M.neighborRows。 */
 
 var MODES = [ [ 'auto', '自动' ], [ '4g', '仅 4G' ], [ 'sa', '5G SA' ], [ 'nsa', '5G NSA' ] ];
@@ -208,24 +209,30 @@ return view.extend({
 		});
 
 		this.refresh();
-		this.loadServing(false);
+		this.loadServingMeta();
+		this.loadServing();
+		poll.add(function() { return self.loadServing(); }, 2);
 	},
 
 	note: function(txt) { var e = this.Q('lock-note'); if (e) e.textContent = '（' + txt + '）'; },
 
-	/* 当前驻网 + 邻区：先用现有缓存立即渲染（宁可先给几秒前的参照），陈旧时 2.6 s
-	 * 后补刷一次（status 自己会踢采集）。不做长等待循环。 */
+	/* 运营商与邻区属于低频元数据；实时信号不会从这里读取。 */
+	loadServingMeta: function() {
+		var self = this;
+		return L.resolveDefault(M.callStatus()).then(function(st) {
+			self.servingMeta = (st || {}).cell || {};
+		});
+	},
+
+	/* 每次都由后端完成一轮新的 AT 快照；不接受上一轮 signal/cell 缓存。 */
 	loadServing: function() {
 		var self = this;
-		L.resolveDefault(M.callStatus()).then(function(st) {
-			st = st || {};
-			self.paintServing(st.cell);
-			if (st.cell_age == null || st.cell_age > 6)
-				setTimeout(function() {
-					L.resolveDefault(M.callStatus()).then(function(st2) {
-						self.paintServing((st2 || {}).cell);
-					});
-				}, 2600);
+		return L.resolveDefault(M.callSignal()).then(function(live) {
+			live = live || {};
+			var c = {}, meta = self.servingMeta || {};
+			Object.keys(meta).forEach(function(k) { c[k] = meta[k]; });
+			Object.keys(live).forEach(function(k) { c[k] = live[k]; });
+			self.paintServing(c);
 		});
 	},
 

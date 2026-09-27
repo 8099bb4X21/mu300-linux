@@ -2,8 +2,9 @@
 """scp to the MU300 with password auth (no sshpass). usage: mu300-scp.py LOCAL REMOTE_PATH"""
 import os, pty, select, sys
 pw = os.environ.get('MU300_PASS', 'ubuntu').encode()
+host = os.environ.get('MU300_HOST', 'ubuntu@192.168.77.1')
 cmd = ['scp', '-O', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR',
-       '-o', 'PubkeyAuthentication=no', sys.argv[1], 'ubuntu@192.168.77.1:' + sys.argv[2]]
+       '-o', 'PubkeyAuthentication=no', sys.argv[1], host + ':' + sys.argv[2]]
 pid, fd = pty.fork()
 if pid == 0:
     os.execvp(cmd[0], cmd)

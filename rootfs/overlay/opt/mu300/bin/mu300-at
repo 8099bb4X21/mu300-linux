@@ -57,8 +57,16 @@ if [ -p "$DIR/cmd" ]; then
     # uhttpd). The daemon is always reading this fifo, so the write completes in
     # microseconds; if the daemon is dead the client hits its own answer-file timeout
     # below, which is the same outcome the timeout wrapper was trying to avoid.
-    printf '%s %s %s\n' "$T" "$answer" "$cmd" > "$DIR/cmd" 2>/dev/null || {
+    # Open the FIFO read-write.  A write-only open blocks until a reader opens
+    # the *same inode*.  If procd replaces the daemon between the path lookup and
+    # that open, the client and the new daemon wait forever on two different,
+    # unlinked FIFOs while this client keeps the global command lock.  O_RDWR
+    # never blocks; with no daemon the answer timeout below releases the lock.
+    exec 9<> "$DIR/cmd" 2>/dev/null || {
         echo "mu300-at: the daemon is not reading commands" >&2; exit 1; }
+    printf '%s %s %s\n' "$T" "$answer" "$cmd" >&9 || {
+        exec 9>&-; echo "mu300-at: the daemon is not reading commands" >&2; exit 1; }
+    exec 9>&-
     n=0
     # fast poll: the daemon typically writes the answer in ~20 ms, so a 1 s sleep
     # here adds a full second to every AT round trip. The system /bin/sleep (busybox

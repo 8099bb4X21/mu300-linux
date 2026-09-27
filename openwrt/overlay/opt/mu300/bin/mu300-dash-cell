@@ -92,51 +92,6 @@ trap 'rm -rf "$LOCK" 2>/dev/null' EXIT INT TERM
 
 # ------------------------------------------------------------------- identity
 IDENT_JSON=null
-if [ "$MODE" = full ]; then
-    IDENT_AGE=999999
-    [ -s "$IDENT" ] && IDENT_AGE=$(( $(now) - $(date -r "$IDENT" +%s 2>/dev/null || echo 0) ))
-    if [ "$IDENT_AGE" -le "$IDENT_MAXAGE" ]; then
-        IDENT_JSON=$(cat "$IDENT" 2>/dev/null || echo null)
-    else
-    i_mfg=$(at 'AT+CGMI' | grep -v '^OK' | head -n1)
-    i_model=$(at 'AT+CGMM' | grep -v '^OK' | head -n1)
-    i_fw=$(at 'AT+CGMR' | grep -v '^OK' | head -n1)
-    i_imei=$(at 'AT+CGSN' | tr -cd '0-9' | cut -c1-15)
-    i_imsi=$(at 'AT+CIMI' | tr -cd '0-9' | cut -c1-15)
-    i_iccid=$(at 'AT+CCID' | tr -cd '0-9' | cut -c1-20)
-    if [ -n "$i_imei$i_imsi$i_iccid" ]; then
-        IDENT_JSON=$(printf '{"ts":%d,"mfg":%s,"model":%s,"fw":%s,"imei":%s,"imsi":%s,"iccid":%s}' \
-            "$(now)" "$(qs "$i_mfg")" "$(qs "$i_model")" "$(qs "$i_fw")" "$(qs "$i_imei")" "$(qs "$i_imsi")" "$(qs "$i_iccid")")
-        printf '%s\n' "$IDENT_JSON" > "$IDENT.part" 2>/dev/null && mv "$IDENT.part" "$IDENT"
-    elif [ -s "$IDENT" ]; then
-        IDENT_JSON=$(cat "$IDENT")   # modem unreachable: keep the last known identity
-    fi
-    fi
-fi
-
-# ------------------------------------------------------------------- the round
-CFUN=$(at 'AT+CFUN?' | sed -n 's/^+CFUN: *//p' | head -n1)
-CEREG=$(at 'AT+CEREG?' | grep '^+CEREG:' | head -n1)
-C5GREG=$(at 'AT+C5GREG?' | grep '^+C5GREG:' | head -n1)
-CESQ=$(at 'AT+CESQ' | grep '^+CESQ:' | head -n1)
-SP_LTE=$(at 'AT+SPENGMD=0,6,0' | grep -v '^AT' | grep -- '-' | head -n1)
-SP_LTEPHY=$(at 'AT+SPENGMD=0,0,6' | grep -v '^AT' | grep -- '-' | head -n1)
-SP_NR=$(at 'AT+SPENGMD=0,14,1' | grep -v '^AT' | grep -- '-' | head -n1)
-if [ "$MODE" = full ]; then
-    COPS=$(at 'AT+COPS?' | grep '^+COPS:' | head -n1)
-    SP_LN=$(at 'AT+SPENGMD=0,6,6' | grep -v '^AT' | grep -- '-' | head -n1)
-    SP_NRNB=$(at 'AT+SPQ5GNCELLEX' | sed -n 's/^+SPQ5GNCELLEX: *//p' | head -n1)
-    QOS=$(at 'AT+CGEQOSRDP=1' | sed -n 's/^+CGEQOSRDP: *//p' | head -n1)
-fi
-
-# "no answer at all" is a modem/daemon problem, not "no signal": say so explicitly
-if [ -z "$CFUN$CEREG$CESQ$SP_LTE$SP_NR$COPS" ]; then
-    if [ -p /run/mu300-at/cmd ]; then ERR="modem did not answer (radio off or CP restarting)"
-    else ERR="mu300-atd is not running"; fi
-    printf '{"ts":%d,"error":%s}\n' "$(now)" "$(qs "$ERR")" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
-    [ "$MODE" = full ] && cp "$SIGF" "$CELL"
-    exit 0
-fi
 
 # ------------------------------------------------------------- SPENGMD decode
 # Unisoc separates fields with "-" and writes negatives as "+<abs>":
@@ -153,7 +108,11 @@ sp_fragment() {  # sp_fragment MODE LINE [PHYLINE]  (MODE: lte | nr | ltenb)
             s = l; gsub(/\r/, "", s)
             gsub(/,-/, ",+", s); gsub(/--/, "-+", s); sub(/^-/, "+", s)
             n = split(s, raw, "-")
-            for (i = 1; i <= n; i++) { arr[i-1] = raw[i]; gsub(/ /, "", arr[i-1]) }
+            # Prefix before storing: BusyBox awk tags an all-digit field as a
+            # numeric string and may wrap a 36-bit cell id before fs() sees it.
+            for (i = 1; i <= n; i++) {
+                arr[i-1] = "x" raw[i]; gsub(/ /, "", arr[i-1]); arr[i-1] = substr(arr[i-1], 2)
+            }
             return n
         }
         # scalar part of a token, sign restored ("+11747" -> -11747)
@@ -163,7 +122,22 @@ sp_fragment() {  # sp_fragment MODE LINE [PHYLINE]  (MODE: lte | nr | ltenb)
         # large ids (NR cell id is 36 bits) must never go through arithmetic:
         # busybox awk wraps integers at 32 bits (measured: 2579463431 came out
         # negative through both %d and %.0f). fs() passes the token as a string.
-        function fs(x,   v) { v = x; sub(/,.*/, "", v); gsub(/\+/, "-", v); return (v == "" || v == "NA" || v == "N/A") ? "null" : "\"" v "\"" }
+        function u32(neg,   top,b,out,i,borrow,d) {
+            top = "4294967296"; b = neg
+            while (length(b) < 10) b = "0" b
+            out = ""; borrow = 0
+            for (i = 10; i > 0; i--) {
+                d = substr(top,i,1) - substr(b,i,1) - borrow
+                if (d < 0) { d += 10; borrow = 1 } else borrow = 0
+                out = d out
+            }
+            sub(/^0+/, "", out); return (out == "") ? "0" : out
+        }
+        function fs(x,   v) {
+            v = x; sub(/,.*/, "", v)
+            if (v ~ /^\+/) v = u32(substr(v, 2))
+            return (v == "" || v == "NA" || v == "N/A") ? "null" : "\"" v "\""
+        }
         function lteband(fr,   a,b,r,i,n) {
             n = split("1:0-599 2:600-1199 3:1200-1949 4:1950-2399 5:2400-2649 7:2750-3449 8:3450-3799 12:5010-5179 13:5180-5279 14:5280-5379 17:5730-5849 18:5850-5999 19:6000-6149 20:6150-6449 25:8040-8689 26:8690-9039 27:9040-9209 28:9210-9659 30:9770-9869 31:9870-9919 33:36000-36199 34:36200-36349 35:36350-36949 36:36950-37549 37:37550-37749 38:37750-38249 39:38250-38649 40:38650-39649 41:39650-41589 42:41590-43589 43:43590-45589 44:45590-46589 46:46790-54539 47:54540-55239 48:55240-56739 49:56740-58239 50:58240-59089 51:59090-59139 65:65536-66435 66:66436-67335", a, " ")
             for (i = 1; i <= n; i++) { split(a[i], b, ":"); split(b[2], r, "-")
@@ -291,6 +265,65 @@ qos_fragment() {  # "+CGEQOSRDP: 1,9,..OK" (this modem glues OK onto the line)
               ($7 != "" && $7 > 0) ? sprintf("%.1f", $7/1000) : "null",
               ($8 != "" && $8 > 0) ? sprintf("%.1f", $8/1000) : "null" }'
 }
+
+# ---------------------------------------------------------- staged AT round
+# Publish the cheap, universally available core first. The UI can show radio,
+# registration and CESQ while the optional engineering/identity tier continues.
+CFUN=$(at 'AT+CFUN?' 2 | sed -n 's/^+CFUN: *//p' | head -n1)
+CEREG=$(at 'AT+CEREG?' 2 | grep '^+CEREG:' | head -n1)
+C5GREG=$(at 'AT+C5GREG?' 2 | grep '^+C5GREG:' | head -n1)
+CESQ=$(at 'AT+CESQ' 2 | grep '^+CESQ:' | head -n1)
+REG=$(reg_fragment "$CEREG"); REG5=$(reg_fragment "$C5GREG")
+CESQJ=$(cesq_fragment "$CESQ"); CFUNN=$(n_or_null "$CFUN")
+printf '{"ts":%d,"partial":1,"cfun":%s,"reg":%s,"reg5g":%s,"sig_src":"cesq","sig":%s,"lte":null,"nr":null}\n' \
+    "$(now)" "$CFUNN" "$REG" "$REG5" "$CESQJ" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
+
+# Engineering reads, neighbours and bearer QoS have no useful answer while the
+# modem is searching/no-service. Skipping them avoids a chain of AT timeouts.
+R4=$(printf '%s\n' "$CEREG" | tr -d '"' | awk -F',' '{ gsub(/ /,"",$2); print $2 }')
+R5=$(printf '%s\n' "$C5GREG" | tr -d '"' | awk -F',' '{ gsub(/ /,"",$2); print $2 }')
+REGISTERED=0
+case "$R4:$R5" in 1:*|5:*|10:*|*:1|*:5|*:10) REGISTERED=1 ;; esac
+SP_LTE=; SP_LTEPHY=; SP_NR=; SP_LN=; SP_NRNB=; QOS=; COPS=
+if [ "$REGISTERED" = 1 ]; then
+    SP_LTE=$(at 'AT+SPENGMD=0,6,0' 2 | grep -v '^AT' | grep -- '-' | head -n1)
+    SP_LTEPHY=$(at 'AT+SPENGMD=0,0,6' 2 | grep -v '^AT' | grep -- '-' | head -n1)
+    SP_NR=$(at 'AT+SPENGMD=0,14,1' 2 | grep -v '^AT' | grep -- '-' | head -n1)
+fi
+if [ "$MODE" = full ]; then
+    COPS=$(at 'AT+COPS?' 2 | grep '^+COPS:' | head -n1)
+    if [ "$REGISTERED" = 1 ]; then
+        SP_LN=$(at 'AT+SPENGMD=0,6,6' 2 | grep -v '^AT' | grep -- '-' | head -n1)
+        SP_NRNB=$(at 'AT+SPQ5GNCELLEX' 2 | sed -n 's/^+SPQ5GNCELLEX: *//p' | head -n1)
+        QOS=$(at 'AT+CGEQOSRDP=1' 2 | sed -n 's/^+CGEQOSRDP: *//p' | head -n1)
+    fi
+    IDENT_AGE=999999
+    [ -s "$IDENT" ] && IDENT_AGE=$(( $(now) - $(date -r "$IDENT" +%s 2>/dev/null || echo 0) ))
+    if [ "$IDENT_AGE" -le "$IDENT_MAXAGE" ]; then
+        IDENT_JSON=$(cat "$IDENT" 2>/dev/null || echo null)
+    else
+        i_mfg=$(at 'AT+CGMI' 2 | grep -v '^OK' | head -n1)
+        i_model=$(at 'AT+CGMM' 2 | grep -v '^OK' | head -n1)
+        i_fw=$(at 'AT+CGMR' 2 | grep -v '^OK' | head -n1)
+        i_imei=$(at 'AT+CGSN' 2 | tr -cd '0-9' | cut -c1-15)
+        i_imsi=$(at 'AT+CIMI' 2 | tr -cd '0-9' | cut -c1-15)
+        i_iccid=$(at 'AT+CCID' 2 | tr -cd '0-9' | cut -c1-20)
+        if [ -n "$i_imei$i_imsi$i_iccid" ]; then
+            IDENT_JSON=$(printf '{"ts":%d,"mfg":%s,"model":%s,"fw":%s,"imei":%s,"imsi":%s,"iccid":%s}' \
+                "$(now)" "$(qs "$i_mfg")" "$(qs "$i_model")" "$(qs "$i_fw")" "$(qs "$i_imei")" "$(qs "$i_imsi")" "$(qs "$i_iccid")")
+            printf '%s\n' "$IDENT_JSON" > "$IDENT.part" 2>/dev/null && mv "$IDENT.part" "$IDENT"
+        elif [ -s "$IDENT" ]; then IDENT_JSON=$(cat "$IDENT"); fi
+    fi
+fi
+
+# "no answer at all" is a modem/daemon problem, not "no signal".
+if [ -z "$CFUN$CEREG$CESQ$SP_LTE$SP_NR$COPS" ]; then
+    if [ -p /run/mu300-at/cmd ]; then ERR="modem did not answer (radio off or CP restarting)"
+    else ERR="mu300-atd is not running"; fi
+    printf '{"ts":%d,"error":%s}\n' "$(now)" "$(qs "$ERR")" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
+    [ "$MODE" = full ] && cp "$SIGF" "$CELL"
+    exit 0
+fi
 
 LTE=$(sp_fragment lte "$SP_LTE" "$SP_LTEPHY")
 NR=$(sp_fragment nr "$SP_NR")
