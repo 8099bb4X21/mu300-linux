@@ -63,7 +63,7 @@ echo "==> kernel"
 bash /work/build-linux.sh
 echo "==> Wi-Fi, Bluetooth, GPU modules"
 bash /work/build-wlan.sh >/dev/null
-make O=/src/out-linux ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld -j"$(nproc)" M=/src/ext-sprdbt \
+make O=/src/out-linux ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" M=/src/ext-sprdbt \
   BSP_BOARD_UNISOC_WCN_SOCKET=pcie modules >/dev/null
 bash /work/build-mali.sh >/dev/null
 
