@@ -21,6 +21,7 @@ trap 'rm -rf "$W"' EXIT
 # build-linux.sh writes its logs next to the config: give it a scratch copy of kernel/
 cp -R "$TOP/kernel/." "$W/"
 cp "$TOP/kernel/f50-stock-B09.config" "$W/device.config"
+cp "$TOP/kernel/builtin.fragment" "$W/builtin.fragment"
 
 docker run --rm -v "$VOL":/src -v "$W":/work \
   -e KERNEL_REPO=$KERNEL_REPO -e KERNEL_REV=$KERNEL_REV -e MODULES_REPO=$MODULES_REPO -e MODULES_REV=$MODULES_REV \
