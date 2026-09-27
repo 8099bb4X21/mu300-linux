@@ -1,4 +1,4 @@
-# Linux on the ZTE F50 / MU300
+# Linux on the ZTE F50 / MU300 and U30 Air
 
 [![Latest Release](https://img.shields.io/github/v/release/dikeckaan/mu300-linux?logo=github)](https://github.com/dikeckaan/mu300-linux/releases/latest)
 [![Total Downloads](https://img.shields.io/github/downloads/dikeckaan/mu300-linux/total?color=blue&logo=github)](https://github.com/dikeckaan/mu300-linux/releases)
@@ -13,11 +13,30 @@ to it at any time.
 
 Think of it as a Raspberry Pi that already has a 5G modem, a Wi-Fi access point and 32 GB of storage inside.
 
+The **ZTE U30 Air** is supported too: the same board and chip with a battery. The installer recognises which one it
+is talking to; see [Supported devices](#supported-devices).
+
 > **Türkçe:** ZTE F50 / MU300'ü küçük bir Linux bilgisayarına çevirir: Ubuntu 24.04 veya OpenWrt; SSH, Wi-Fi,
 > Bluetooth ve 5G modem çalışır. Android cihazda kalır, istediğiniz an geri dönersiniz. Kurulum: önce
 > `./install.sh --check` ile cihazınıza bakın, sonra `./install.sh` ile kurun; `./uninstall.sh` ile kaldırın.
+> ZTE U30 Air de desteklenir (aynı kart, pilli); kurulum programı cihazı kendisi tanır.
 
 ---
+
+## Supported devices
+
+| | ZTE F50 / MU300 | ZTE U30 Air |
+|---|---|---|
+| Board, chip | `ums9620_2h10_feimao`, Unisoc T760 (UMS9620) | the same |
+| Power | USB only | battery (4050 mAh), charger and fuel gauge |
+| LEDs used by Linux | the blue LED: mobile data | power, network (blue: data, red: no service), Wi-Fi |
+| USB network | `192.168.77.1` | `192.168.78.1` (so both can be plugged into one computer) |
+| Tested | everything below | kernel 5.4 with Ubuntu 24.04: USB, Wi-Fi hotspot, Bluetooth, mobile data, battery, LEDs |
+
+Both run the same kernel, the same systems and the same releases; what differs is a handful of drivers for the U30
+Air's charger and LEDs, which its boot image loads in place of the F50's ([`kernel/u30air.fragment`](kernel/u30air.fragment)).
+Nothing about the device has to be chosen by hand: the installer reads it from Android, and the boot image, the
+LEDs and the default address follow. The U30 **Pro** is a different chip (UMS9632) and is not supported.
 
 ## What you get
 
@@ -25,7 +44,7 @@ Think of it as a Raspberry Pi that already has a 5G modem, a Wi-Fi access point 
   LuCI web interface.
 * **Internet over 5G/LTE**, shared with everything connected to the device.
 * **A Wi-Fi hotspot** (5 GHz or 2.4 GHz) and **USB networking**: plug it into a computer and it shows up as a network adapter.
-* **SSH access** at `192.168.77.1`, plus a USB serial console.
+* **SSH access** at `192.168.77.1` (U30 Air: `192.168.78.1`), plus a USB serial console.
 * **Bluetooth** and the **Mali GPU** (OpenCL; no screen output).
 * **`mu300-toolkit`**, a menu like `raspi-config`: temperatures, CPU and RAM use, network speeds, performance
   profiles, stress tests, VPN and services.
@@ -57,7 +76,7 @@ need `adb` on your computer. Getting to that point is not part of this project.
 * `./uninstall.sh` puts everything back.
 
 **You need:**
-* A ZTE F50 / MU300, rooted, connected by USB, with USB debugging enabled.
+* A ZTE F50 / MU300 or U30 Air, rooted, connected by USB, with USB debugging enabled.
 * A computer with `adb`:
   * **macOS or Linux:** also Python 3, `lz4` and `curl` (usually already installed).
   * **Windows 10/11:** PowerShell. The installer installs Python 3 (for your user, with winget or from
@@ -149,7 +168,8 @@ into Android for you over SSH.
 ssh ubuntu@192.168.77.1        # the password you chose during the install
 ```
 
-For OpenWrt use `ssh root@192.168.77.1`, or open `http://192.168.77.1` in a browser for LuCI.
+For OpenWrt use `ssh root@192.168.77.1`, or open `http://192.168.77.1` in a browser for LuCI. On a U30 Air the
+address is `192.168.78.1` instead.
 
 The Wi-Fi network the device broadcasts is its hotspot; unless you chose otherwise it uses the name and password
 copied from Android.
@@ -270,7 +290,7 @@ Like the installer, it offers to reboot the device from Linux into Android first
 | Ubuntu 24.04 LTS / OpenWrt 25.12 | ✅ boots, no failed services |
 | Mobile data (5G NSA / LTE) | ✅ shared with Wi-Fi and USB clients; reconnects by itself after modem resets |
 | Wi-Fi access point | ✅ 5 GHz (802.11ac) or 2.4 GHz, one at a time |
-| USB network + serial console | ✅ `192.168.77.1`, `screen /dev/cu.usbmodem* 115200` |
+| USB network + serial console | ✅ `192.168.77.1` (U30 Air `192.168.78.1`), `screen /dev/cu.usbmodem* 115200` |
 | SSH, telnet | ✅ |
 | Bluetooth | ✅ BlueZ, scanning works |
 | GPU (Mali-G57) | ✅ OpenCL 3.0, headless |

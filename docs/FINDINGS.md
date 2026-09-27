@@ -1618,3 +1618,56 @@ half-written file: `Failed to resolve user 'messagebus'`); it now writes a copy 
 system still running (only rm's `--preserve-root` stopped it), and `apply`, `rollback` and `clean` could remove
 `<os>.old` while it was the running system (an apply or rollback without the reboot in between); all of them now
 check whether a directory is the running root (`[ / -ef dir ]`) first.
+
+## ZTE U30 Air
+
+### 33. The same board with a battery
+
+The U30 Air (`ro.product.device` U30Air, firmware `U30Air_SSV1.0.0B14`) is `ums9620_2h10_feimao` like the F50: same
+SoC, same 64 GB eMMC and partition layout (partitions end at sector 54218752, so the Linux region is at the same
+offset), and its stock kernel is the very source this project builds (Enceka's tree is named after it). Its
+`/proc/config.gz` differs from the F50's in 19 symbols, all about the battery and its surroundings: ZTE's "SQC"
+charger stack (`sqc_charger`, `sqc_bq2560x`, `sqc_netlink`, `charger_policy_service`, `zte_power_supply`,
+`zte_misc`), `SC27XX_PD`, GPIO and LDO LEDs, a SAR sensor (`SAR_PARA` bougain instead of anthurium) and an NFC tag.
+Two are built in on the U30 Air (`I2C_CHARDEV`, `I2C_SMBUS`); everything else is a module or a bool that only
+changes modules.
+
+The first boot with the F50 modules (one-shot trial) reached switch_root and ran, but the host never saw USB:
+`sprd-charger-manager` probed with -517 for good, because the U30 Air's device tree describes the SQC charger
+manager, and the F50 build of that module is `charger-manager.c` while `VENDOR_SQC_CHARGER` swaps in
+`charger-manager-sqc-comm.c`. The USB PHY and dwc3 wait on the charger/Type-C side, so no gadget.
+
+`kernel/build-u30air.sh` builds the F50 config plus `kernel/u30air.fragment` in a second build directory and keeps
+what differs. The Image has to stay the F50 one, so the check is the set of symbols vmlinux exports: `I2C_SMBUS=m`
+changed it (the i2c core gains `of_i2c_setup_smbus_alert`), and no U30 Air driver needs it, so it is left out;
+`I2C_CHARDEV` is a module. Comparing whole files marks nearly every module as different (build id, symbol table
+order), so the comparison is on `.text`, `.rodata`, `.data`, `.modinfo` and `__ksymtab_strings`; that leaves 15
+modules. The load order (`boot/module-order-u30air.txt`) is the F50's with the charger block replaced, checked
+against every module's `depends=` (the fuel gauge needs the charger manager, which needs the SQC modules and
+`charger_policy_service`).
+
+init picks the set: `/etc/mu300-device` (written by the installer into the device segment of the ramdisk, which an
+update's generic segment does not replace), else the device tree (`/charger_policy_service` exists only on the U30
+Air). The set is used only when `linux-modules/u30air/kernel.release` matches `uname -r`, since a mainline kernel's
+generic segment brings its own modules and order but leaves these in place.
+
+With them: 93/93 modules, USB network, the hotspot, Bluetooth, mobile data, `/sys/class/power_supply/battery`
+(capacity, status) and the charger's `usb`/`ac` online flags. The battery LED is the charger's own; the others are
+`gpio-leds` (`pwr_green`, `net_blue`/`net_red`/`net_green`/`net_white`, `wifi_blue`/`wifi_white`), driven by
+`mu300-led`. No `LEDS_TRIGGER_NETDEV` in this kernel, so the Wi-Fi LED follows the hotspot service, not traffic.
+
+### 33a. misc and boot_b were looked up before the eMMC existed
+
+`sdhci-sprd` is one of the vendor modules, so the eMMC appears only once they are loaded (about 10 s in). init looked
+for misc and boot_b before that: 20 s of polling for nothing, then `misc-NOT-FOUND` - slot a was never restored by
+init, and there was no persistent log (`persist-target dev=none`). It happened on the F50 as well; the trial boots
+there were rescued by the bootloader's own counting. The lookup now runs after the modules (misc and boot_b at
+10.7 s on both devices), and the reboot timer, which started earlier, reads boot_b from `/run/bootb`.
+
+### 33b. Two devices on one computer
+
+Every device had `192.168.77.1` and the same USB MAC addresses (`02:50:00:00:77:0x`). The subnet now goes with the
+kind of device (F50 `.77`, U30 Air `.78`; `mu300-lan-ip`, `lan.conf` still overrides it) and the gadget MACs are
+`02:50:<md5 of the serial>:<subnet>:0x`. `mu300-vpn` always keeps the device's own LAN out of the tunnel: a
+`vpn.conf` copied from an F50 said `LAN_CIDRS=192.168.77.0/24`, which on a `.78` device would have sent every reply
+to its USB and Wi-Fi clients into the tunnel.
