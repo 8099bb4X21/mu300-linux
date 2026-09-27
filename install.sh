@@ -315,10 +315,7 @@ need=$NEED_OPENWRT; [ "$OSES" = ubuntu ] && need=$NEED_UBUNTU; [ "$OSES" = "ubun
 BOOT_OS=${OSES%% *}
 [ "$choice" = 3 ] && { ask BOOT_OS "$(t 'Which one should boot (ubuntu/openwrt)')" ubuntu; case $BOOT_OS in ubuntu|openwrt) ;; *) die "$(t 'invalid system')" ;; esac; }
 UBUNTU=24.04
-# the U30 Air runs only 5.4 for now (under a mainline kernel its USB does not come up, FINDINGS 33c), and Ubuntu
-# 26.04 needs a mainline kernel: neither question is asked there
-[ $DEVICE = u30air ] && echo "  $(t 'U30 Air: kernel 5.4 and Ubuntu 24.04 (the mainline kernels, which Ubuntu 26.04 needs, do not bring up its USB yet)')"
-case " $OSES " in *" ubuntu "*) if [ $MODE = prebuilt ] && [ $DEVICE = f50 ]; then
+case " $OSES " in *" ubuntu "*) if [ $MODE = prebuilt ]; then
     say "$(t 'Which Ubuntu?')"
     echo "  $(t '1) 24.04 LTS  the longest tested, supported until 2029')"
     echo "  $(t '2) 26.04 LTS  BETA: the newest (systemd 259, newer packages), supported until 2031; tested less')"
@@ -352,7 +349,7 @@ ask hs "$(t "Copy Android's hotspot name and password to Linux? (yes/no)")" yes 
 IMPORT_HOTSPOT=0; [ "$hs" = yes ] && IMPORT_HOTSPOT=1
 ask gpu "$(t 'Include the Mali GPU (OpenCL) userspace (~90 MiB)? (yes/no)')" yes
 KERNEL=5.4
-if [ $MODE = prebuilt ] && [ $DEVICE = f50 ]; then
+if [ $MODE = prebuilt ]; then
     say "$(t 'Which kernel?')"
     echo "  $(t "1) 5.4   Unisoc's vendor kernel (Android 12 base): the longest tested, everything this project supports")"
     echo "  $(t '2) 6.18  mainline Linux, current long-term (LTS) release: newer drivers and security fixes, the same')"
@@ -466,6 +463,8 @@ if [ "$KERNEL" != 5.4 ]; then
     KMAIN=$REL/kernel-$KERNEL
     rm -rf "$KMAIN" && mkdir -p "$KMAIN" && tar -xzf "$REL/mu300-kernel-$KERNEL.tar.gz" -C "$KMAIN"
     [ -s "$KMAIN/Image" ] && [ -s "$KMAIN/ramdisk-generic.lz4" ] && [ -s "$KMAIN/kernel.release" ] || die "$(t '{1} is incomplete' "mu300-kernel-$KERNEL.tar.gz")"
+    # a bundle names the devices it runs on; older mainline kernels do not bring up the U30 Air's USB (FINDINGS 33c)
+    [ $DEVICE = f50 ] || grep -qw $DEVICE "$KMAIN/devices" 2>/dev/null || die "$(t 'release {1} does not support this device yet; use a newer one' "$RELEASE")"
 fi
 say "$(t 'Adding the vendor files from your device to the images')"
 for os in $OSES; do

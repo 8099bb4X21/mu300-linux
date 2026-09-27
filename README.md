@@ -31,7 +31,8 @@ is talking to; see [Supported devices](#supported-devices).
 | Power | USB only | battery (4050 mAh), charger and fuel gauge |
 | LEDs used by Linux | the blue LED: mobile data | power, network (blue: data, red: no service), Wi-Fi |
 | USB network | `192.168.77.1` | `192.168.78.1` (so both can be plugged into one computer) |
-| Tested | everything below | kernel 5.4 with Ubuntu 24.04: USB, Wi-Fi hotspot, Bluetooth, mobile data, battery, LEDs |
+| Tested | everything below | 5.4, 6.18 and 7.2: USB, Wi-Fi hotspot, Bluetooth, mobile data, VPN, LEDs |
+| Battery level | - | shown by `mu300-toolkit` with kernel 5.4; the mainline kernels (6.18, 7.2) have no driver for its charger and fuel gauge, it charges but does not report |
 
 Both run the same kernel, the same systems and the same releases; what differs is a handful of drivers for the U30
 Air's charger and LEDs, which its boot image loads in place of the F50's ([`kernel/u30air.fragment`](kernel/u30air.fragment)).

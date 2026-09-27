@@ -1671,3 +1671,31 @@ kind of device (F50 `.77`, U30 Air `.78`; `mu300-lan-ip`, `lan.conf` still overr
 `02:50:<md5 of the serial>:<subnet>:0x`. `mu300-vpn` always keeps the device's own LAN out of the tunnel: a
 `vpn.conf` copied from an F50 said `LAN_CIDRS=192.168.77.0/24`, which on a `.78` device would have sent every reply
 to its USB and Wi-Fi clients into the tunnel.
+
+### 33c. Mainline on the U30 Air: the USB PHY waited for a Type-C driver that does not exist
+
+The first 6.18 boot on the U30 Air came up completely - systemd, mobile data, the VPN, the hotspot - with no USB at
+all: no network, no serial console. Its persistent log said `25310000.ssphy: cannot add phy` and `dwc3: failed to
+initialize core`. After LK's dtbo merge the PHY's `extcon` on the F50 is `/extcon-gpio` (`linux,extcon-usb-gpio`,
+which mainline has), on the U30 Air `typec@380` - the PMIC's Type-C block, `sprd,sc27xx-typec`, which has no driver
+under mainline, so `usb_add_phy_dev()` deferred for ever. Both boards have the VBUS GPIO node: the ssphy driver now
+points the property at it when it names the Type-C block. Found with the device's own log, since there was no USB to
+look through: init persists it into boot_b, and it was read from Android afterwards (`tools/collect-logs.sh`).
+
+A boot without USB is also a boot you cannot end: it counted as good, so only failing five boots by hand brought
+the device back. `build-boot-image.py --trial-guard SECONDS` is for such experiments: init leaves a timer running
+past switch_root (from a copy of busybox in `/run`, reached through its working directory, since switch_root deletes
+the ramdisk and moves `/run`) that reboots unless `/run/stay` exists by then; with a one-shot trial that is back in
+Android. A reading of the PMIC registers through debugfs (`regmap/spi4.0/registers`) during these tests locked up a
+CPU for 23 s and panicked the board - the ADI bus does not take a full register sweep.
+
+Two more things that only show with two devices on one computer: every gadget had the USB serial number
+`MU300LINUX`, and macOS gave the second device a serial port but no network interface; it is now
+`MU300LINUX-<serial number>`. And under mainline `/proc/cmdline` is the kernel's forced command line, without
+`androidboot.serialno`: init reads the bootloader's from `/chosen/bootargs` in the device tree.
+
+Under 6.18 and 7.2 the U30 Air has USB, mobile data, the VPN, the hotspot, Bluetooth and its LEDs
+(`CONFIG_LEDS_GPIO`). The battery is not reported: its charger and fuel gauge (the SQC stack and `sc27xx-fgu` on
+the UMP9620) have no mainline drivers; the charger IC keeps charging on its own defaults. Kernel bundles now name
+the devices they run on (`./devices`): mu300-update and the installers do not put a bundle from before this onto a
+U30 Air.
