@@ -8,6 +8,9 @@ Before=sysinit.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/mu300/bin/rootfs-fixups
+# the power LED (U30 Air): on from here, off when the system goes down
+ExecStartPost=-/opt/mu300/bin/mu300-led power on
+ExecStop=-/opt/mu300/bin/mu300-led power off
 
 [Install]
 WantedBy=sysinit.target

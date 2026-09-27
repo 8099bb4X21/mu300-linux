@@ -571,7 +571,8 @@ say "$(t 'Installing the on-device switch (Magisk module)')"
 sh "$TOP/tools/install-magisk-module.sh" || echo "  $(t '(skipped; the installer keeps working either way)')"
 
 say "$(t 'Done. Rebooting into {1}' "$BOOT_OS")"
-echo "  $(t 'USB network: 192.168.77.1   SSH: {1}' "$([ "$BOOT_OS" = ubuntu ] && echo ubuntu@192.168.77.1 || echo root@192.168.77.1, LuCI http://192.168.77.1)")"
+IP=192.168.77.1; [ $DEVICE = u30air ] && IP=192.168.78.1
+echo "  $(t 'USB network: {1}   SSH: {2}' $IP "$([ "$BOOT_OS" = ubuntu ] && echo ubuntu@$IP || echo root@$IP, LuCI http://$IP)")"
 echo "  $(t 'switch systems: mu300-os ubuntu|openwrt   back to Android: mu300-next-boot android')"
 echo "  $(t 'back to Linux from Android (with Magisk): su -c mu300-linux')"
 adb reboot </dev/null
