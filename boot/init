@@ -245,56 +245,11 @@ for m in wcn_bsp sprd_wlan_combo; do
 done
 mdev -s
 
-# Start modem_control in the initramfs and wait for the one thing that must happen before
-# its process can be killed: the PM co-processor watchdog disarmed. Measured, the modem
-# boots in ~10 s here (not the ~50 s the module-era initramfs implied - the clock starts
-# at modem_control, and this is 6 s into the boot, not 50). Once "sbuf ready for pmic wdt
-# init" appears, the watchdog is off and the rootfs's mu300-vendor can re-attach to the
-# alive modem in seconds. Killing it earlier leaves the modem half-booted: the rootfs
-# instance cannot take over, the watchdog is never disarmed, and the device power-cuts
-# at ~290 s (learned the hard way - the boot fell back to Android twice).
-A=/android
-if [ -d $A/vendor/bin ] && [ -f $A/vendor/bin/modem_control ]; then
-    cp -a $A/dev/__properties__ /dev/__properties__ 2>/dev/null || true
-    mkdir -p /dev/block/by-name
-    for u in /sys/class/block/mmcblk0p*/uevent; do
-        d=$(basename "$(dirname "$u")")
-        n=$(sed -n 's/^PARTNAME=//p' "$u")
-        ln -sf /dev/$d /dev/block/$d
-        [ -n "$n" ] && ln -sf /dev/$d /dev/block/by-name/$n
-    done
-    mkdir -p $A/dev $A/proc $A/sys $A/data/vendor $A/mnt $A/tmp
-    mount --bind /dev $A/dev
-    mount -t proc proc $A/proc
-    mount -t sysfs sysfs $A/sys
-    sh /etc/ueventd-perms.sh 2>/dev/null
-    src=/proc/cmdline
-    grep -q androidboot.slot_suffix /proc/cmdline || [ ! -r /proc/device-tree/chosen/bootargs ] || src=/proc/device-tree/chosen/bootargs
-    tr -d '\000' < $src | sed 's/androidboot.slot_suffix=_b/androidboot.slot_suffix=_a/' > /run/cmdline.android
-    mount --bind /run/cmdline.android $A/proc/cmdline
-    mkdir -p /dev/socket
-    [ -S /dev/socket/logdw ] || /bin/logdw /dev/socket/logdw > /run/logcat.txt 2>&1 &
-    LD_LIBRARY_PATH=/apex/com.android.runtime/lib64/bionic:/system/lib64:/vendor/lib64 \
-        chroot $A /vendor/bin/modem_control > /run/modem_control.log 2>&1 &
-    MODEM_PID=$!
-    log "stage=modem_control-started-early pid=$MODEM_PID"
-    for n in $(seq 1 30); do
-        dmesg | grep -q "Modem Alive" && break
-        sleep 1
-    done
-    if dmesg | grep -q "Modem Alive"; then
-        log "stage=modem-alive-early t=$n"
-    else
-        log "stage=modem-alive-TIMEOUT (continuing; rootfs vendor will retry)"
-    fi
-    kill $MODEM_PID 2>/dev/null
-    sleep 1
-    kill -9 $MODEM_PID 2>/dev/null
-    umount $A/proc/cmdline 2>/dev/null
-    umount $A/dev 2>/dev/null
-    umount $A/proc 2>/dev/null
-    umount $A/sys 2>/dev/null
-fi
+# NO early modem in the initramfs: every variant tested (kill after wait, keep alive
+# through switch_root, wait for "modem run = 1" then kill) ended with the PM watchdog
+# re-armed and a power cut at ~290 s. The rootfs mu300-vendor starts modem_control
+# ~10 s later and handles the watchdog disarm for the lifetime of the system — that
+# is the only configuration that survives past the watchdog line.
 
 ROOT_OFFSET=27762098176   # linux-boot/rootfs-region.env; outside every GPT partition
 mkdir -p /newroot
