@@ -4,7 +4,7 @@ set -e
 cd /src/zte-u30air
 OUT=/src/out-linux
 mkdir -p $OUT
-M="make O=$OUT ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld -j10"
+M="make O=$OUT ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)"
 cp /work/device.config $OUT/.config
 ./scripts/config --file $OUT/.config --enable THINLTO
 KCONFIG_CONFIG=$OUT/.config ./scripts/kconfig/merge_config.sh -m -O $OUT $OUT/.config /work/mu300-linux.fragment > /work/merge.log 2>&1
