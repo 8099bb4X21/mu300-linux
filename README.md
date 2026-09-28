@@ -319,6 +319,12 @@ The kernel is built from ZTE's published (GPL) source. The reasoning behind each
 **The device does not come back after installing.** Wait two minutes. If there is still nothing, unplug and replug
 it: the bootloader will have returned to Android on its own. Collect logs with `tools/collect-logs.sh`.
 
+**The computer sees the device but gets no address (macOS).** macOS does not set up a network interface it has
+never seen while the screen is locked. Each device has its own USB MAC address, so the first time one is plugged in
+(or after an update that brought these addresses) unlock the Mac, and the interface appears. With both an F50 and a
+U30 Air plugged in, they are `192.168.77.1` and `192.168.78.1`; two of the same kind need `/etc/mu300/lan.conf` to
+tell them apart.
+
 **No internet.** Check that the SIM has a data plan, then run `sudo mobile-data status`. A missing plan looks like a
 connection that keeps dropping.
 
