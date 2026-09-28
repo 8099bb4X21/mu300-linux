@@ -55,21 +55,24 @@ function SelectDevice([switch]$Quiet) {
     if ($env:ANDROID_SERIAL) { return }
     $all = @((Quiet { adb devices -l }) | Where-Object { $_ -match '^\S+\s+device\b' })
     if ($all.Count -eq 0) { return }
-    if ($all.Count -eq 1) { $env:ANDROID_SERIAL = ($all[0] -split '\s+')[0]; return }
     $f50 = @($all | Where-Object { $_ -match 'model:F50|product:MU300|device:MU300|device:U30Air' })
-    if ($f50.Count -eq 1) {
-        $env:ANDROID_SERIAL = ($f50[0] -split '\s+')[0]
-        Write-Host ('  ' + ('more than one adb device: using {0} ({1})' -f $env:ANDROID_SERIAL, $(if ($f50[0] -match 'model:(\S+)') { $Matches[1] } else { '' })))
+    # the only adb device, and an F50/U30 Air: nothing to ask
+    if ($all.Count -eq 1 -and $f50.Count -eq 1) { $env:ANDROID_SERIAL = ($all[0] -split '\s+')[0]; return }
+    # -Quiet (waiting for the device to come back): only the one F50/U30 Air. Otherwise always ask: a phone or
+    # tablet next to it is what this must never touch.
+    if ($Quiet) {
+        if ($f50.Count -eq 1) { $env:ANDROID_SERIAL = ($f50[0] -split '\s+')[0] }
         return
     }
-    if ($Quiet) { return }
-    Write-Host ('  ' + 'more than one adb device - which one is the F50 or U30 Air?')
+    Write-Host ('  ' + 'which adb device is the F50 or U30 Air?')
+    $def = 1
     for ($i = 0; $i -lt $all.Count; $i++) {
         $model = if ($all[$i] -match 'model:(\S+)') { $Matches[1] } else { '' }
         Write-Host ('    {0}) {1} {2}' -f ($i + 1), ($all[$i] -split '\s+')[0], $model)
+        if ($f50.Count -eq 1 -and $all[$i] -eq $f50[0]) { $def = $i + 1 }
     }
     $n = 0
-    if (-not [int]::TryParse((Ask 'Device' '1'), [ref]$n) -or $n -lt 1 -or $n -gt $all.Count) { Die 'invalid choice' }
+    if (-not [int]::TryParse((Ask 'Device' "$def"), [ref]$n) -or $n -lt 1 -or $n -gt $all.Count) { Die 'invalid choice' }
     $env:ANDROID_SERIAL = ($all[$n - 1] -split '\s+')[0]
 }
 # [string]: with no device adb prints nothing, and `-notmatch` on that empty result is falsy, not true
@@ -103,9 +106,12 @@ function Hex32 { (SuDo 'dd if=/dev/block/by-name/misc bs=1 skip=2048 count=32 2>
 Say 'Checking host tools and device'
 FindAdb
 if (-not (Get-Command adb -ErrorAction SilentlyContinue)) { Die 'adb not found' }
-SelectDevice
-if ((AdbState) -notmatch 'device') {
-    $linux = LinuxRunning
+# the device in Linux, and only a phone or tablet in Android: that is not the one to touch - reboot the device first
+$target = @((Quiet { adb devices -l }) | Where-Object { $_ -match '^\S+\s+device\b' -and $_ -match 'model:F50|product:MU300|device:MU300|device:U30Air' })
+$linuxFirst = (-not $env:ANDROID_SERIAL) -and $target.Count -eq 0 -and (LinuxRunning)
+if (-not $linuxFirst) { SelectDevice }
+if ($linuxFirst -or (AdbState) -notmatch 'device') {
+    $linux = $linuxFirst -or (LinuxRunning)
     if (-not $linux) { Die 'no adb device (boot Android, enable USB debugging)' }
     Say 'The device is running MU300 Linux, not Android'
     Write-Host '  Uninstalling happens from Android (slot a), so the device has to reboot first.'
