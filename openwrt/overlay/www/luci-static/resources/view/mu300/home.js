@@ -16,6 +16,38 @@
 var POLL_S = 1.5;
 var RATE_WIN = 40;
 
+/* 工程口只提供 MCS/BLER；调制方式按 3GPP 常用 MCS table 1 就地换算，
+ * 不为展示项增加 AT 请求。LTE 上行的 MCS 分界与下行/NR 不同。 */
+function modulation(mcs, rat, uplink) {
+	if (mcs == null || isNaN(Number(mcs))) return '--';
+	mcs = Number(mcs);
+	if (rat === 'lte' && uplink) {
+		if (mcs >= 0 && mcs <= 10) return 'QPSK';
+		if (mcs <= 20) return '16QAM';
+		if (mcs <= 28) return '64QAM';
+	} else {
+		if (mcs >= 0 && mcs <= 9) return 'QPSK';
+		if (mcs <= 16) return '16QAM';
+		if (mcs <= 28) return '64QAM';
+	}
+	return '--';
+}
+
+function radioMetricRows(label, rat, cell) {
+	var dlMcs = cell && cell.dl_mcs != null ? cell.dl_mcs : null;
+	var ulMcs = cell && cell.ul_mcs != null ? cell.ul_mcs : null;
+	var dlBler = cell && cell.dl_bler != null ? cell.dl_bler : null;
+	var ulBler = cell && cell.ul_bler != null ? cell.ul_bler : null;
+	var prefix = label ? label + ' ' : '';
+	var pair = function(a, b, suffix) {
+		return (a != null ? a + suffix : '--') + ' / ' + (b != null ? b + suffix : '--');
+	};
+	return '<div class="mud-r"><span class="mud-k">' + prefix + '调制方式 下/上</span>' +
+		'<span class="mud-v" title="按当前 MCS 估算">' + modulation(dlMcs, rat, false) + ' / ' + modulation(ulMcs, rat, true) + '</span></div>' +
+		'<div class="mud-r"><span class="mud-k">' + prefix + 'MCS 下/上</span><span class="mud-v">' + pair(dlMcs, ulMcs, '') + '</span></div>' +
+		'<div class="mud-r"><span class="mud-k">' + prefix + 'BLER 下/上</span><span class="mud-v">' + pair(dlBler, ulBler, '%') + '</span></div>';
+}
+
 return view.extend({
 	load: function() { return Promise.resolve(); },
 
@@ -87,9 +119,12 @@ return view.extend({
     </div>
     <div>
       <div class="mud-rows" id="mud-lteanchor"></div>
+      <div class="mud-rows" id="mud-radio-metrics">
+        <div class="mud-r"><span class="mud-k">调制方式 下/上</span><span class="mud-v">-- / --</span></div>
+        <div class="mud-r"><span class="mud-k">MCS 下/上</span><span class="mud-v">-- / --</span></div>
+        <div class="mud-r"><span class="mud-k">BLER 下/上</span><span class="mud-v">-- / --</span></div>
+      </div>
       <div class="mud-rows">
-        <div class="mud-r"><span class="mud-k">MCS 下/上</span><span class="mud-v" id="mud-mcs">--</span></div>
-        <div class="mud-r"><span class="mud-k">BLER 下/上</span><span class="mud-v" id="mud-bler">--</span></div>
         <div class="mud-r"><span class="mud-k">频宽</span><span class="mud-v" id="mud-bw">--</span></div>
         <div class="mud-r"><span class="mud-k">QCI</span><span class="mud-v" id="mud-qci">--</span></div>
         <div class="mud-r"><span class="mud-k">AMBR 下/上</span><span class="mud-v" id="mud-ambr">--</span></div>
@@ -337,8 +372,10 @@ return view.extend({
 
 		/* -- 链路与流量 */
 		var nrk = (c && c.nr) || null;
-		M.set('mcs', nrk && nrk.dl_mcs != null ? nrk.dl_mcs + ' / ' + (nrk.ul_mcs != null ? nrk.ul_mcs : '--') : '--');
-		M.set('bler', nrk && nrk.dl_bler != null ? nrk.dl_bler + '% / ' + (nrk.ul_bler != null ? nrk.ul_bler : '--') + '%' : '--');
+		var radioMetrics = '';
+		if (c && c.nr && c.nr.band) radioMetrics += radioMetricRows('5G', 'nr', c.nr);
+		if (c && c.lte && c.lte.band) radioMetrics += radioMetricRows('4G', 'lte', c.lte);
+		M.v('radio-metrics').innerHTML = radioMetrics || radioMetricRows('', 'nr', null);
 		M.set('bw', nrk && nrk.bw_mhz ? nrk.bw_mhz + ' MHz' : (c && c.lte && c.lte.bw) || '--');
 		var qos = c && c.qos;
 		M.set('qci', qos && qos.qci != null ? qos.qci : '--');
@@ -376,15 +413,11 @@ return view.extend({
 		M.set('reg', reg);
 
 		var anchor = (c && c.lte && c.lte.band) ? c.lte : null;
-		M.v('lteanchor').innerHTML = (anchor && c.nr && c.nr.band) ?
-			'<div class="mud-r"><span class="mud-k">LTE 锚点</span><span class="mud-v">B' + M.esc(anchor.band) +
+		M.v('lteanchor').innerHTML = anchor ?
+			'<div class="mud-r"><span class="mud-k">' + (c.nr && c.nr.band ? 'LTE 锚点' : 'LTE 链路') + '</span><span class="mud-v">B' + M.esc(anchor.band) +
 			' · RSRP ' + (anchor.rsrp != null ? anchor.rsrp.toFixed(1) : '--') +
 			(anchor.sinr != null ? ' · SINR ' + anchor.sinr.toFixed(1) : '') +
-			(anchor.dl_mcs != null ? ' · MCS ' + anchor.dl_mcs : '') +
-			(anchor.ca ? ' · ' + anchor.ca : '') + '</span></div>' :
-			(anchor ? '<div class="mud-r"><span class="mud-k">LTE 链路</span><span class="mud-v">MCS ' +
-			(anchor.dl_mcs != null ? anchor.dl_mcs : '--') + ' / ' + (anchor.ul_mcs != null ? anchor.ul_mcs : '--') +
-			' · BLER ' + (anchor.dl_bler != null ? anchor.dl_bler : '--') + '%</span></div>' : '');
+			(anchor.ca ? ' · ' + M.esc(anchor.ca) : '') + '</span></div>' : '';
 
 		/* -- 慢档分区 */
 		if (slowChanged) {

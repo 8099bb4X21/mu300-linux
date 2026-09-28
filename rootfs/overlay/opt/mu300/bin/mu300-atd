@@ -98,7 +98,10 @@ open_tty || { echo "mu300-atd: cannot open $DEV" >&2; exit 1; }
 URCDIR=$DIR/urc
 URCMAX=${MU300_AT_URC_MAX:-65536}
 mkdir -p "$URCDIR"
-for n in ${MU300_AT_URC_CHANNELS:-0}; do
+# Use '-' rather than ':-': an explicitly empty value means this secondary
+# daemon must not open any URC channel. With ':-', atd2 and atd3 both fell back
+# to nr0 and three readers split/lost the unsolicited stream.
+for n in ${MU300_AT_URC_CHANNELS-0}; do
     other=${DEV%[0-9]}$n
     [ "$other" = "$DEV" ] && continue
     [ -c "$other" ] || continue

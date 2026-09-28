@@ -77,9 +77,19 @@ if [ -p "$DIR/cmd" ]; then
     zz=$([ -x /opt/mu300/bin/busybox ] && echo /opt/mu300/bin/busybox || echo sleep)
     while [ ! -e "$answer" ]; do
         n=$((n + 1))
-        [ "$n" -gt $(( (T + 8) * 100 )) ] && { echo "mu300-at: no answer from the daemon" >&2; exit 1; }
+        [ "$n" -gt $(( (T + 1) * 100 )) ] && { echo "mu300-at: no answer from the daemon" >&2; exit 1; }
         "$zz" sleep 0.01 2>/dev/null || "$zz" sleep 0.1 2>/dev/null || sleep 1
     done
+    # atd always creates the answer file, including for a timeout. An empty
+    # file is therefore not success: callers such as atwatch use the exit code
+    # to distinguish a responding channel from a silent one.
+    # A timed-out daemon can leave CR/LF or an echoed fragment in the answer
+    # file. Success requires a real final result code; otherwise callers must
+    # be able to fail over instead of accepting a blank/partial frame.
+    grep -aEq '^(OK|ERROR|\+CME ERROR|\+CMS ERROR|CONNECT|NO CARRIER)' "$answer" 2>/dev/null || {
+        echo "mu300-at: modem returned no final response" >&2
+        exit 1
+    }
     cat "$answer"
     exit 0
 fi

@@ -53,13 +53,23 @@ IDENT_MAXAGE=21600   # seconds; a SIM change goes through a reboot, 6 h is plent
 
 mkdir -p "$DIR" "$IDENT_DIR" 2>/dev/null
 
-# the dashboard's own channel when the third atd instance runs (nr3): keeps the
-# polling off nr1 so the web AT terminal and sms never queue behind a round
+# nr3/nr4/nr5 belong to SIM slot 1 and return the wrong state for slot 0.
+# The dashboard therefore uses the two verified slot-0-capable optional
+# channels nr6/nr7; nr1 is only the final fallback for a failed pool channel.
 ATC=${MU300_DASH_AT_DIR:-}
-[ -z "$ATC" ] && [ -p /run/mu300-at3/cmd ] && ATC=/run/mu300-at3
 at() {
-    if [ -n "$ATC" ]; then MU300_AT_DIR=$ATC mu300-at -t "${2:-5}" "$1" 2>/dev/null
-    else mu300-at -t "${2:-5}" "$1" 2>/dev/null; fi | tr -d '\r'
+    local cmd=$1 timeout=${2:-5} d out seen=
+    # The assigned regular channel is first. A silent channel fails in about
+    # timeout+1 seconds; only then touch the two unpolled disaster channels.
+    for d in "$ATC" /run/mu300-at6 /run/mu300-at7 /run/mu300-at; do
+        [ -n "$d" ] && [ -p "$d/cmd" ] || continue
+        case " $seen " in *" $d "*) continue ;; esac
+        seen="$seen $d"
+        out=$(MU300_AT_LOCK_WAIT=0 MU300_AT_DIR=$d mu300-at -t "$timeout" "$cmd" 2>/dev/null) || continue
+        printf '%s\n' "$out" | tr -d '\r'
+        return 0
+    done
+    return 1
 }
 now() { date +%s; }
 n_or_null() { case "$1" in ''|*[!0-9]*) echo null ;; *) echo "$1" ;; esac; }
@@ -69,26 +79,45 @@ qs() { [ -n "$1" ] && printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -
 # the same "one owner, spare waits/takes over" pattern mu300-atd uses, so two
 # kicks (page reload while a refresh runs) cannot interleave AT replies
 alive() { [ -n "$1" ] && [ -d "/proc/$1" ] && tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q mu300-dash-cell; }
-take_lock() {  # take_lock DIRVAR - wait for a live holder, take over a dead one
-    local lock=$1 owner n=0
+take_lock() {  # take_lock DIRVAR - drop overlap, take over a dead holder
+    local lock=$1 owner
     while ! mkdir "$lock" 2>/dev/null; do
         owner=$(cat "$lock/pid" 2>/dev/null || true)
         if alive "$owner"; then
-            n=$((n + 1)); [ "$n" -gt 120 ] && exit 0   # holder wedged: drop this round
-            sleep 1
-            continue
+            exit 0
         fi
+        # mkdir and writing pid are two operations. An empty pid here is the
+        # acquisition window of a live peer, not proof of a stale lock.
+        [ -n "$owner" ] || exit 0
         rm -rf "$lock"
     done
     echo $$ > "$lock/pid"
 }
-if [ "$MODE" = fast ]; then
-    LOCK=$DIR/fast.lck
-else
-    LOCK=$DIR/collect.lck
-fi
+# One writer for a given output directory. Live RPCs have private output dirs,
+# while full/fast status refreshes share DIR and therefore never race a cache.
+LOCK=$DIR/collect.lck
 take_lock "$LOCK"
-trap 'rm -rf "$LOCK" 2>/dev/null' EXIT INT TERM
+
+# Claim one of two physical dashboard channels without waiting. This caps
+# work even when browsers overlap polls: a third collector is discarded and
+# the next 2 s refresh retries. Stale slots are reclaimed by PID ownership.
+POOL=${MU300_DASH_POOL_DIR:-/run/mu300-dash-at-pool}
+mkdir -p "$POOL" 2>/dev/null
+SLOT=
+for n in 6 7; do
+    s=$POOL/nr$n
+    if mkdir "$s" 2>/dev/null; then
+        SLOT=$s; ATC=/run/mu300-at$n; break
+    fi
+    owner=$(cat "$s/pid" 2>/dev/null || true)
+    if [ -n "$owner" ] && ! alive "$owner"; then
+        rm -rf "$s"
+        if mkdir "$s" 2>/dev/null; then SLOT=$s; ATC=/run/mu300-at$n; break; fi
+    fi
+done
+[ -n "$SLOT" ] || exit 0
+echo $$ > "$SLOT/pid"
+trap 'rm -rf "$LOCK" "$SLOT" 2>/dev/null' EXIT INT TERM
 
 # ------------------------------------------------------------------- identity
 IDENT_JSON=null

@@ -42,6 +42,10 @@ return view.extend({
     <button class="mud-btn" id="mud-lock-endc">EN-DC</button>
     <button class="mud-btn" id="mud-lock-refresh">刷新锁定状态</button>
   </div>
+  <div class="mud-ctl" style="margin-top:7px;max-width:340px">
+    <button class="mud-btn" id="mud-lock-auto-apply">开机自动应用</button>
+  </div>
+  <div class="mud-note">关闭后只停止下次开机回放，已保存的网络模式、EN-DC、频段和小区配置不会被删除。</div>
 </div>
 
 <div class="mud-sec">
@@ -77,7 +81,7 @@ return view.extend({
   <table class="mud-table"><thead><tr><th>制式/频段</th><th>PCI</th><th>频点</th><th>RSRP</th><th>RSRQ</th><th>SINR</th><th></th></tr></thead>
   <tbody id="mud-neigh"><tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">--</td></tr></tbody></table>
   </div>
-  <div class="mud-note">应用后协议栈重启（SFUN），蜂窝会断开约半分钟；设置自动保存并在开机时回放。频段全不选再点应用 = 恢复自动。</div>
+  <div class="mud-note">应用后协议栈重启（SFUN），蜂窝会短暂断开；设置会持久保存，并在启用“开机自动应用”时于射频开启前回放。频段全不选再点应用 = 恢复自动。</div>
 </div>`;
 		this.wire(root);
 		return root;
@@ -99,6 +103,7 @@ return view.extend({
 				r = r || {};
 				if (!r.ok) { self.note('失败：' + (r.error || '未知错误')); return; }
 				if (kind == 'endc') { self.note('已生效（EN-DC 不需要重启协议栈）'); return self.refreshSoon(); }
+				if (kind == 'auto_apply') { self.note('开机自动应用已' + (val == 'on' ? '开启' : '关闭')); return self.refreshSoon(); }
 				self.note('已后台执行：' + (r.op || kind) + '（SFUN 重启约半分钟），自动回读状态…');
 				self.readback(Date.now());
 			}, function() { self.note('调用失败'); });
@@ -126,6 +131,15 @@ return view.extend({
 				{ noSfun: true, optimistic: function() {
 					btn.className = 'mud-btn' + (on ? '' : ' on');
 					btn.textContent = on ? 'EN-DC' : 'EN-DC ✓';
+				} });
+		};
+		this.Q('lock-auto-apply').onclick = function() {
+			var on = !self.lastLock || self.lastLock.auto_apply !== 0;
+			var btn = this;
+			apply('auto_apply', on ? 'off' : 'on', on ? '关闭开机自动应用' : '开启开机自动应用',
+				{ noSfun: true, optimistic: function() {
+					btn.className = 'mud-btn' + (on ? '' : ' on');
+					btn.textContent = on ? '开机自动应用' : '开机自动应用 ✓';
 				} });
 		};
 		this.Q('lock-refresh').onclick = function() {
@@ -315,6 +329,8 @@ return view.extend({
 		});
 		var eb = this.Q('lock-endc');
 		if (eb) { eb.className = 'mud-btn' + (l.endc === '1' ? ' on' : ''); eb.textContent = l.endc === '1' ? 'EN-DC' : 'EN-DC'; }
+		var ab = this.Q('lock-auto-apply'), autoApply = l.auto_apply !== 0;
+		if (ab) { ab.className = 'mud-btn' + (autoApply ? ' on' : ''); ab.textContent = autoApply ? '开机自动应用 ✓' : '开机自动应用'; }
 
 		/* 支持频段优先取模组能力（SPLBAND=4 / =0 解码），读不到才用静态表 */
 		var caps = l.caps || {};

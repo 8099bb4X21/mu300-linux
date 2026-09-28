@@ -239,6 +239,38 @@ parse_cmgr() {  # parse_cmgr INDEX
     '
 }
 
+select_storage() {
+    local s reply line used total best= cache=/run/mu300-sms-store
+    if [ -s "$cache" ]; then
+        s=$(cat "$cache" 2>/dev/null)
+        case $s in SM|MT|ME)
+            at "AT+CPMS=\"$s\"" 6 >/dev/null 2>&1 && { echo "$s"; return 0; }
+            ;;
+        esac
+        rm -f "$cache"
+    fi
+    # This modem rejects the usual three-argument CPMS form. Probe with the
+    # supported single-argument form, prefer a store containing messages, then
+    # any store with real capacity (ME is commonly 0/0 on this hardware).
+    for s in SM MT ME; do
+        reply=$(at "AT+CPMS=\"$s\"" 6 2>/dev/null || true)
+        line=$(printf '%s\n' "$reply" | grep '^+CPMS:' | head -1)
+        used=$(printf '%s\n' "$line" | awk -F'[,:]' '{gsub(/ /,"",$2); print $2}')
+        total=$(printf '%s\n' "$line" | awk -F'[,:]' '{gsub(/ /,"",$3); print $3}')
+        case "$used:$total" in *[!0-9:]*|:*) continue ;; esac
+        if [ "$used" -gt 0 ]; then
+            echo "$s" > "$cache"
+            echo "$s"
+            return 0
+        fi
+        [ "$total" -gt 0 ] && [ -z "$best" ] && best=$s
+    done
+    [ -n "$best" ] || best=ME
+    at "AT+CPMS=\"$best\"" 6 >/dev/null || return 1
+    echo "$best" > "$cache"
+    echo "$best"
+}
+
 # List the SIM as TSV records, by whichever door this firmware opens. The measured cases:
 #   * CMGF=1 refused        -> report; nothing to list with
 #   * AT+CMGL="ALL" refused -> some firmwares only take the numeric stat (CMGL=4) in text mode
@@ -246,7 +278,11 @@ parse_cmgr() {  # parse_cmgr INDEX
 #     is read by CMGR after each +CMTI - see unisoc-cpd FINDINGS), so scan slots instead;
 #     the fingerprint dedupe in sync absorbs the overlap
 sim_list() {
-    local reply
+    local reply store
+    store=$(select_storage) || {
+        echo "mu300-sms: no usable SMS storage" >&2
+        return 1
+    }
     reply=$(at 'AT+CMGF=1' 6)
     case $reply in *OK*) ;; *)
         echo "mu300-sms: AT+CMGF=1 refused: $(printf '%s\n' "$reply" | head -1)" >&2
@@ -391,12 +427,9 @@ cmd_mark() {
     set_hdr "$f" status "$what"
 }
 
-# The submit is a two-phase conversation (AT+CMGS=len answers a ">" prompt, the PDU + Ctrl-Z
-# follows), which one mu300-at invocation cannot carry. Both phases go to the daemon back to
-# back while this shell holds the *client* lock, so no other client (the data watchdog polls
-# every 30 s) can slip a command between the prompt and the PDU - the modem would take that
-# command for PDU bytes. The daemon appends \r after the Ctrl-Z; an empty line after the
-# terminator is harmless, and if anything goes wrong ESC cancels a stuck prompt.
+# This CP's prompt has no newline, so a two-stage AT+CMGS conversation loses the
+# ">" in atd's line reader. Send command, literal CR, PDU and Ctrl-Z as one
+# atomic atd request; the modem accepts this form and replies with +CMGS/OK.
 cmd_send() {
     local num=${1:-} text idigits toa ud udl pdu len
     shift $(($# > 0 ? 1 : 0))
@@ -422,53 +455,18 @@ cmd_send() {
     len=$(( (${#pdu} - 2) / 2 ))
     echo "submitting to $num ($len octets, $((udl / 2)) UCS-2 units)"
 
-    local lock=$ATDIR/lock n=0 pid=
-    while ! mkdir "$lock" 2>/dev/null; do
-        pid=$(cat "$lock/pid" 2>/dev/null || true)
-        if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rm -rf "$lock"; continue; fi
-        n=$((n + 1)); [ "$n" -gt 900 ] && die "the AT client lock stayed busy for 90 s"
-        sleep 0.1 2>/dev/null || sleep 1
-    done
-    echo $$ > "$lock/pid" 2>/dev/null || true
-    trap 'rm -rf "$lock" 2>/dev/null' EXIT INT TERM
-
-    # ask TIMEOUT CMD -> the daemon's answer on stdout. Like mu300-at: an answer file of our
-    # own, written by the fifo line we hand the daemon. Everything from here to the end of the
-    # transaction must go through ask() - mu300-at takes this very lock, so calling it now
-    # would deadlock against ourselves.
-    ask() {
-        local t=$1 cmd=$2 answer=$ATDIR/sms.$$ n2=0
-        rm -f "$answer" "$answer.part"
-        if command -v timeout >/dev/null 2>&1; then
-            timeout $((t + 6)) sh -c 'printf "%s %s %s\n" "$1" "$2" "$3" > "$4"' _ "$t" "$answer" "$cmd" "$ATDIR/cmd" ||
-                return 1
-        else
-            printf '%s %s %s\n' "$t" "$answer" "$cmd" > "$ATDIR/cmd"
-        fi
-        while [ ! -e "$answer" ]; do
-            n2=$((n2 + 1))
-            [ "$n2" -gt $(( (t + 8) * 10 )) ] && return 1
-            sleep 0.1 2>/dev/null || sleep 1
-        done
-        cat "$answer"
-        rm -f "$answer"
-    }
-
-    local r0 r1 r2
-    r0=$(ask 6 'AT+CMGF=0')       # PDU mode for the submit
+    local r0 r2 submit
+    r0=$(at 'AT+CAVIMS=1' 6)
+    case $r0 in *OK*) ;; *) die "modem refused AT+CAVIMS=1: $r0" ;; esac
+    r0=$(at 'AT+CMGF=0' 6)       # PDU mode for the submit
     case $r0 in *OK*) ;; *) die "modem refused AT+CMGF=0: $r0" ;; esac
-    r1=$(ask 3 "AT+CMGS=$len")    # the ">" prompt is no final code - an empty answer here is normal
-    case $r1 in *ERROR*) die "modem refused AT+CMGS=$len: $r1" ;; esac
-    sleep 1                       # let the modem reach its prompt before the payload follows
-    r2=$(ask 25 "$pdu$(printf '\032')")
+    submit=$(printf 'AT+CMGS=%s\r%s\032' "$len" "$pdu")
+    r2=$(at "$submit" 25)
     # back to text mode whatever happened: this firmware boots in PDU mode, where a manual
     # AT+CMGL="ALL" answers +CMS ERROR: 302, and leaving PDU behind after every submit is how
     # the next reader gets confused
-    ask 6 'AT+CMGF=1' >/dev/null
+    at 'AT+CMGF=1' 6 >/dev/null || true
     if ! printf '%s\n' "$r2" | grep -q '^+CMGS:'; then
-        ask 5 "$(printf '\033')" >/dev/null   # ESC: cancel any half-open prompt
-        rm -rf "$lock"
-        trap - EXIT INT TERM
         die "submit failed: $(printf '%s\n' "$r2" | grep -E 'CMS|ERROR' | head -1)"
     fi
     pool_init
@@ -478,8 +476,6 @@ cmd_send() {
     [ -n "$(printf '%s' "$text" | LC_ALL=C tr -d '\000-\177')" ] && coding=ucs2
     store_msg mo sent "$num" "$(date '+%y/%m/%d,%H:%M:%S')" "" "$coding" "$text" >/dev/null
     pool_unlock
-    rm -rf "$lock"
-    trap - EXIT INT TERM
     echo "sent ($(printf '%s\n' "$r2" | sed -n 's/^+CMGS: //p' | head -1))"
 }
 

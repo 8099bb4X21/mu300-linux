@@ -16,7 +16,7 @@ POOL=${MU300_SMS_POOL:-/var/lib/mu300/sms}
 ATDIR=${MU300_AT_DIR:-/run/mu300-at}
 URCDIR=$ATDIR/urc
 POLL=${MU300_SMS_POLL:-5}
-SYNC_INTERVAL=${MU300_SMS_SYNC_INTERVAL:-600}
+SYNC_INTERVAL=${MU300_SMS_SYNC_INTERVAL:-30}
 SMS=${MU300_SMS_BIN:-$(command -v mu300-sms 2>/dev/null || echo /opt/mu300/bin/mu300-sms)}
 
 # one daemon, the house pattern: a second instance (procd respawning, a service started twice)
@@ -53,7 +53,7 @@ done
 "$SMS" sync
 
 signature() {
-    cat "$URCDIR"/nr*.log 2>/dev/null | grep -aF '+CMTI' | md5sum 2>/dev/null | cut -d' ' -f1
+    cat "$URCDIR"/*nr*.log 2>/dev/null | grep -aF '+CMTI' | md5sum 2>/dev/null | cut -d' ' -f1
 }
 
 last=$(signature)

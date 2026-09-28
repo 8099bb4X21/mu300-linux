@@ -36,6 +36,14 @@ set dhcp.wan.ndp='relay'
 set dhcp.lan.ra='relay'
 set dhcp.lan.dhcpv6='relay'
 set dhcp.lan.ndp='relay'
+# Windows can keep requesting the initramfs lease while it has already removed
+# that IPv4 address. A unicast DHCPOFFER to the removed address then disappears
+# in the NCM host stack. Pin the USB host and tag its OFFER/ACK for broadcast.
+set dhcp.mu300_usb=host
+set dhcp.mu300_usb.name='mu300-usb-host'
+set dhcp.mu300_usb.mac='02:50:00:00:77:03'
+set dhcp.mu300_usb.ip='192.168.77.200'
+set dhcp.mu300_usb.broadcast='1'
 UCI
 zone=$(uci -q show firewall | sed -n "s/^\(firewall\.@zone\[[0-9]*\]\)\.name='wan'$/\1/p")
 [ -n "$zone" ] && uci -q set $zone.masq6='1'

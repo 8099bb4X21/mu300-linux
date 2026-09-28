@@ -2,6 +2,15 @@
 # netifd protocol for the MU300 modem: attach with AT commands (mobile-data) and configure sipa_eth0.
 # /etc/config/network:  config interface 'wan' / option proto 'mu300cell' / option apn 'internet'
 # LuCI edits the same options through www/luci-static/resources/protocol/mu300cell.js.
+#
+# The bearer's kernel state is owned here, not by netifd: every update is sent
+# address-external, so netifd tracks addresses, routes and DNS for display and
+# firewall purposes but never installs or removes them. A mixed mode (netifd
+# installing the v4 during setup, the monitor later reporting external) makes
+# netifd delete the address it installed the moment the first external report
+# arrives - the mobile-data watchdog then saw an address-less WAN and redialled
+# every 60 s. mobile-data's netifd path leaves the interface alone; this script
+# and mu300cell-v6.sh are the only writers.
 [ -n "$INCLUDE_ONLY" ] || {
 	. /lib/functions.sh
 	. ../netifd-proto.sh
@@ -11,6 +20,7 @@
 proto_mu300cell_init_config() {
 	available=1
 	no_device=1
+	renew_handler=1
 	proto_config_add_string "apn"
 	proto_config_add_string "pdptype"
 	proto_config_add_boolean "peerdns"
@@ -42,10 +52,9 @@ proto_mu300cell_setup() {
 	dns2=$(echo "$out" | sed -n 's/^DNS2=//p')
 
 	ip link set "$ifname" up
-	# netifd treats this as a v4 protocol, so forwarding leaves accept_ra at 0.  Enable
-	# IPv6 and accept RAs before waiting for the carrier address.  Doing this after
-	# proto_send_update races the only initial RA: the kernel eventually learns the
-	# address (ndp-learn re-solicits), but netifd permanently reports an empty wan v6.
+	# netifd treats this as a v4 protocol, so forwarding leaves accept_ra at 0. Enable
+	# IPv6 and accept RAs before waiting for the carrier address. The monitor below
+	# reports the initial RA and all later address/route lifetime refreshes.
 	if [ "${pdptype:-IP}" != IP ]; then
 		[ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
 			echo 0 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
@@ -54,7 +63,18 @@ proto_mu300cell_setup() {
 			echo 2 > "/proc/sys/net/ipv6/conf/$ifname/accept_ra"
 		}
 	fi
-	proto_init_update "$ifname" 1
+	# Install the bearer address ourselves (external updates are never applied by
+	# netifd). Replace-first keeps an unchanged address continuous across
+	# re-setups; anything else the carrier left behind is removed after it.
+	ip -4 addr replace "$ip/${prefix:-32}" dev "$ifname" 2>/dev/null ||
+		ip -4 addr add "$ip/${prefix:-32}" dev "$ifname"
+	local a
+	for a in $(ip -4 -o addr show dev "$ifname" scope global | awk '{print $4}'); do
+		[ "$a" = "$ip/${prefix:-32}" ] || ip -4 addr del "$a" dev "$ifname" 2>/dev/null
+	done
+	ip -4 route replace default dev "$ifname"
+
+	proto_init_update "$ifname" 1 1
 	proto_add_ipv4_address "$ip" "${prefix:-32}"
 	proto_add_ipv4_route "0.0.0.0" 0
 	if [ "${peerdns:-1}" != 0 ]; then
@@ -62,24 +82,32 @@ proto_mu300cell_setup() {
 		[ -n "$dns2" ] && proto_add_dns_server "$dns2"
 	fi
 	proto_send_update "$config"
-	# Do not hold WAN setup open waiting for an RA. A netlink listener reports the
-	# current SLAAC address immediately and every later address change to netifd.
+	# The event-driven child is the protocol task netifd owns. It reports IPv6
+	# netlink changes and CGEV-triggered IPv4/DNS changes without holding setup.
 	[ "${pdptype:-IP}" != IP ] && proto_run_command "$config" \
 		/lib/netifd/proto/mu300cell-v6.sh "$config" "$ifname" "$ip" \
 		"${prefix:-32}" "$dns1" "$dns2" "${peerdns:-1}"
-	# After proto_send_update, not before: netifd turns IPv6 back on as it configures the interface, so
-	# mobile-data setting this itself has no effect on OpenWrt. The bearer is IPv4-only (the context is
-	# "IP", the way Android's RIL asks for it), and an interface left with a link-local address sends
-	# router solicitations and multicast into it for nothing. See docs/FINDINGS.md 13f.
 	[ "${pdptype:-IP}" = IP ] && [ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
 		echo 1 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
 	logger -t mu300cell "connected: $ip/${prefix:-32} on $ifname"
+}
+
+proto_mu300cell_renew() {
+	# Standard netifd renew: ask the existing event monitor to re-read the
+	# bearer. It updates in place; it does not cycle CGACT or restart the link.
+	local sigusr1="$(kill -l SIGUSR1)"
+	[ -n "$sigusr1" ] && proto_kill_command "$1" "$sigusr1"
 }
 
 proto_mu300cell_teardown() {
 	local config="$1"
 	proto_kill_command "$config"
 	/opt/mu300/bin/mobile-data down >/dev/null 2>&1
+	# External state is not removed by netifd on ifdown; clean the bearer v4 so
+	# a torn-down WAN is really down. SLAAC addresses expire on their own.
+	# sipa_eth0 is the one bearer this hardware has (mobile-data assumes it too).
+	ip -4 addr flush dev sipa_eth0 scope global 2>/dev/null
+	ip -4 route del default dev sipa_eth0 2>/dev/null
 }
 
 [ -n "$INCLUDE_ONLY" ] || add_protocol mu300cell

@@ -70,13 +70,14 @@ m_status() {
     # a full round in flight also writes the fast cache, so it counts for both.
     if collecting; then busy=1; fbusy=1; fi
     fast_busy && fbusy=1
-    if { [ "$sage" -lt 0 ] || [ "$sage" -gt "$TTL_FAST" ]; } && [ "$fbusy" = 0 ]; then
-        setsid "$DASH/mu300-dash-cell" fast >/dev/null 2>&1 &
-        fbusy=1
-    fi
+    # A full round also refreshes sig.json. Prefer it when both tiers are stale;
+    # starting full and fast together doubles the AT burst for no benefit.
     if { [ "$cage" -lt 0 ] || [ "$cage" -gt "$TTL" ]; } && [ "$busy" = 0 ]; then
         setsid "$DASH/mu300-dash-cell" >/dev/null 2>&1 &
-        busy=1
+        busy=1; fbusy=1
+    elif { [ "$sage" -lt 0 ] || [ "$sage" -gt "$TTL_FAST" ]; } && [ "$fbusy" = 0 ]; then
+        setsid "$DASH/mu300-dash-cell" fast >/dev/null 2>&1 &
+        fbusy=1
     fi
     printf '{"info":%s,"cell":%s,"sig":%s,"cell_age":%d,"sig_age":%d,"refreshing":%d}\n' \
         "$info" \
@@ -88,12 +89,16 @@ m_status() {
 # Live serving-cell snapshot for views where stale radio readings are actively
 # misleading (notably the lock page hero). This intentionally uses an isolated
 # temporary directory and returns the just-completed AT round, never cell.json
-# or sig.json from an earlier request. The dedicated nr3 AT daemon serializes it
-# safely with the slower dashboard collector.
+# or sig.json from an earlier request. The bounded nr6/nr7 pool keeps it off
+# nr1 while limiting the number of concurrent modem collectors.
 m_signal() {
     local live="$DIR/live.$$"
     mkdir -p "$live" 2>/dev/null
-    MU300_DASH_DIR="$live" "$DASH/mu300-dash-cell" fast >/dev/null 2>&1
+    # The output is deliberately uncached, but the modem channel is not
+    # unbounded parallel work. The collector claims one of the verified
+    # slot-0 nr6/nr7 channels and drops excess overlap immediately.
+    MU300_DASH_DIR="$live" MU300_DASH_LOCK_DIR="$DIR" \
+        "$DASH/mu300-dash-cell" fast >/dev/null 2>&1
     if [ -s "$live/sig.json" ]; then
         cat "$live/sig.json"
     else
@@ -175,7 +180,7 @@ m_lock_set() {
     kind=$(inp '@.kind')
     val=$(inp '@.val')
     case "$kind" in
-        mode|endc|lte|nr|cell) ;;
+        mode|endc|lte|nr|cell|auto_apply) ;;
         *) printf '{"ok":0,"error":"unknown lock kind"}\n'; return ;;
     esac
     # applying restarts the protocol stack (SFUN 5 -> 4): half a minute without
