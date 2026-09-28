@@ -382,6 +382,11 @@ if ((AdbState) -notmatch 'device') {
     if ((AdbState) -notmatch 'device') { Die (T 'the device did not come back as Android; boot it yourself (mu300-next-boot android)') }
     Write-Host ('  ' + (T 'Android is up'))
 }
+# an Android that is still starting answers adb before su and storage are ready: the pulls then failed
+for ($i = 0; $i -lt 60 -and (SuDo 'getprop sys.boot_completed') -ne '1'; $i++) {
+    if ($i -eq 0) { Write-Host ('  ' + (T 'waiting for Android to finish starting')) }
+    Start-Sleep 2
+}
 if ((SuDo 'id -u') -ne '0') { Die (T 'su does not work on the device') }
 $model = "$(SuDo 'getprop ro.product.model') / $(SuDo 'getprop ro.product.device')"
 Write-Host (T 'device: {1}' $model)

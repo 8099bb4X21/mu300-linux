@@ -87,7 +87,8 @@ su_do() { adb shell "su -c '$1'" </dev/null | tr -d '\r'; }
 # su does; the maintainer's does not, which is why this survived so long.
 dev_pull() {  # dev_pull DEVICE_PATH LOCAL_PATH   (DEVICE_PATH may be a block device)
     su_do "cat $1 > /data/local/tmp/mu300-pull.bin" >/dev/null
-    adb pull /data/local/tmp/mu300-pull.bin "$2" >/dev/null 2>&1
+    # (|| true: under set -e a failed pull ended the installer here, without the message below)
+    adb pull /data/local/tmp/mu300-pull.bin "$2" >/dev/null 2>&1 || true
     su_do 'rm -f /data/local/tmp/mu300-pull.bin' >/dev/null
     [ -s "$2" ] || die "$(t 'could not read {1} from the device' "$1")"
 }
@@ -136,8 +137,8 @@ offer_repartition() {
     mkdir -p "$WORK/gpt"
     su_do "dd if=/dev/block/mmcblk0 bs=512 count=34 2>/dev/null > /data/local/tmp/gpt.head" >/dev/null
     su_do "dd if=/dev/block/mmcblk0 bs=512 skip=$((disk - 33)) count=33 2>/dev/null > /data/local/tmp/gpt.tail" >/dev/null
-    adb pull /data/local/tmp/gpt.head "$WORK/gpt/gpt.head" >/dev/null 2>&1
-    adb pull /data/local/tmp/gpt.tail "$WORK/gpt/gpt.tail" >/dev/null 2>&1
+    adb pull /data/local/tmp/gpt.head "$WORK/gpt/gpt.head" >/dev/null 2>&1 || true
+    adb pull /data/local/tmp/gpt.tail "$WORK/gpt/gpt.tail" >/dev/null 2>&1 || true
     su_do 'rm -f /data/local/tmp/gpt.head /data/local/tmp/gpt.tail' >/dev/null
     [ -s "$WORK/gpt/gpt.head" ] && [ -s "$WORK/gpt/gpt.tail" ] || die "$(t 'could not read the partition table')"
 
@@ -211,8 +212,8 @@ $(t 'and Android needs at least {1} of it. Nothing is changed.' "$(gib $((MIN_AN
     say "$(t 'Verifying')"
     su_do "dd if=/dev/block/mmcblk0 bs=512 count=34 2>/dev/null > /data/local/tmp/gpt.head" >/dev/null
     su_do "dd if=/dev/block/mmcblk0 bs=512 skip=$((disk - 33)) count=33 2>/dev/null > /data/local/tmp/gpt.tail" >/dev/null
-    adb pull /data/local/tmp/gpt.head "$WORK/gpt/after.head" >/dev/null 2>&1
-    adb pull /data/local/tmp/gpt.tail "$WORK/gpt/after.tail" >/dev/null 2>&1
+    adb pull /data/local/tmp/gpt.head "$WORK/gpt/after.head" >/dev/null 2>&1 || true
+    adb pull /data/local/tmp/gpt.tail "$WORK/gpt/after.tail" >/dev/null 2>&1 || true
     su_do 'rm -f /data/local/tmp/gpt.head /data/local/tmp/gpt.tail' >/dev/null
     check=$(python3 "$TOP/tools/resize-last-partition.py" "$WORK/gpt/after.head,$WORK/gpt/after.tail" \
               --disk-sectors "$disk" --name userdata --show) || die "$(t 'the table on the device does not read back as valid GPT.')
@@ -398,7 +399,7 @@ mkdir -p "$WORK/dumps" "$WORK/firmware"
 say "$(t 'Pulling device data into {1} (stays on this computer)' "$WORK")"
 dev_pull /dev/block/by-name/boot_a "$WORK/dumps/boot_a.img"
 su_do 'dd if=/dev/block/by-name/misc bs=4096 count=1 2>/dev/null > /data/local/tmp/mu300-pull.bin' >/dev/null
-adb pull /data/local/tmp/mu300-pull.bin "$WORK/dumps/misc-head.bin" >/dev/null 2>&1
+adb pull /data/local/tmp/mu300-pull.bin "$WORK/dumps/misc-head.bin" >/dev/null 2>&1 || true
 su_do 'rm -f /data/local/tmp/mu300-pull.bin' >/dev/null
 [ -s "$WORK/dumps/misc-head.bin" ] || die "$(t 'could not read the misc header from the device')"
 # what a complete subset must hold, not only the directory: an interrupted run left a partial one behind that the

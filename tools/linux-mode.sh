@@ -74,7 +74,15 @@ select_device() {  # select_device [quiet]: quiet never asks, it only picks what
 # call before anything else that needs adb
 require_android() {
     select_device
-    [ "$(adb get-state 2>/dev/null)" = device ] && return 0
+    if [ "$(adb get-state 2>/dev/null)" = device ]; then
+        # an Android that is still starting answers adb before su and storage are ready: pulls then failed
+        _ra=0
+        while [ "$(adb shell getprop sys.boot_completed </dev/null 2>/dev/null | tr -d '\r')" != 1 ] && [ $_ra -lt 60 ]; do
+            [ $_ra = 0 ] && echo "  $(t 'waiting for Android to finish starting')"
+            _ra=$((_ra + 1)); sleep 2
+        done
+        return 0
+    fi
     linux_mode_running && linux_mode_to_android && return 0
     die "$(t 'no adb device (boot Android, enable USB debugging)')"
 }
