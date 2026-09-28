@@ -12,7 +12,7 @@ import serial
 
 PORT = "COM58"
 DELIM = "MU300_EOF_9Q"
-FILES = [
+DEFAULT_FILES = [
     ("work/persist-live/new/mu300cell.sh", "/tmp/mu300cell.new"),
     ("work/persist-live/new/mu300cell-v6.sh", "/tmp/mu300cell-v6.new"),
 ]
@@ -21,6 +21,9 @@ PAUSE = 0.25
 
 
 def main() -> None:
+    files = DEFAULT_FILES
+    if len(sys.argv) > 1:  # extra args: local:remote pairs
+        files = [a.split(":", 1) for a in sys.argv[1:]]
     ser = serial.Serial(PORT, 115200, timeout=0.2)
     ok = True
     try:
@@ -46,7 +49,7 @@ def main() -> None:
         ser.write(b"\r\nstty -echo\r\n")
         drain(0.6)
 
-        for local, remote in FILES:
+        for local, remote in files:
             text = open(local, "r", encoding="utf-8").read()
             assert "\r" not in text, f"{local} has CR"
             want = hashlib.md5(text.encode()).hexdigest()
@@ -69,14 +72,17 @@ def main() -> None:
                 ok = False
             print(f"{local}: want {want} got {got} -> {status}")
         if ok:
-            cmd = ("cp /tmp/mu300cell.new /lib/netifd/proto/mu300cell.sh; "
-                   "cp /tmp/mu300cell-v6.new /lib/netifd/proto/mu300cell-v6.sh; "
-                   "chmod +x /lib/netifd/proto/mu300cell.sh /lib/netifd/proto/mu300cell-v6.sh; "
-                   "md5sum /lib/netifd/proto/mu300cell.sh /lib/netifd/proto/mu300cell-v6.sh; "
-                   "echo INSTALLED")
+            if files is DEFAULT_FILES:
+                cmd = ("cp /tmp/mu300cell.new /lib/netifd/proto/mu300cell.sh; "
+                       "cp /tmp/mu300cell-v6.new /lib/netifd/proto/mu300cell-v6.sh; "
+                       "chmod +x /lib/netifd/proto/mu300cell.sh /lib/netifd/proto/mu300cell-v6.sh; "
+                       "md5sum /lib/netifd/proto/mu300cell.sh /lib/netifd/proto/mu300cell-v6.sh; "
+                       "echo INSTALLED")
+            else:
+                cmd = "echo UPLOADED"
             ser.write((cmd + "\n").encode())
             ser.flush()
-            print(wait_marker("INSTALLED", 15))
+            print(wait_marker("INSTALLED" if files is DEFAULT_FILES else "UPLOADED", 15))
         else:
             print("md5 mismatch, NOT installed")
             sys.exit(1)
