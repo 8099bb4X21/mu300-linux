@@ -246,6 +246,22 @@ second after taking it, and the next daemon walked straight in - the very failur
 happening every few seconds. Clean up on `INT`/`TERM` only, and only when the pid in the lock is still ours.
 
 ### 13b-2. The modem stops answering on Linux - and it is not the mainline port (open)
+**2026-09-28 update: the failure is no longer reproducible with the corrected consumers, so this is not an
+unconditional Linux/CP failure.** On the live OpenWrt system, with only persistent nr0-nr7 owners, the command
+plane remained healthy through 300 s with the radio off, through another 120 s after `AT+SFUN=4`, and through a
+complete data call. With all normal services restored it was still returning real final `OK` codes after four
+minutes, while CPU was 97% idle. The failure was amplified by two userspace behaviours:
+
+* registration startup sent `AT+CEREG?` every 0.3 s (up to 200 queries when signal was poor); it now consumes
+  nr0 registration URCs immediately and uses one query every five seconds only as a fallback;
+* `mu300-atwatch` killed and reopened ATD descriptors after missed probes. Closing a live SIPC descriptor is the
+  destructive operation documented in 13b, so the watchdog could turn a transient busy/silent period into a
+  boot-long outage. It now records health only; dashboard work uses the persistent, slot-0-capable nr6/nr7
+  pool (nr3-nr5 are slot 1 and must not supply slot 0 status).
+
+The old measurements below remain useful history, but the word "every" describes the old service set, not an
+intrinsic limit of the Linux modem stack.
+
 **Measured on both kernels and on stock Android, in that order, and the answer is not what it looked like.** The
 modem stops talking to the AP partway through every Linux boot and never comes back without a reboot:
 
@@ -1022,6 +1038,138 @@ Three separate traps, and the first one hid the other two for an evening. `mu300
   old layout if no `/ubuntu` exists.
 
 ## Audio
+
+### 31. USB DHCP handoff and early radio warm-up (2026-09-28)
+
+* PDP activation and WAN IPv6 do **not** require USB re-enumeration. On a clean
+  boot the gadget enumerates once at about 24 s; netifd moves `usb0` into
+  `br-lan` at about 64 s without changing the host-facing LAN.
+* The apparent USB failure was a DHCP handoff bug. Windows kept asking for
+  `192.168.77.200` after removing it locally; dnsmasq logged repeated OFFERs,
+  but they were unicast to the address the host no longer owned, so no REQUEST
+  followed and Windows fell back to APIPA. A fixed host entry with
+  `broadcast=1` produced the complete DISCOVER/OFFER/REQUEST/ACK exchange and a
+  12-hour lease. A 180 s warm-reboot run crossed the old 104 s failure point
+  without losing the address.
+* Do not infer host health from two missed ARPs during the `usb0` -> `br-lan`
+  transition. The old guard did exactly that and reset a healthy UDC. Normal
+  boot no longer runs `mu300-usb-reset`; it remains a manual disaster-recovery
+  tool. Shutdown unbinds the UDC cleanly so the next warm boot has one fresh
+  enumeration, the same as cold power-on.
+* Radio warm-up now starts from the nr1 AT-daemon readiness event, independently
+  of PDP setup. Across the verified boots CFUN reached 1 at 45.8-46.1 s instead
+  of waiting for netifd around 64 s; a bounded lock prevents warm-up and dial-up
+  from running two SFUN state machines at once.
+
+### 31a. Persistent modem locks belong inside radio-on (2026-09-28)
+
+Network mode, EN-DC, LTE/NR band and serving-cell locks do not all survive a CP
+power cycle. Replaying them from a late rc.d service is unsafe: START=96 raced
+netifd's dial attempt and ran `SFUN=5 -> SFUN=4` while the radio was already
+starting. On the measured failure this added about 16 seconds and could leave
+the command path and dialer disagreeing about the modem state.
+
+The replay now runs exactly once from `mobile-data radio-on`, after nr1's required
+`AT+SMMSWAP=0` handshake and before CFUN is raised, under the existing radio-on
+mutex. It does not poll for readiness again and does not issue an SFUN cycle in
+this early phase. A one-second AT-client collision budget avoids throwing away
+the whole early attempt for a sub-second dashboard/watch probe; a dead command
+path still fails promptly and is retried by the normal owner.
+
+State is kept one setting per file under `/etc/mu300/dash/lock-state.d`; an empty
+band file intentionally means automatic selection, so replay tests file existence
+rather than file size. Cell locks are one `rat:frequency,pci` entry per line and
+are cleared then rebuilt exactly. `auto_apply=off` suppresses boot replay without
+deleting any saved values. Verified on hardware: USB enumeration 31.3 s, DHCP
+38.6 s, SSH 50.9 s, CFUN=1 by the first check at 55 s, all nr1-nr7 command
+channels still returned `OK` and USB retained `192.168.77.200` at 254 s; CPU was
+97% idle. A fresh seven-setting read completed in 0.20 s.
+
+### 31b. Event-driven cellular lease renewal (2026-09-28)
+
+Carrier lease refreshes are followed by events, not polling: nr0 has `AT+CGEREP` 1,0 and really delivers
+`+CGEV: NW PDN ACT/DEACT`, the kernel emits netlink notifications for every RA address/route change
+(including lifetime refreshes), and `ubus call network.interface.wan renew` is wired as a standard netifd
+renew handler. `mu300cell-v6.sh` (the protocol task `proto_run_command` owns) consumes all three: a CGEV
+burst is debounced for 1 s and answered with exactly one `AT+CGCONTRDP` read, a netlink change is answered
+from the kernel's own state, and USR1 (renew) re-reads the bearer in place. No periodic AT traffic, no CGACT
+cycling, no USB involvement. Verified on the device: renew keeps the link (`manual-renew: bearer unchanged`,
+interface uptime preserved), a synthesized `+CGEV: NW PDN ACT` produced `cgev: bearer unchanged` without a
+restart, and a test v6 address added/removed by hand was reported to netifd within 2 s in both directions
+while the kernel kept exactly its own state.
+
+The design stands on netifd's `address-external` semantics (from netifd's interface-ip.c): an external report
+is tracked for status, LuCI and firewall but never installed or removed; switching an interface from managed
+to external *deletes the managed kernel state* (the flag is part of the vlist key, so the old node is removed
+with `system_del_address`); external entries survive teardown; the expiry sweeper only drops netifd's
+tracking, never the kernel address. Therefore:
+
+* Setup (`mu300cell.sh`) and monitor both report external from the very first update. A mixed mode (setup
+  installing the v4, monitor later reporting external) deletes the v4 from the kernel when the first external
+  report lands; the mobile-data watchdog then saw an address-less WAN and re-dialled every 60 s - which is
+  exactly the failure this migration started from.
+* The bearer v4 is installed by the proto itself (`ip addr replace`, stray-address cleanup, default route);
+  `mobile-data`'s netifd path never touches the kernel, and teardown flushes the v4 - otherwise external
+  state is immortal. SLAAC stays kernel-owned: this carrier advertises *infinite* address lifetimes and a
+  finite (~18 h) route lifetime, so `dynamic mngtmpaddr ... valid_lft forever` is the honest RA state, not a
+  zombie. The real zombies were netifd-era statics: a duplicate `proto static metric 4096` default route
+  survived every ifup and had to be deleted by hand once during migration.
+* `proto_kill_command` needs a numeric signal (`$(kill -l SIGUSR1)`, like OpenWrt's dhcp proto). The proto
+  declares `renew_handler=1`, but netifd only re-scans proto scripts at startup, so the declaration goes live
+  at the next `network restart` (one was run as a regression test: with the fixes below, LAN and WAN both
+  come back cleanly). During that debugging the USB link also looked dead - first attributed to the restarts,
+  but the LAN ifup hook does not re-enumerate the gadget at all (the old macOS re-enumeration hook is long
+  gone); the real cause was the boot enumeration itself, see 31c.
+
+Four shell/netifd traps on the way, each verified on the device:
+
+* netifd's proto-directory scan execs every executable `*.sh` as `<script> "" dump` - an *empty* proto name
+  in `$1`, `dump` in `$2`. A helper that only checks `$1` falls through: the "dump" process runs monitor code
+  with no config, creates `/run/mu300cell-.events` and blocks on its O_RDWR fifo forever. That single line
+  hung every `network restart` since the helper first appeared. `case "${1:-}-${2:-}" in *-dump|dump-*)
+  exit 0 ;; esac` answers both this probe and a manual `script dump`.
+* busybox ash delivers a trap by interrupting the `read` builtin, which then returns an error without
+  consuming fifo data. The monitor loop must `continue` (and service the pending renew), never `break`:
+  leaving the loop exits the protocol task and netifd tears the interface down. An O_RDWR fifo never sees
+  EOF, so `continue` cannot spin.
+* netifd's teardown signal does not reach pipeline members. Each missed kill left a whole event farm behind
+  (30+ monitors and their `ip -6 monitor`/`tail` children accumulated in one debugging session, feeding the
+  redial loop). The monitor now reaps same-command-line processes at startup (a fresh instance always
+  displaces older ones) and again in cleanup. The ps snapshot is written to a file first: an env prefix does
+  not cross a pipe, and `awk -v` would otherwise match the awk process itself.
+* an awk program "wrapped" in an extra closing brace (the indentation suggests a program-level block that
+  awk does not have) is a syntax error - and because the failing pipeline still exits 0 through `sort`, the
+  monitor silently sent empty v6 state for hours. The program must end at the last rule's brace; `bash -n`
+  cannot catch this.
+
+Windows-side console helpers for this work: `tools/mu300-uart.py` (marker-based command runner over the
+UART console) and `tools/mu300-uart-push.py` (heredoc uploader with md5 verification - bare `\n` only,
+because the console tty's ICRNL turns `\r\n` into blank lines inside heredocs).
+
+### 31c. Boot-time NCM TX flake and the once-per-boot self-heal rebind (2026-09-28)
+
+After the kernel rebuild that made the vendor modules builtin (probing order changed), two consecutive
+boots - one warm, one after a full power pull - came up with the NCM **TX endpoint dead**: the host's
+packets arrive (dnsmasq sees DHCPDISCOVER and sends broadcast OFFERs), but nothing leaves the device, so
+Windows ends up on APIPA with no ping and no page. br-lan, dnsmasq, uhttpd are all healthy; only a UDC
+rebind recovers it. A third boot was fine - the flake is intermittent per enumeration, and a bus-level
+replug (no device reboot) wedged the ACM console the same way: writes to the COM port block forever, and
+neither a PnP restart nor a full Windows re-enumeration clears it. Full device reboots have always brought
+the console back.
+
+Every manual `mu300-usb-reset` (both the 3 s-disconnect and the 100 ms fast path) healed the link, and
+Windows kept its 192.168.77.200 lease across the blip. So the boot now heals itself: the LAN ifup hotplug
+hook (`/etc/hotplug.d/iface/10-mu300-usb`) touches `/run/mu300-usb-healed` and, once per boot, runs
+`mu300-usb-reset` five seconds after the LAN settles. Verified end to end after `reboot`: marker present,
+Windows holds .200, ping 1 ms-class, LuCI answering HTTP 200 in 82 ms - with no manual step and no
+re-plug. The cost is one short USB blip per boot right after the lease handoff; the broadcast OFFER/ACK
+completes the renewal immediately.
+
+Windows-side tools for this episode: `tools/mu300-ssh-win.py` (paramiko SSH runner; the device's dropbear
+has no SFTP, so `--put` streams the file over an exec channel - set `MU300_PASS`, and remember Git Bash's
+MSYS path conversion rewrites leading-slash arguments), `tools/com-probe.py` (raw COM port classifier).
+Keep console/SSH handles closed before any gadget rebind: a Windows handle held across the device's
+re-enumeration wedges the port open forever, and only a replug clears that.
 
 ### 24. No internal audio hardware
 * The DT enables a sound card, the UMP9620 codec and an AW883xx amplifier at `6-0034`, and Android disables audio.
