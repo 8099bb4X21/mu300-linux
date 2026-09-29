@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build everything install.sh --build and tools/make-release.sh need from public sources, in one step:
-#   kernel/build-all.sh            -> out/Image, out/modules/*.ko, out/modules.builtin*
+#   kernel/build-all.sh            -> out/Image, out/modules/*.ko, out/modules.builtin*, out/modules-u30air/*.ko
 # Sources (pinned commits, downloaded into the docker volume $MU300_KBUILD_VOLUME on first run):
 #   ZTE UMS9620 MiFi 5.4.254 kernel (GPL release published by Enceka)
 #   realme C51/C53 AndroidT kernel_modules: wlan_combo (Wi-Fi), bluetooth tty-pcie, Mali kbase (sparse checkout)
@@ -46,7 +46,7 @@ echo "==> sources"
 fetch /src/zte-u30air "$KERNEL_REPO" "$KERNEL_REV"
 cd /src/zte-u30air
 # the tree is the pinned commit plus exactly these patches: reapply from a clean checkout whenever they change
-KPATCHES="bluetooth-marlin3-link-policy of-reserved-mem-skip of-reserved-mem-add regdb-wens-certificate"
+KPATCHES="bluetooth-marlin3-link-policy of-reserved-mem-skip of-reserved-mem-add regdb-wens-certificate sipa-delegate-einprogress wcn-pcie-scan-timeout sipc-base-addr-attr"
 sum=$(cd /work/patches && cat $(for p in $KPATCHES; do echo $p.patch; done) | sha256sum | cut -d" " -f1)
 if [ "$(cat .mu300-patches 2>/dev/null)" != "$sum" ]; then
     git checkout -q -f "$KERNEL_REV" && git clean -q -fdx -e .mu300-patches
@@ -58,6 +58,8 @@ M=kernel_modules/kernel5.4
 fetch /src/realme "$MODULES_REPO" "$MODULES_REV" $M/wcn/wlan/wlan_combo $M/wcn/bluetooth/driver $M/gpu/natt/mali
 [ -d /src/ext-wlan_combo ] || cp -r /src/realme/$M/wcn/wlan/wlan_combo /src/ext-wlan_combo
 [ -d /src/ext-sprdbt ] || cp -r /src/realme/$M/wcn/bluetooth/driver /src/ext-sprdbt
+# like build-wlan.sh does for Wi-Fi: the MU300 fixes of the Bluetooth driver, skipped when already applied
+(cd /src/ext-sprdbt && for p in /work/patches/sprdbt-*.patch; do patch -p1 --forward -s < "$p" || true; done)
 [ -d /src/ext-mali ] || cp -r /src/realme/$M/gpu/natt/mali /src/ext-mali
 
 echo "==> kernel"
@@ -75,8 +77,10 @@ find /src/out-linux -name "*.ko" -exec cp {} /work/out/modules/ \;
 cp /src/ext-wlan_combo/sprd_wlan_combo.ko /src/ext-sprdbt/sprdbt_tty.ko /work/out/modules/
 llvm-strip --strip-debug /work/out/modules/*.ko
 echo "$(ls /work/out/modules | wc -l) modules, $(strings /work/out/Image | grep -m1 "^Linux version 5" | cut -d" " -f1-3)"
+echo "==> ZTE U30 Air modules"
+bash /work/build-u30air.sh
 '
 mkdir -p "$OUT"
-rm -rf "$OUT/modules"
+rm -rf "$OUT/modules" "$OUT/modules-u30air"
 cp -R "$W/out/." "$OUT/"
 echo "kernel outputs in $OUT"

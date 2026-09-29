@@ -19,7 +19,7 @@ while :; do
         esac
     else
         # WAN is down: LED should be offline, not online
-        case "$state" online-4g|online-5g)
+        case "$state" in online-4g|online-5g)
             led-status offline
         esac
     fi
