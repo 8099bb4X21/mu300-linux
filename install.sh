@@ -344,16 +344,6 @@ need=$NEED_OPENWRT; [ "$OSES" = ubuntu ] && need=$NEED_UBUNTU; [ "$OSES" = "ubun
 [ $SIZE -ge $need ] || die "$(t 'that choice needs about {1} MiB and this device has {2} MiB of free space' "$((need / 1048576))" "$((SIZE / 1048576))")"
 BOOT_OS=${OSES%% *}
 [ "$choice" = 3 ] && { ask BOOT_OS "$(t 'Which one should boot (ubuntu/openwrt)')" ubuntu; case $BOOT_OS in ubuntu|openwrt) ;; *) die "$(t 'invalid system')" ;; esac; }
-UBUNTU=24.04
-case " $OSES " in *" ubuntu "*) if [ $MODE = prebuilt ]; then
-    say "$(t 'Which Ubuntu?')"
-    echo "  $(t '1) 24.04 LTS  the longest tested, supported until 2029')"
-    echo "  $(t '2) 26.04 LTS  the newest (systemd 259, newer packages), supported until 2031; tested less')"
-    ask uv "$(t 'Ubuntu')" 1
-    case $uv in 1|24.04) UBUNTU=24.04 ;; 2|26.04) UBUNTU=26.04 ;; *) die "$(t 'invalid choice')" ;; esac
-fi ;; esac
-# the release file of a system: Ubuntu 26.04 has its own, 24.04 keeps the name it always had
-rootfs_file() { if [ "$1" = ubuntu ] && [ "$UBUNTU" = 26.04 ]; then echo mu300-ubuntu-26.04-rootfs.tar.gz; else echo "mu300-$1-rootfs.tar.gz"; fi; }
 ask dl "$(t 'Boot Linux by default instead of Android (falls back to Android if Linux fails)? (yes/no)')" yes
 DEFAULT_LINUX=0; [ "$dl" = yes ] && DEFAULT_LINUX=1
 BOOT_ATTEMPTS=5
@@ -470,7 +460,7 @@ say "$(t 'Downloading release {1}' "$RELEASE")"
 curl -fsSL -o "$REL/SHA256SUMS" "$base/SHA256SUMS" || die "$(t 'cannot download {1}' "$base/SHA256SUMS")"
 files=mu300-kernel.tar.gz
 [ "$KERNEL" = 5.4 ] || files="$files mu300-kernel-$KERNEL.tar.gz"
-for os in $OSES; do files="$files $(rootfs_file $os)"; done
+for os in $OSES; do files="$files mu300-$os-rootfs.tar.gz"; done
 for f in $files; do
     want=$(awk -v f="$f" '$2 == f || $2 == "*" f {print $1}' "$REL/SHA256SUMS")
     [ -n "$want" ] || die "$(t '{1} is not part of release {2}' "$f" "$RELEASE")$([ "$f" = "mu300-kernel-$KERNEL.tar.gz" ] && [ "$KERNEL" != 5.4 ] && echo " $(t '(choose kernel 5.4, or a newer release)')")"
@@ -581,7 +571,7 @@ say "$(t 'Copying to the device')"
 adb push "$TOP/tools/android-mount-mu300root.sh" "$TOP/tools/android-install.sh" $T/ >/dev/null
 for os in $OSES; do
     if [ $MODE = prebuilt ]; then
-        adb push "$REL/$(rootfs_file $os)" $T/mu300-$os.tar.gz >/dev/null
+        adb push "$REL/mu300-$os-rootfs.tar.gz" $T/mu300-$os.tar.gz >/dev/null
         adb push "$WORK/mu300-vendor-$os.tar.gz" $T/mu300-vendor-$os.tar.gz >/dev/null
     else
         adb push "$WORK/mu300-$os.tar.gz" $T/mu300-$os.tar.gz >/dev/null
