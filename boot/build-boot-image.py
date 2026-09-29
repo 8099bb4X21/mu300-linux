@@ -191,11 +191,6 @@ def main():
     # back to the /dev/ram0 image path and panic "Unable to mount root fs on unknown-block(1,0)"
     ram = lz4_legacy(cpio_archive(dirs, files))
     assert ram[:4] == bytes.fromhex('02214c18')
-    if a.append_ramdisk:
-        extra = a.append_ramdisk.read_bytes()
-        if extra[:4] != bytes.fromhex('02214c18'):
-            sys.exit(f'{a.append_ramdisk} is not an LZ4 legacy ramdisk segment')
-        ram += extra
 
     kern = a.kernel.read_bytes()
     hdr = bytearray(base[:PAGE])

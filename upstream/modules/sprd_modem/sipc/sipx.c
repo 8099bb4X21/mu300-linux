@@ -260,6 +260,7 @@ static const struct file_operations sipx_debug_fops = {
 	.release = single_release,
 };
 
+static DEVICE_ATTR(base_addr, 0440, NULL, NULL);
 
 static int sipx_init_debug(void)
 {
@@ -293,8 +294,7 @@ static int sipx_init_debug(void)
 	sipx_device->sys_dev = device_create(sipx_class, NULL,
 				       dev_no,
 				       sipx_device, "sipx");
-	/* the vendor also created a "base_addr" attribute here: with neither show nor store, on a device that is
-	 * never registered - it could never be read, and newer kernels warn twice for it */
+	device_create_file(&sipx_device->pdev.dev, &dev_attr_base_addr);
 
 	return 0;
 
