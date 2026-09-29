@@ -78,13 +78,12 @@ case "${1:-}:${2:-}" in
         reboot
         ;;
     os:android)
-        # arm the bootloader for Android (misc partition + default-boot flag),
-        # answer, then reboot - the reply must be out before the box goes down.
-        # Runs inline (not setsid): arming is fast and its failure must surface.
+        # arm inline (fast, failures surface to the page); reboot DETACHED so
+        # the reply reaches the browser before the box goes down - a reboot
+        # inside the rpcd call kills the ubus reply pipe first
         if out=$(/opt/mu300/bin/mu300-next-boot android 2>&1); then
-            ok "os android (${out:-armed})"
-            sleep 3
-            reboot
+            ok "os android"
+            setsid sh -c 'sleep 3; reboot' >/dev/null 2>&1 &
         else
             fail "os android" "${out:-mu300-next-boot failed}"
         fi

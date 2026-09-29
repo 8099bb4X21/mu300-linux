@@ -64,11 +64,13 @@ make_block() {  # make_block TARGET TRIES
     local tchar;  [ "$target" = a ] && tchar=61 || tchar=62   # 'a' or 'b' in hex
 
     # CRC-32 (the same one gzip uses, so we can compute it with gzip itself)
-    local body="${live:0:2}${tchar}${live:4:22}"          # slot_suffix at bytes 0-1
+    # body = 56 hex chars (28 bytes): keep byte 0, replace byte 1 (slot letter),
+    # keep bytes 2-27. ${live:4:52} spans bytes 2-27.
+    local body="${live:0:2}${tchar}${live:4:52}"
     if [ "$target" = a ]; then
-        body="${body:0:24}$(printf '%02x' $armed)${body:26:2}$(printf '%02x' $idle)${body:30:26}"
+        body="${body:0:24}$(printf '%02x' $armed)00$(printf '%02x' $idle)00${body:32:24}"
     else
-        body="${body:0:24}$(printf '%02x' $idle)${body:26:2}$(printf '%02x' $armed)${body:30:26}"
+        body="${body:0:24}$(printf '%02x' $idle)00$(printf '%02x' $armed)00${body:32:24}"
     fi
     local crc
     crc=$(bytes_of "$body" | gzip -c | tail -c 8 | head -c 4 | od -An -tx1 -v | tr -d ' \n')
