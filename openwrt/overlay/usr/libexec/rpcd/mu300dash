@@ -28,6 +28,10 @@
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
 
 DASH=${MU300_DASH_BIN:-/opt/mu300/bin}
+# one pool everywhere: the daemon (init.d env) pools into /etc/mu300/sms, and
+# every pool read/write from the UI must land there too - a split pool is why
+# incoming messages once needed a manual "sync" click to appear
+export MU300_SMS_POOL=${MU300_SMS_POOL:-/etc/mu300/sms}
 SMS=${MU300_SMS_BIN:-/opt/mu300/bin/mu300-sms}
 DIR=${MU300_DASH_DIR:-/tmp/mu300-dash}
 CELL=$DIR/cell.json
@@ -68,6 +72,9 @@ m_status() {
     # two refresh tiers, both detached: the fast one keeps the serving-cell data
     # within ~3 s of reality, the full one refreshes neighbours/QoS/operator.
     # a full round in flight also writes the fast cache, so it counts for both.
+    # During a lock apply (SFUN restart) do not kick anything: the modem answers
+    # garbage mid-restart and the collectors would only burn the AT channel.
+    if [ -d /run/mu300-dash-apply ]; then busy=1; fbusy=1; fi
     if collecting; then busy=1; fbusy=1; fi
     fast_busy && fbusy=1
     # A full round also refreshes sig.json. Prefer it when both tiers are stale;
@@ -92,6 +99,18 @@ m_status() {
 # or sig.json from an earlier request. The bounded nr6/nr7 pool keeps it off
 # nr1 while limiting the number of concurrent modem collectors.
 m_signal() {
+    # During a lock apply the protocol stack is restarting: live AT reads in
+    # that window return garbage or wedge, and rpcd died with a userspace
+    # segfault (sessions wiped -> LuCI login loop) on at least one live
+    # read's output. Serve the last snapshot until the apply finishes.
+    if [ -d /run/mu300-dash-apply ]; then
+        if [ -s "$SIGF" ]; then
+            cat "$SIGF"
+        else
+            printf '{"error":"正在应用网络锁定，暂无实时信号"}\n'
+        fi
+        return
+    fi
     local live="$DIR/live.$$"
     mkdir -p "$live" 2>/dev/null
     # The output is deliberately uncached, but the modem channel is not
@@ -120,7 +139,9 @@ m_act() {
             setsid "$DASH/mu300-dash-act" "$op" "$arg" >/dev/null 2>&1 &
             printf '{"ok":1,"started":1,"op":"%s"}\n' "$op$arg"
             ;;
-        data|wifi)
+        # os runs inline: arming takes milliseconds and a failure (misc write
+        # rejected, tool missing) must reach the page instead of a silent no-op
+        data|wifi|os)
             "$DASH/mu300-dash-act" "$op" "$arg" 2>/dev/null || true
             ;;
         *)
@@ -176,7 +197,7 @@ m_at_history() {
 }
 
 m_lock_set() {
-    local kind val
+    local kind val q=0
     kind=$(inp '@.kind')
     val=$(inp '@.val')
     case "$kind" in
@@ -185,8 +206,11 @@ m_lock_set() {
     esac
     # applying restarts the protocol stack (SFUN 5 -> 4): half a minute without
     # cellular - exactly the thing that must never run inside a request
+    # queued=1 tells the page another apply is still running (SFUN restart);
+    # the new one waits for the modem and the page can say so
+    [ -d /run/mu300-dash-apply ] && q=1
     setsid "$DASH/mu300-dash-lock" apply "$kind" "$val" >/dev/null 2>&1 &
-    printf '{"ok":1,"started":1,"op":"lock %s=%s"}\n' "$kind" "$val"
+    printf '{"ok":1,"started":1,"queued":%d,"op":"lock %s=%s"}\n' "$q" "$kind" "$val"
 }
 
 # --------------------------------------------------------------------- SMS
@@ -262,9 +286,13 @@ m_sms_send() {
 }
 
 m_sms_delete() {
-    local id; id=$(inp '@.id')
+    local id sim
+    id=$(inp '@.id')
+    sim=$(inp '@.sim')
     case "$id" in all|[0-9][0-9]*) ;; *) printf '{"ok":0,"error":"bad id"}\n'; return ;; esac
-    "$SMS" delete "$id" >/dev/null 2>&1
+    # sim=1 also removes the message from the SIM storage (mu300-sms delete --sim)
+    [ "$sim" = 1 ] && "$SMS" delete "$id" --sim >/dev/null 2>&1 ||
+        "$SMS" delete "$id" >/dev/null 2>&1
     printf '{"ok":1}\n'
 }
 
@@ -299,34 +327,47 @@ do_list() {
 EOF
 }
 
+# Forensics for the rpcd crash (2026-09-28): rpcd segfaulted while parsing a
+# script reply during a lock apply, wiping every session (LuCI bounced to the
+# login page). Every method's raw stdout is appended here, so the last entry
+# at the moment of a crash is the input that killed the parser.
+LASTLOG=$DIR/last-outputs.log
+run_m() {
+    local out
+    out=$(eval "$2" 2>/dev/null)
+    printf '=== %s %s len=%s\n%s\n' "$(date '+%m-%d %H:%M:%S')" "$1" "${#out}" "$out" >> "$LASTLOG" 2>/dev/null
+    tail -n 400 "$LASTLOG" > "$LASTLOG.t" 2>/dev/null && mv "$LASTLOG.t" "$LASTLOG"
+    printf '%s\n' "$out"
+}
+
 case "${1:-}" in
 list)
     do_list
     ;;
 call)
     case ${2:-} in
-        sysinfo)    m_sysinfo ;;
-        status)     m_status ;;
-        signal)     m_signal ;;
-        act)        m_act ;;
-        at)         m_at ;;
-        at_history) m_at_history ;;
+        sysinfo)    run_m sysinfo    'm_sysinfo' ;;
+        status)     run_m status     'm_status' ;;
+        signal)     run_m signal     'm_signal' ;;
+        act)        run_m act        'm_act' ;;
+        at)         run_m at         'm_at' ;;
+        at_history) run_m at_history 'm_at_history' ;;
         lock_get)
             # default serves the lock cache instantly (a real read is seven AT
             # round trips, about a second each); fresh=1 does the real read -
             # the page uses it only behind the manual refresh button
             if [ "$(inp '@.fresh')" = "1" ]; then
-                "$DASH/mu300-dash-lock" get fresh 2>/dev/null || printf '{"error":"lock read failed"}\n'
+                run_m lock_get:fresh '"$DASH/mu300-dash-lock" get fresh 2>/dev/null || printf "{\"error\":\"lock read failed\"}\n"'
             else
-                "$DASH/mu300-dash-lock" get 2>/dev/null || printf '{"error":"lock read failed"}\n'
+                run_m lock_get '"$DASH/mu300-dash-lock" get 2>/dev/null || printf "{\"error\":\"lock read failed\"}\n"'
             fi
             ;;
-        lock_set)   m_lock_set ;;
-        sms_list)   m_sms_list ;;
-        sms_show)   m_sms_show ;;
-        sms_send)   m_sms_send ;;
-        sms_delete) m_sms_delete ;;
-        sms_sync)   m_sms_sync ;;
+        lock_set)   run_m lock_set   'm_lock_set' ;;
+        sms_list)   run_m sms_list   'm_sms_list' ;;
+        sms_show)   run_m sms_show   'm_sms_show' ;;
+        sms_send)   run_m sms_send   'm_sms_send' ;;
+        sms_delete) run_m sms_delete 'm_sms_delete' ;;
+        sms_sync)   run_m sms_sync   'm_sms_sync' ;;
         *)          printf '{"ok":0,"error":"no such method"}\n' ;;
     esac
     ;;

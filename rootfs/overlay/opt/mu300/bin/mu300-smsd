@@ -50,6 +50,10 @@ until mu300-at -t 4 'AT+CPIN?' 2>/dev/null | grep -q READY; do
     [ "$n" -gt 60 ] && { echo "mu300-smsd: SIM never became ready, syncing anyway" >&2; break; }
     sleep 10
 done
+# Without CNMI the modem files incoming messages silently (measured 0,0,0,1,0),
+# the +CMTI trigger below never fires and arrival waits for the 30 s net. Ask
+# for storage indications; a refusal still leaves the periodic sync working.
+mu300-at -t 4 'AT+CNMI=2,1,0,0,0' >/dev/null 2>&1 || true
 "$SMS" sync
 
 signature() {

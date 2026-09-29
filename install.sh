@@ -382,9 +382,12 @@ else
     # a new /ubuntu replaces an Ubuntu installed directly in the filesystem root (first-generation layout)
     case " $OSES " in *" ubuntu "*) [ $FORMAT = 0 ] && WIPE_LEGACY=1 ;; esac
 fi
-printf 'Password for the "ubuntu" user (Ubuntu) and "root" (OpenWrt): '
-[ -t 0 ] && stty -echo; read -r pw1; printf '\nRepeat: '; read -r pw2; [ -t 0 ] && stty echo; echo
-[ "$pw1" = "$pw2" ] && [ ${#pw1} -ge 6 ] || die "passwords differ or are shorter than 6 characters"
+ask rootpw "Set a root/ssh password? Leave empty for no password (LuCI opens without login, ssh root@device works directly): " ""
+pw1=$rootpw
+if [ -n "$pw1" ]; then
+    printf 'Repeat: '; [ -t 0 ] && stty -echo; read -r pw2; [ -t 0 ] && stty echo; echo
+    [ "$pw1" = "$pw2" ] && [ ${#pw1} -ge 6 ] || die "passwords differ or are shorter than 6 characters"
+fi
 
 # ---------------------------------------------------------------- pull vendor data from the device
 mkdir -p "$WORK/dumps" "$WORK/firmware"
@@ -455,7 +458,8 @@ for os in $OSES; do
       $([ -d "$WORK/android-gpu-subset" ] && [ "$gpu" = yes ] && echo --gpu-subset "$WORK/android-gpu-subset") \
       --out "$WORK/mu300-vendor-$os.tar.gz"
 done
-PWHASH=$(printf '%s\n' "$pw1" | python3 "$TOP/tools/sha512crypt.py")
+# empty password = no password: PWHASH stays empty and android-install skips the shadow edit
+PWHASH=$([ -n "$pw1" ] && printf '%s\n' "$pw1" | python3 "$TOP/tools/sha512crypt.py" || true)
 else
 # ---------------------------------------------------------------- build
 say "Building helper binaries"
@@ -497,7 +501,7 @@ case " $OSES " in *" openwrt "*) reuse openwrt || {
     mv "$TOP/openwrt/mu300-openwrt-rootfs.tar.gz" "$WORK/mu300-openwrt.tar.gz"; } ;;
 esac
 BUSYBOX=$WORK/busybox; LOGDW=$WORK/tools/logdw/logdw
-PWHASH=$(printf '%s' "$pw1" | docker run --rm -i mu300-ubuntu:24.04 openssl passwd -6 -stdin)
+PWHASH=$([ -n "$pw1" ] && printf '%s' "$pw1" | docker run --rm -i mu300-ubuntu:24.04 openssl passwd -6 -stdin || true)
 fi
 
 say "Building the boot image"

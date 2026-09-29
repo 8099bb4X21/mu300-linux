@@ -19,6 +19,7 @@ return view.extend({
 
 	render: function() {
 		M.injectCss();
+		M.watchSms();
 		var root = document.createElement('div');
 		root.className = 'mud';
 		root.innerHTML = `

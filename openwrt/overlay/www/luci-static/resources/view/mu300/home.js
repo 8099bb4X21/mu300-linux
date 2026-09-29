@@ -53,6 +53,7 @@ return view.extend({
 
 	render: function() {
 		M.injectCss();
+		M.watchSms();
 		var root = document.createElement('div');
 		this._bootEl = root;
 		root.className = 'mud mud-booting';
@@ -189,11 +190,11 @@ return view.extend({
     <button class="mud-btn" id="mud-btn-wifi">Wi-Fi 热点</button>
     <button class="mud-btn warn" id="mud-btn-modem">重启调制解调器</button>
     <button class="mud-btn warn" id="mud-btn-reboot">重启设备</button>
+    <button class="mud-btn warn" id="mud-btn-android">切换到 Android</button>
   </div>
-  <div class="mud-note" id="mud-actnote"></div>
 </div>
 <div class="mud-sec">
-  <h3>邻区 <span id="mud-locknote" style="font-weight:400"></span></h3>
+  <h3>邻区</h3>
   <div class="mud-scroll">
   <table class="mud-table"><thead><tr><th>制式/频段</th><th>PCI</th><th>频点</th><th>RSRP</th><th>RSRQ</th><th>SINR</th><th></th></tr></thead>
   <tbody id="mud-neigh"><tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">--</td></tr></tbody></table>
@@ -212,34 +213,51 @@ return view.extend({
 		/* render() 在节点挂进文档之前运行，这里相对 root 查找（挂载后 update 用全文档查找） */
 		var q = function(id) { return root.querySelector('#mud-' + id); };
 
-		var act = function(op, arg, note) {
-			M.v('actnote').textContent = note || ('正在执行 ' + op + ' …');
+		/* 统一反馈：按钮转圈（M.busy）+ 顶部 toast，与锁定/短信页同一框架 */
+		var act = function(op, arg, note, btn) {
+			M.busy(btn, true);
+			M.toast(note || ('正在执行 ' + op + ' …'), { type: 'busy' });
 			return L.resolveDefault(M.callAct(op, arg)).then(function(r) {
 				r = r || {};
-				M.v('actnote').textContent = r.ok ? ((r.started ? '已后台执行：' : '已执行：') + (r.op || op)) : ('失败：' + (r.error || '未知错误'));
-			}, function() { M.v('actnote').textContent = '调用失败'; });
+				M.busy(btn, false);
+				M.toast(r.ok ? ((r.started ? '已后台执行：' : '已执行：') + (r.op || op)) : ('失败：' + (r.error || '未知错误')),
+					{ type: r.ok ? 'success' : 'error' });
+			}, function() { M.busy(btn, false); M.toast('调用失败', { type: 'error' }); });
 		};
 		q('btn-data').onclick = function() {
 			var up = self.lastInfo && self.lastInfo.wan && self.lastInfo.wan.up;
-			act('data', up ? 'down' : 'up', up ? '正在断开数据连接…' : '正在拨号…');
+			act('data', up ? 'down' : 'up', up ? '正在断开数据连接…' : '正在拨号…', this);
 		};
 		q('btn-radio').onclick = function() {
 			var on = self.lastCell && self.lastCell.cfun === 1;
-			if (on && !window.confirm('关闭蜂窝射频？蜂窝连接会中断。')) return;
-			if (!on && !window.confirm('打开蜂窝射频？将执行 SFUN 上电序列（最多约 1 分钟）。')) return;
-			act('radio', on ? 'off' : 'on');
+			var btn = this;
+			(on
+				? M.confirmBox('关闭蜂窝射频', '蜂窝连接会中断。', { danger: true })
+				: M.confirmBox('打开蜂窝射频', '将执行 SFUN 上电序列（最多约 1 分钟）。')
+			).then(function(go) { if (go) act('radio', on ? 'off' : 'on', null, btn); });
 		};
 		q('btn-wifi').onclick = function() {
 			var on = self.lastInfo && self.lastInfo.wifi && self.lastInfo.wifi.up;
-			act('wifi', on ? 'off' : 'on');
+			act('wifi', on ? 'off' : 'on', null, this);
 		};
 		q('btn-modem').onclick = function() {
-			if (!window.confirm('重启调制解调器？蜂窝连接会中断 1-2 分钟。')) return;
-			act('modem-reset');
+			var btn = this;
+			M.confirmBox('重启调制解调器', '蜂窝连接会中断 1-2 分钟。', { danger: true })
+				.then(function(go) { if (go) act('modem-reset', null, null, btn); });
 		};
 		q('btn-reboot').onclick = function() {
-			if (!window.confirm('重启整个设备？所有连接会断开。')) return;
-			act('reboot');
+			var btn = this;
+			M.confirmBox('重启整个设备', '所有连接会断开。', { danger: true })
+				.then(function(go) { if (go) act('reboot', null, null, btn); });
+		};
+		q('btn-android').onclick = function() {
+			var btn = this;
+			M.confirmBox('切换到 Android 系统',
+				'下次启动将进入 Android 并立即重启，此管理页面与蜂窝共享都会断开。\n' +
+				'回到 OpenWrt：在 Android 上执行 mu300-next-boot linux 后重启；\n' +
+				'或什么都不做，连续 5 次开机未完成会自动回退。',
+				{ danger: true, okText: '切换并重启' })
+				.then(function(go) { if (go) act('os', 'android', '正在武装 Android 引导并重启…', btn); });
 		};
 		q('reveal').onclick = function() {
 			self.identShown = !self.identShown;
@@ -252,12 +270,18 @@ return view.extend({
 			var btn = ev.target;
 			if (!btn.getAttribute || !btn.getAttribute('data-lock')) return;
 			var key = btn.getAttribute('data-lock');
-			if (!window.confirm('锁定小区 ' + key.replace(':', ' ') + '？\n协议栈会重启（SFUN），蜂窝断开约半分钟。')) return;
-			M.v('locknote').textContent = '（正在后台锁定 ' + key + '，约半分钟）';
+			M.confirmBox('锁定小区 ' + key.replace(':', ' ') + '?', '协议栈会重启（SFUN），蜂窝断开约半分钟。', { danger: true })
+				.then(function(go) {
+				if (!go) return;
+				M.busy(btn, true);
+			M.toast('正在后台锁定 ' + key + '，约半分钟', { type: 'busy' });
 			L.resolveDefault(M.callLockSet('cell', key)).then(function(r) {
 				r = r || {};
-				M.v('locknote').textContent = r.ok ? '（已后台锁定 ' + key + '，稍后自动刷新状态）' : '（锁定失败：' + (r.error || '未知错误') + '）';
-				setTimeout(function() { self.refreshLock(); }, 35000);
+				M.busy(btn, false);
+					M.toast(r.ok ? '已后台锁定 ' + key + '，稍后自动刷新状态' : '锁定失败：' + (r.error || '未知错误'),
+						{ type: r.ok ? 'success' : 'error' });
+					setTimeout(function() { self.refreshLock(); }, 35000);
+				});
 			});
 		});
 		this.refreshLock();
@@ -322,6 +346,9 @@ return view.extend({
 
 		var sig = c && !c.error ? (c.sig || {}) : {};
 		var rsrp = sig.rsrp, rsrq = sig.rsrq, sinr = sig.sinr;
+		/* 4G 时 sig 就是 LTE 块（后端 sig_src 优先 NR > LTE > CESQ），c.lte.sinr
+		 * 是同一数据源的另一个时间戳——仅作 sinr 缺失时的回退，绝不并列展示 */
+		if (sinr == null && c && c.lte && !c.nr && c.lte.sinr != null) sinr = c.lte.sinr;
 		var label = M.qLabel(rsrp, rsrq, sinr), score = M.qScore({ rsrp: rsrp, rsrq: rsrq, sinr: sinr });
 		var col = M.qCol(label);
 
@@ -367,8 +394,7 @@ return view.extend({
 		M.v('metric-chips').innerHTML =
 			'<span class="mud-q" style="background:color-mix(in oklab,' + col + ' 16%,transparent);color:' + col + '">' + label + '</span>' +
 			(rsrq != null ? '<span class="mud-tag">RSRQ ' + rsrq.toFixed(1) + '</span>' : '') +
-			(sinr != null ? '<span class="mud-tag">SINR ' + sinr.toFixed(1) + '</span>' : '') +
-			(c && c.lte && !c.nr && c.lte.sinr != null ? '<span class="mud-tag">LTE SINR ' + c.lte.sinr.toFixed(1) + '</span>' : '');
+			(sinr != null ? '<span class="mud-tag">SINR ' + sinr.toFixed(1) + '</span>' : '');
 
 		/* -- 链路与流量 */
 		var nrk = (c && c.nr) || null;

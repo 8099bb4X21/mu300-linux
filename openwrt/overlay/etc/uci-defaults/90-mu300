@@ -2,8 +2,8 @@
 # First boot: one LAN for USB and Wi-Fi (192.168.77.1/24), cellular WAN through the modem, hostname, USB console.
 uci -q batch <<UCI
 set system.@system[0].hostname='mu300'
-set system.@system[0].zonename='Europe/Istanbul'
-set system.@system[0].timezone='<+03>-3'
+set system.@system[0].zonename='Asia/Shanghai'
+set system.@system[0].timezone='CST-8'
 set network.lan.ipaddr='192.168.77.1'
 set network.lan.netmask='255.255.255.0'
 delete network.wan6

@@ -1114,6 +1114,15 @@ tracking, never the kernel address. Therefore:
   finite (~18 h) route lifetime, so `dynamic mngtmpaddr ... valid_lft forever` is the honest RA state, not a
   zombie. The real zombies were netifd-era statics: a duplicate `proto static metric 4096` default route
   survived every ifup and had to be deleted by hand once during migration.
+* Toggling data from the dashboard stacked *multiple* global v6 addresses: a redial on a new prefix leaves
+  the old prefix's address behind forever (infinite lifetimes again), and the monitor faithfully reports
+  every address the kernel has. Setup and teardown now flush the previous dial's global v6 addresses and
+  routes. Subtlety found the hard way: after `ip -6 route flush dev X` the kernel does NOT rebuild the
+  link-local on-link route and RA processing silently stops - setup therefore also cycles
+  `disable_ipv6` 1->0, which restarts addrconf, rebuilds the route and fires a fresh RS (address back in
+  ~1 s). The `proto static metric 4096` default route reappears on some device transitions (netifd
+  re-applies it from its state); it shares the RA route's next hop with a worse metric, so it is cosmetic -
+  delete it when it bothers.
 * `proto_kill_command` needs a numeric signal (`$(kill -l SIGUSR1)`, like OpenWrt's dhcp proto). The proto
   declares `renew_handler=1`, but netifd only re-scans proto scripts at startup, so the declaration goes live
   at the next `network restart` (one was run as a regression test: with the fixes below, LAN and WAN both
@@ -1170,6 +1179,105 @@ has no SFTP, so `--put` streams the file over an exec channel - set `MU300_PASS`
 MSYS path conversion rewrites leading-slash arguments), `tools/com-probe.py` (raw COM port classifier).
 Keep console/SSH handles closed before any gadget rebind: a Windows handle held across the device's
 re-enumeration wedges the port open forever, and only a replug clears that.
+
+### 31d. Lock-page logout: rpcd segfault during lock applies (2026-09-28)
+
+Clicking 切网/EN-DC/锁频段 on the lock page had a "high probability" of bouncing the browser to the
+LuCI login page. The chain, captured live: during a lock apply the **rpcd process segfaults**
+(kernel "Before coredump, show user regs" record for the old rpcd pid at exactly that moment), procd
+respawns it, and **every ubus session dies with it** - the next page request through the ucode
+dispatcher gets 403 + `X-LuCI-Login-Required` and LuCI redirects to login. The ubus endpoint itself
+never returns that header (a dead token there is a plain JSON error), which is why the polling never
+logouts directly - the bounce always needs a page navigation.
+
+What it is not: `ifup wan` alone (watcher showed rpcd untouched), sequential signal polls through a
+lock apply, readback `lock_get` polling, or 3-wide concurrent /ubus hammering - none reproduced it.
+The crash regs (NULL first argument in a shared library, fd-sized integers around it) point at
+rpcd's script-plugin reply path (`plugin.c`: script stdout is fed chunk-wise into
+`json_tokener_parse_ex` and then converted to blobmsg), i.e. a narrow race between specific reply
+content and chunk boundaries while a lock apply restarts the protocol stack.
+
+Mitigation deployed (openwrt overlay `usr/libexec/rpcd/mu300dash`), three browser-driven applies
+survived with zero logouts afterwards:
+
+* every method's raw stdout is appended to `/tmp/mu300-dash/last-outputs.log` (last 400 entries) -
+  if rpcd ever crashes here again, the final entry is the exact input that killed the parser;
+* while `/run/mu300-dash-apply` exists (the apply's own mutex dir), `signal` answers from the
+  cached snapshot instead of spawning live AT collectors, and `status` stops kicking its refresh
+  tiers - the modem answers garbage mid-SFUN and these were the highest-frequency calls in the
+  crash window. The guard is verified by hand (marker present -> cached ts served).
+
+The system clock was also found set to Europe/Istanbul (UTC+3) instead of the local zone - display
+only, sessions use UTC internally; worth correcting in the LuCI settings when convenient.
+
+Follow-up, same day - the lock toggles felt dead ("半天打不开/关不上"). Two backend causes, both
+fixed in `mu300-dash-lock` / the rpcd plugin / `locks.js`: (a) `do_apply` took the apply mutex for
+EVERY kind, so the `auto_apply` toggle - which only writes a state file, no AT, no SFUN - silently
+queued behind a 40 s+ stack restart; it now bypasses the mutex entirely and answers on the first
+page poll (~2 s). (b) an EN-DC apply updated the lock cache only via the background seven-command
+`get fresh` (~7-10 s), while the page re-reads the cache 1.5 s after the click - the stale value
+flipped the toggle back and looked like a lost click; the apply now patches the cached `endc`
+field in place and the page polls until the value confirms (optimistic state held up to 15 s,
+explicit timeout note after). `lock_set` replies also carry `queued:1` when another apply holds
+the mutex, though the flag can miss applies younger than the script's own startup time.
+
+### 31e. Band capability: SP5GCMDS is the authority, SPLBAND=4 decoding was wrong (2026-09-29)
+
+The dashboard's NR band capability came from decoding `AT+SPLBAND=4` masks ("553,0,528" -> n1 n5 n8
+n28 n41 **n79**) - and that decode was wrong: the module does not support n79 at all and the list also
+missed n6. The UI happily offered n79 as lockable; locking it left the CP searching a band its RF chain
+cannot use, and after some minutes of searching the firmware wedged entirely (AT silent, only a power
+cycle recovers - twice reproduced). The SPTESTMODE write rejections observed the previous day started
+in the same band/cell locking session, so the unsupported lock had been degrading the modem all along.
+
+The authoritative capability source (from ufi_tools, verified on the unit) is:
+
+    AT+SP5GCMDS="get nr support_band"
+    +SP5GCMDS: get nr support_band,6,41,78,1,8,28,5      -> supported: 1,5,6,8,28,41,78
+
+For LTE no capability command exists - ufi_tools uses the fixed table
+B1/B3/B5/B8/B34/B38/B39/B40/B41, and so do we now. Beyond the correct read, `mu300-dash-lock` filters
+**every band write** (apply and boot replay) against the supported set, so a stale saved lock - like
+the poisoned n79 replaying on every boot - is dropped before it ever reaches the modem. After
+deploying: caps read back exactly the measured list, the saved lock (all supported bands) verified
+clean, registration and WAN healthy.
+
+Switching OS from the Android side, for the record: arm slot b by writing the 32-byte
+bootloader_control block to misc offset 2048 (the trial block is a fixed constant for this device,
+`work/boot-linux-slotb.misc-slot-b-trial.bin`), verify by reading it back, then reboot; inside Linux
+`mu300-next-boot linux` makes it the default again. The Android web UI gets a proper panel for this:
+`android/webui-plugins/mu300-system-switch.js` (checks `ro.boot.slot_suffix` is `_a` before writing,
+compares the readback, only reboots on an exact match).
+
+### 31f. SMS receive: pool split, CNMI, text-mode parsing (2026-09-29)
+
+Incoming SMS needed a manual "从 SIM 同步" click to appear, senders showed as ASCII-hex
+("17674544422" -> "313736373435...3232"), concatenated messages arrived as separate truncated
+parts, and previews died mid-character. Four causes, all fixed:
+
+* **Pool split** (the real "must sync by hand" root cause): init.d gave the daemon
+  `MU300_SMS_POOL=/etc/mu300/sms` while the rpcd backend and manual runs default to
+  `/var/lib/mu300/sms` - the daemon faithfully synced a pool nobody read. The rpcd plugin now
+  exports the same /etc pool; /var/lib was migrated away.
+* **CNMI was 0,0,0,1,0**: the modem files incoming messages silently, so the daemon's
+  +CMTI md5 trigger never fired and arrival waited for the 30 s full-sync net. The daemon now
+  arms `AT+CNMI=2,1,0,0,0` at startup; arrival syncs in ~7 s (5 s poll + 2 s settle).
+* **Text mode hides the UDH**, so concatenated parts are indistinguishable except by sender
+  and SCTS: parts of one message carry identical service-centre timestamps (measured), so
+  sync folds rows sharing (oa, scts) into one record, concatenating part hex seamlessly
+  (UCS2 hex concat = the whole message; GSM text concat likewise). Peer numbers arrive as
+  ASCII-hex (a CSCS=UCS2 text-mode artifact) and are decoded back byte-pair-wise, gated on
+  printable + digit-major so a plain numeric address is never mangled.
+* **Previews**: `cut -c1-44` counts BYTES - 44 bytes is 14 Chinese characters, and the cut
+  lands mid-character (the � the UI showed). The preview now backs off to a UTF-8 boundary -
+  drop continuation bytes, drop the lead byte ONCE and stop; an unconditional byte-walk eats
+  whole all-multibyte lines to nothing (bug shipped once, measured). Bubbles always fetch the
+  full text now (pool file read, cheap) instead of guessing from preview length.
+
+UI: unread badges center (flex), the SMS page polls every 5 s (scroll preserved), and every
+mu300 page runs M.watchSms(): a 5 s pool-page-1 read that pops a phone-notification banner
+(sender + two-line preview, M.notify) when a new mt id appears; a pool wipe (ids falling)
+silently re-baselines.
 
 ### 24. No internal audio hardware
 * The DT enables a sound card, the UMP9620 codec and an AW883xx amplifier at `6-0034`, and Android disables audio.

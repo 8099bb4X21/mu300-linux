@@ -77,8 +77,20 @@ case "${1:-}:${2:-}" in
         sleep 3   # the reply has to make it out first
         reboot
         ;;
+    os:android)
+        # arm the bootloader for Android (misc partition + default-boot flag),
+        # answer, then reboot - the reply must be out before the box goes down.
+        # Runs inline (not setsid): arming is fast and its failure must surface.
+        if out=$(/opt/mu300/bin/mu300-next-boot android 2>&1); then
+            ok "os android (${out:-armed})"
+            sleep 3
+            reboot
+        else
+            fail "os android" "${out:-mu300-next-boot failed}"
+        fi
+        ;;
     *)
-        echo "usage: $0 radio on|off | data up|down | wifi on|off | modem-reset | vpn start|stop | reboot" >&2
+        echo "usage: $0 radio on|off | data up|down | wifi on|off | modem-reset | vpn start|stop | reboot | os android" >&2
         printf '{"ok":0,"error":"unknown op"}\n'
         exit 2
         ;;

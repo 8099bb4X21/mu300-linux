@@ -52,12 +52,25 @@ proto_mu300cell_setup() {
 	dns2=$(echo "$out" | sed -n 's/^DNS2=//p')
 
 	ip link set "$ifname" up
+	# This carrier's RAs give INFINITE address lifetimes: after a redial on a
+	# new prefix the old SLAAC address never expires and prefixes stack up
+	# (same for the default route a previous dial left behind). Clear the last
+	# dial's v6 state; RS/RA re-establishes it within ~1 s. Also fine for
+	# v4-only bearers - there is nothing to keep either way.
+	ip -6 addr flush dev "$ifname" scope global 2>/dev/null
+	ip -6 route flush dev "$ifname" 2>/dev/null
 	# netifd treats this as a v4 protocol, so forwarding leaves accept_ra at 0. Enable
 	# IPv6 and accept RAs before waiting for the carrier address. The monitor below
 	# reports the initial RA and all later address/route lifetime refreshes.
 	if [ "${pdptype:-IP}" != IP ]; then
-		[ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
+		# The 1->0 cycle restarts addrconf entirely: the link-local on-link
+		# route is rebuilt (a bare route flush leaves it missing and stops RA
+		# processing) and a fresh router solicitation goes out, so the global
+		# address returns about a second after the flush above.
+		[ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] && {
+			echo 1 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
 			echo 0 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
+		}
 		[ -w "/proc/sys/net/ipv6/conf/$ifname/accept_ra" ] && {
 			echo 0 > "/proc/sys/net/ipv6/conf/$ifname/accept_ra"
 			echo 2 > "/proc/sys/net/ipv6/conf/$ifname/accept_ra"
@@ -103,11 +116,15 @@ proto_mu300cell_teardown() {
 	local config="$1"
 	proto_kill_command "$config"
 	/opt/mu300/bin/mobile-data down >/dev/null 2>&1
-	# External state is not removed by netifd on ifdown; clean the bearer v4 so
-	# a torn-down WAN is really down. SLAAC addresses expire on their own.
+	# External state is not removed by netifd on ifdown, so clean the bearer
+	# ourselves - both families. v6 must go too: this carrier's RAs carry
+	# INFINITE lifetimes, so an unflushed SLAAC address (and the default route
+	# an earlier report installed) would survive every redial and stack up.
 	# sipa_eth0 is the one bearer this hardware has (mobile-data assumes it too).
 	ip -4 addr flush dev sipa_eth0 scope global 2>/dev/null
 	ip -4 route del default dev sipa_eth0 2>/dev/null
+	ip -6 addr flush dev sipa_eth0 scope global 2>/dev/null
+	ip -6 route flush dev sipa_eth0 2>/dev/null
 }
 
 [ -n "$INCLUDE_ONLY" ] || add_protocol mu300cell

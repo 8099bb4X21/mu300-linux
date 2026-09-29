@@ -23,7 +23,7 @@ var callLockSet = rpc.declare({ object: 'mu300dash', method: 'lock_set', params:
 var callSmsList = rpc.declare({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
 var callSmsShow = rpc.declare({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
 var callSmsSend = rpc.declare({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
-var callSmsDel  = rpc.declare({ object: 'mu300dash', method: 'sms_delete', params: [ 'id' ], expect: { '': {} } });
+var callSmsDel  = rpc.declare({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
 var callSmsSync = rpc.declare({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
 
 /* 大陆运营商 PLMN -> 名称；COPS 给数字格式时用它还原 */
@@ -229,7 +229,7 @@ var CSS = `
 .mud-sms-item{padding:6px 8px;border-radius:var(--radius-base,.5rem);border:1px solid color-mix(in oklab,var(--hairline,var(--border,#ddd)) 60%,transparent);margin-bottom:6px;cursor:pointer}
 .mud-sms-item:hover{background:var(--hover-faint,rgba(127,127,127,.05))}
 .mud-sms-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.mud-badge{font-size:.68rem;padding:0 7px;border-radius:99px;background:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
+.mud-badge{display:flex;align-items:center;justify-content:center;font-size:.68rem;padding:0 7px;min-width:20px;height:20px;box-sizing:border-box;border-radius:99px;background:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
 /* 手机端 hero 与锁定页一致：信息块在上、RSRP 块自然换行到下一行（右对齐） */
 @media(max-width:600px){
 .mud-hero{gap:8px}
@@ -237,6 +237,42 @@ var CSS = `
 .mud-hero-r{flex:1 0 100%;flex-direction:row;justify-content:space-between;align-items:baseline;text-align:left}
 .mud-rsrp{font-size:1.9rem}
 .mud-chips{justify-content:flex-end}}
+/* ---- 顶部 toast 与按钮忙碌态（各页共用的反馈框架） ---- */
+.mud-toasts{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;width:max-content;max-width:min(92vw,560px)}
+.mud-toast{pointer-events:auto;display:flex;align-items:center;gap:9px;padding:9px 16px;border-radius:99px;background:var(--surface,var(--background,#fff));border:1px solid var(--hairline,var(--border,#ddd));box-shadow:0 6px 24px rgba(0,0,0,.14);font-size:.82rem;color:var(--text,#222);animation:mudtoast-in .22s ease-out;max-width:100%}
+.mud-toast.out{animation:mudtoast-out .25s ease-in forwards}
+.mud-toast .mud-tico{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6))}
+.mud-toast.success .mud-tico{background:var(--success,#2FBF71)}
+.mud-toast.error .mud-tico{background:var(--danger,#E25555)}
+.mud-toast.busy .mud-tico{width:12px;height:12px;background:transparent;border:2px solid color-mix(in oklab,var(--brand,#2f7bf6) 30%,transparent);border-top-color:var(--brand,#2f7bf6);animation:mudspin .7s linear infinite}
+@keyframes mudtoast-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+@keyframes mudtoast-out{to{opacity:0;transform:translateY(-8px)}}
+@keyframes mudspin{to{transform:rotate(360deg)}}
+.mud-toast.notify{flex-direction:row;align-items:center;max-width:340px;text-align:left;border-radius:calc(var(--radius-base,.5rem) + .375rem)}
+.mud-toast.notify .mud-nb{display:flex;flex-direction:column;gap:2px;min-width:0}
+.mud-toast.notify .mud-nb b{font-size:.82rem;font-weight:700}
+.mud-toast.notify .mud-nb span{font-size:.76rem;color:var(--text-muted,var(--text-light,#888));overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.mud-btn .mud-spin,.mud-lockbtn .mud-spin{flex:0 0 auto;width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in oklab,currentColor 30%,transparent);border-top-color:currentColor;animation:mudspin .7s linear infinite}
+.mud-btn.busy,.mud-lockbtn.busy{pointer-events:none;opacity:.75}
+/* ---- 主题化对话框（替代浏览器 confirm/alert） ---- */
+.mud-dlg-wrap{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.42);animation:mudfade-in .16s ease-out;padding:20px}
+.mud-dlg{background:var(--surface,var(--background,#fff));border:1px solid var(--hairline,var(--border,#ddd));border-radius:calc(var(--radius-base,.5rem) + .5rem);box-shadow:0 18px 50px rgba(0,0,0,.28);max-width:420px;width:100%;padding:18px 20px 16px;animation:muddlg-in .2s cubic-bezier(.2,.9,.3,1.15)}
+.mud-dlg h4{margin:0 0 8px;font-size:.95rem;font-weight:700;color:var(--text,#222)}
+.mud-dlg .mud-dlg-msg{font-size:.84rem;line-height:1.6;color:var(--text-muted,var(--text-light,#666));white-space:pre-wrap;word-break:break-word}
+.mud-dlg .mud-dlg-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+/* 短信气泡的删除按钮：红色垃圾桶，平时隐淡、悬停显形；正文留出右侧空间防重叠 */
+.mud-bub{position:relative;padding-right:28px}
+.mud-del{position:absolute;top:2px;right:2px;display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:none;background:transparent;color:var(--danger,#E25555);opacity:.4;cursor:pointer;border-radius:50%}
+.mud-del:hover{opacity:.9;background:color-mix(in oklab,var(--danger,#E25555) 12%,transparent)}
+.mud-del svg{display:block}
+/* 预览 -> 全文回填的过渡动画，消除首载的生硬跳变 */
+@keyframes mudfadein{from{opacity:.25}to{opacity:1}}
+.mud-bub .bd.fadein{animation:mudfadein .25s ease-out}
+@keyframes muddlg-in{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:none}}
+@keyframes mudfade-in{from{opacity:0}to{opacity:1}}
+/* 手机端锁定页 hero：RSRP 数字左对齐（其余屏幕保持右对齐） */
+@media(max-width:600px){
+.mud-rsrp{text-align:left}}
 `;
 
 function injectCss() {
@@ -306,6 +342,215 @@ function neighborRows(c, lockedCell) {
 	}).join('');
 }
 
+/* ------------------------------------------------------------------ 反馈框架
+ * M.toast(text, {type, timeout})：顶部弹出的统一提示，type = info|success|error|busy
+ * （busy 自带转圈点，适合“正在…”进行态）。返回句柄 {update(text,type), close()}，
+ * 长操作可以一路 update 下去而不堆叠。timeout=0 表示不自动消失。
+ * M.busy(btn[, on])：给按钮加/去内嵌转圈并禁点；不传 on 则翻转。 */
+function toast(text, opts) {
+	opts = opts || {};
+	if (!document.getElementById('mud-toasts')) {
+		var w = document.createElement('div');
+		w.id = 'mud-toasts';
+		w.className = 'mud-toasts';
+		document.body.appendChild(w);
+	}
+	var t = document.createElement('div');
+	t.className = 'mud-toast ' + (opts.type || 'info');
+	t.innerHTML = '<i class="mud-tico"></i><span></span>';
+	t.lastChild.textContent = text == null ? '' : String(text);
+	document.getElementById('mud-toasts').appendChild(t);
+	var timer = null, dead = false;
+	var life = opts.timeout !== undefined ? opts.timeout : 3500;
+	var arm = function() {
+		if (timer) clearTimeout(timer);
+		if (life > 0) timer = setTimeout(close, life);
+	};
+	var close = function() {
+		if (dead) return;
+		dead = true;
+		if (timer) clearTimeout(timer);
+		t.classList.add('out');
+		setTimeout(function() { t.remove(); }, 260);
+	};
+	arm();
+	return {
+		update: function(text2, type2) {
+			if (dead) return;
+			t.lastChild.textContent = text2 == null ? '' : String(text2);
+			if (type2) t.className = 'mud-toast ' + type2;
+			arm();
+		},
+		close: close
+	};
+}
+function busy(btn, on) {
+	if (!btn || !btn.classList) return;
+	if (on === undefined) on = !btn.classList.contains('busy');
+	if (on && !btn.classList.contains('busy')) {
+		btn.classList.add('busy');
+		var s = document.createElement('i');
+		s.className = 'mud-spin';
+		btn.insertBefore(s, btn.firstChild);
+	} else if (!on && btn.classList.contains('busy')) {
+		btn.classList.remove('busy');
+		var sp = btn.querySelector('.mud-spin');
+		if (sp) sp.remove();
+	}
+}
+
+/* ------------------------------------------------------------------ 对话框
+ * M.confirmBox(title, message, opts) -> Promise<boolean>：主题化确认框，
+ * 取消/遮罩/Escape 都 resolve(false)，确定/Enter resolve(true)。
+ * M.alertBox(title, message, opts) -> Promise<true>：单按钮提示框。
+ * opts: { danger:true 红色确认键, okText, cancelText }；danger 时默认焦点在取消上。 */
+function dialog(opts) {
+	opts = opts || {};
+	return new Promise(function(resolve) {
+		var wrap = document.createElement('div');
+		wrap.className = 'mud-dlg-wrap';
+		var withCancel = opts.cancelText !== null;
+		wrap.innerHTML = '<div class="mud-dlg" role="dialog" aria-modal="true">' +
+			'<h4></h4><div class="mud-dlg-msg"></div><div class="mud-dlg-btns">' +
+			(withCancel ? '<button type="button" class="mud-btn" data-r="0"></button>' : '') +
+			'<button type="button" class="mud-btn' + (opts.danger ? ' warn' : '') + '" data-r="1"></button>' +
+			'</div></div>';
+		wrap.querySelector('h4').textContent = opts.title || '确认';
+		wrap.querySelector('.mud-dlg-msg').textContent = opts.message || '';
+		var btns = wrap.querySelectorAll('.mud-dlg-btns .mud-btn');
+		btns[btns.length - 1].textContent = opts.okText || '确定';
+		if (withCancel) btns[0].textContent = opts.cancelText || '取消';
+		var done = function(r) {
+			document.removeEventListener('keydown', onKey, true);
+			wrap.remove();
+			resolve(r);
+		};
+		var onKey = function(ev) {
+			if (ev.key == 'Escape') { ev.preventDefault(); done(withCancel ? false : true); }
+			else if (ev.key == 'Enter') { ev.preventDefault(); done(true); }
+		};
+		wrap.addEventListener('click', function(ev) {
+			var b = ev.target.closest('button');
+			if (b) done(b.getAttribute('data-r') == '1');
+			else if (ev.target === wrap && withCancel) done(false);
+		});
+		document.addEventListener('keydown', onKey, true);
+		document.body.appendChild(wrap);
+		/* 危险操作默认焦点给取消，防手滑回车 */
+		(withCancel && opts.danger ? btns[0] : btns[btns.length - 1]).focus();
+	});
+}
+/* 手机通知样式的横幅：标题（发件人）+ 两行预览，默认 6 s */
+function notify(title, message, opts) {
+	opts = opts || {};
+	if (!document.getElementById('mud-toasts')) {
+		var w = document.createElement('div');
+		w.id = 'mud-toasts';
+		w.className = 'mud-toasts';
+		document.body.appendChild(w);
+	}
+	var t = document.createElement('div');
+	t.className = 'mud-toast notify ' + (opts.type || 'info');
+	t.innerHTML = '<i class="mud-tico"></i><div class="mud-nb"><b></b><span></span></div>';
+	t.querySelector('b').textContent = title == null ? '' : String(title);
+	t.querySelector('span').textContent = message == null ? '' : String(message);
+	document.getElementById('mud-toasts').appendChild(t);
+	var life = opts.timeout !== undefined ? opts.timeout : 6000;
+	var timer = life > 0 ? setTimeout(function() {
+		t.classList.add('out');
+		setTimeout(function() { t.remove(); }, 260);
+	}, life) : null;
+	t.addEventListener('click', function() {
+		if (timer) clearTimeout(timer);
+		t.remove();
+	});
+	return t;
+}
+
+/* 新短信监视（每个页面 render 时调用一次，内部单例）：
+ * 每 5 s 读一次本地池第 1 页（纯文件读，不打 AT），首次只记基线；
+ * 之后出现更大的消息 id 且为收件（mt）时，按手机通知样式弹出
+ * 「发件人 + 预览」。池子被清空（id 回落）时静默重建基线。 */
+var smsWatch = null;
+function watchSms() {
+	if (smsWatch) return;
+	smsWatch = { seen: null };
+	window.setInterval(function() {
+		Promise.resolve(callSmsList(1)).catch(function() { return {}; }).then(function(r) {
+			r = r || {};
+			var msgs = r.msgs || [], max = 0;
+			msgs.forEach(function(m) {
+				var id = parseInt(m.id, 10) || 0;
+				if (id > max) max = id;
+			});
+			if (!max) return;
+			if (smsWatch.seen == null || max < smsWatch.seen) { smsWatch.seen = max; return; }
+			if (max > smsWatch.seen) {
+				msgs.forEach(function(m) {
+					var id = parseInt(m.id, 10) || 0;
+					if (id > smsWatch.seen && m.dir === 'mt')
+						notify('新短信 · ' + (m.peer || '未知号码'), m.preview || '', { type: 'success' });
+				});
+				smsWatch.seen = max;
+			}
+		});
+	}, 5000);
+}
+
+function confirmBox(title, message, opts) {
+	opts = opts || {};
+	opts.title = title;
+	opts.message = message;
+	return dialog(opts);
+}
+function alertBox(title, message, opts) {
+	opts = opts || {};
+	opts.title = title;
+	opts.message = message;
+	opts.cancelText = null;
+	return dialog(opts);
+}
+
+/* 多选对话框：M.choiceBox(title, message, [{label, value, danger}], opts)
+ * -> Promise(选中项的 value)；取消/遮罩/Escape resolve(undefined)。
+ * choices 里的按钮从左到右排，danger 项红色。 */
+function choiceBox(title, message, choices, opts) {
+	opts = opts || {};
+	return new Promise(function(resolve) {
+		var wrap = document.createElement('div');
+		wrap.className = 'mud-dlg-wrap';
+		var btns = (choices || []).map(function(c, i) {
+			return '<button type="button" class="mud-btn' + (c.danger ? ' warn' : '') +
+				'" data-i="' + i + '"></button>';
+		}).join('');
+		wrap.innerHTML = '<div class="mud-dlg" role="dialog" aria-modal="true">' +
+			'<h4></h4><div class="mud-dlg-msg"></div>' +
+			'<div class="mud-dlg-btns">' + btns + '</div></div>';
+		wrap.querySelector('h4').textContent = title || '选择';
+		wrap.querySelector('.mud-dlg-msg').textContent = message || '';
+		(choices || []).forEach(function(c, i) {
+			wrap.querySelector('[data-i="' + i + '"]').textContent = c.label || '?';
+		});
+		var done = function(v) {
+			document.removeEventListener('keydown', onKey, true);
+			wrap.remove();
+			resolve(v);
+		};
+		var onKey = function(ev) {
+			if (ev.key == 'Escape') { ev.preventDefault(); done(undefined); }
+		};
+		wrap.addEventListener('click', function(ev) {
+			var b = ev.target.closest('button');
+			if (b) done(choices[parseInt(b.getAttribute('data-i'), 10)].value);
+			else if (ev.target === wrap) done(undefined);
+		});
+		document.addEventListener('keydown', onKey, true);
+		document.body.appendChild(wrap);
+		var first = wrap.querySelector('.mud-dlg-btns .mud-btn');
+		if (first) first.focus();
+	});
+}
+
 /* LuCI 的 require 把模块当类工厂：必须返回 baseclass 派生的类，加载后拿到的是它的实例 */
 return baseclass.extend({
 	callStatus: callStatus, callSignal: callSignal, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
@@ -314,5 +559,7 @@ return baseclass.extend({
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	carrierName: carrierName, qLabel: qLabel, qCol: qCol, qScore: qScore,
 	esc: esc, fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, PLMN_CN: PLMN_CN,
-	injectCss: injectCss, v: v, set: set, spark: spark, neighborRows: neighborRows
+	injectCss: injectCss, v: v, set: set, spark: spark, neighborRows: neighborRows,
+	toast: toast, busy: busy, confirmBox: confirmBox, alertBox: alertBox, choiceBox: choiceBox,
+	notify: notify, watchSms: watchSms
 });

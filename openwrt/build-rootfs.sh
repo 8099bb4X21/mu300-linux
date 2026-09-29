@@ -32,11 +32,14 @@ have=$(shasum -a 256 "openwrt/$TARBALL" 2>/dev/null || sha256sum "openwrt/$TARBA
 [ "${have%% *}" = "$want" ] || { echo "checksum mismatch for $TARBALL" >&2; exit 1; }
 docker import --platform linux/arm64 "openwrt/$TARBALL" mu300-$FLAVOUR-base:$VER >/dev/null
 # OpenWrt ships an unsigned regulatory.db; this kernel requires the signed database (wens key), so take Debian/Ubuntu's
-REGDB=$(mktemp -d)
-docker run --rm --platform linux/arm64 -v "$REGDB":/o ubuntu:26.04 sh -c \
+# (mktemp on Git Bash/Windows yields a path Docker cannot bind; use a repo-local dir instead)
+REGDB=$TOP/openwrt/.regdb
+rm -rf "$REGDB" && mkdir -p "$REGDB"
+W() { [ -d /mingw64 ] || [ -n "${MSYS:-}" ] && cygpath -w "$1" || echo "$1"; }
+docker run --rm --platform linux/arm64 -v "$(W "$REGDB")":/o ubuntu:26.04 sh -c \
   "apt-get update -qq >/dev/null && apt-get install -y -qq wireless-regdb >/dev/null && cp /usr/lib/firmware/regulatory.db /usr/lib/firmware/regulatory.db.p7s /o/"
 
-opt() { [ -e "$IN/$1" ] && echo "-v $IN/$1:/in/$2:ro" || true; }
+opt() { [ -e "$IN/$1" ] && echo "-v $(W "$IN/$1"):/in/$2:ro" || true; }
 
 # The required input first, with a readable message: without it docker fails somewhere inside the build.
 ls "$IN/out/modules"/*.ko >/dev/null 2>&1 || {
@@ -50,14 +53,15 @@ for o in firmware android-subset android-gpu-subset tools/logdw/logdw tools/bt-i
     [ -e "$IN/$o" ] && echo "  + $o" || echo "  - $o   (missing: the image is built without it)"
 done
 # shellcheck disable=SC2046
+# Git Bash/MSYS converts -v paths and breaks Docker Desktop; use Windows-native paths
 docker run --rm --platform linux/arm64 \
-  -v "$TOP/rootfs/overlay/opt/mu300":/in/opt-mu300:ro -v "$TOP/rootfs/overlay/etc/mu300/vpn.conf.example":/in/vpn.conf.example:ro -v "$TOP/openwrt/overlay":/in/overlay:ro \
-  -v "$TOP/boot/module-order.txt":/in/module-order.txt:ro -v "$IN/out/modules":/in/modules:ro \
+  -v "$(W "$TOP/rootfs/overlay/opt/mu300")":/in/opt-mu300:ro -v "$(W "$TOP/rootfs/overlay/etc/mu300/vpn.conf.example")":/in/vpn.conf.example:ro -v "$(W "$TOP/openwrt/overlay")":/in/overlay:ro \
+  -v "$(W "$TOP/boot/module-order.txt")":/in/module-order.txt:ro -v "$(W "$IN/out/modules")":/in/modules:ro \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
   $(opt firmware firmware) $(opt android-subset android-subset) $(opt android-gpu-subset android-gpu-subset) \
   $(opt tools/logdw/logdw logdw) $(opt tools/bt-init/mu300-bt-init bt-init) $(opt tools/gpu/cltest cltest) \
-  $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(opt upstream/out/modules mainline-modules) -v "$TOP/openwrt":/out -v "$REGDB":/in/regdb:ro \
-  -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER /bin/sh -eu -c '
+  $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(opt upstream/out/modules mainline-modules) -v "$(W "$TOP/openwrt")":/out -v "$(W "$REGDB")":/in/regdb:ro \
+  -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER //bin/sh -eu -c '
 mkdir -p /var/lock /var/run /tmp
 apk update >/dev/null
 # openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure
