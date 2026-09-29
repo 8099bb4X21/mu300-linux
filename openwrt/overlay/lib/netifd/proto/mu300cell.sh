@@ -29,7 +29,7 @@ proto_mu300cell_init_config() {
 
 proto_mu300cell_setup() {
 	local config="$1"
-	local apn pdptype peerdns out ifname ip prefix dns1 dns2 iid zone
+	local apn pdptype peerdns out ifname ip prefix dns1 dns2
 	json_get_vars apn pdptype peerdns
 
 	out=$(MU300_NETIFD=1 MU300_PDP_TYPE="${pdptype:-IP}" /opt/mu300/bin/mobile-data up $apn 2>/tmp/mu300cell.err)
@@ -50,7 +50,6 @@ proto_mu300cell_setup() {
 	prefix=$(echo "$out" | sed -n 's/^PREFIX=//p')
 	dns1=$(echo "$out" | sed -n 's/^DNS1=//p')
 	dns2=$(echo "$out" | sed -n 's/^DNS2=//p')
-	iid=$(echo "$out" | sed -n 's/^IID6=//p')
 
 	ip link set "$ifname" up
 	# This carrier's RAs give INFINITE address lifetimes: after a redial on a
