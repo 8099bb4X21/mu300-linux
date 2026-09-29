@@ -57,7 +57,7 @@ Nothing was written. Android version: {1}	未写入任何内容。Android 版本
 Type overwrite to use this region anyway	输入 overwrite 以仍然使用此区域
 cancelled	已取消
 What should be installed?	要安装什么？
-1) Ubuntu LTS: 24.04 or 26.04, asked next (full distribution, apt, ~500 MiB RAM in use)	1) Ubuntu LTS：24.04 或 26.04，稍后选择（完整发行版，apt，约占用 500 MiB 内存）
+1) Ubuntu 24.04 LTS (full distribution, apt, ~500 MiB RAM in use)	1) Ubuntu 24.04 LTS（完整发行版，apt，约占用 500 MiB 内存）
 2) OpenWrt {1} (router, LuCI web UI, ~140 MiB RAM in use)	2) OpenWrt {1}（路由器系统，LuCI 网页界面，约占用 140 MiB 内存）
 3) both (switch later with: mu300-os ubuntu|openwrt)	3) 两者都装（之后用 mu300-os ubuntu|openwrt 切换）
 (this device has {1}: {2})	（此设备有 {1}：{2}）
@@ -95,11 +95,6 @@ Which Ubuntu?	选择哪个 Ubuntu？
 2) 26.04 LTS  BETA: the newest (systemd 259, newer packages), supported until 2031; tested less	2) 26.04 LTS  测试版（BETA）：最新版本（systemd 259，更新的软件包），支持到 2031 年；测试较少
 Ubuntu	Ubuntu
 Ubuntu 26.04 needs a mainline kernel (6.18 or 7.2): its programs use system calls that 5.4 does not have (tar, for one, cannot unpack folders there).	Ubuntu 26.04 需要主线内核（6.18 或 7.2）：它的程序使用了 5.4 没有的系统调用（例如 tar 在 5.4 上无法解压包含文件夹的归档）。
-this copy has changes of its own, so {1} files were left as they are	此副本有自己的修改，因此 {1} 个文件保持原样
-no answer left for the question: {1}	这个问题已经没有可用的答案了：{1}
-more than one adb device: using {1} (F50/MU300)	连接了多个 adb 设备：使用 {1}（F50/MU300）
-more than one adb device - which one is the F50?	连接了多个 adb 设备——哪一个是 F50？
-Device	设备
 Kernel	内核
 enter 1, 2 or 3	请输入 1、2 或 3
 A MU300 Linux installation is already on this device.	此设备上已经安装了 MU300 Linux。

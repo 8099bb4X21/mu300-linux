@@ -23,7 +23,6 @@ import stat
 import struct
 import subprocess
 import sys
-import tarfile
 import zlib
 from pathlib import Path
 
@@ -33,9 +32,6 @@ BOOT_CMDLINE = b'loglevel=5'
 MISC_BC_OFFSET = 0x800
 # persistent init log lives at 48 MiB inside boot_b (8 MiB); the image must end before it
 PERSIST_LOG_OFFSET = 48 << 20
-# written by android-vendor/extract_subset.py on a host whose file system cannot hold every name from the
-# device (Windows: the property area's u:object_r:<context>:s0); while it exists it holds the whole subset
-WINDOWS_TAR = 'windows-source.tar.gz'
 
 
 def cpio_record(name, data, mode, ino, rdev=(0, 0)):
@@ -200,13 +196,6 @@ def main():
         if extra[:4] != bytes.fromhex('02214c18'):
             sys.exit(f'{a.append_ramdisk} is not an LZ4 legacy ramdisk segment')
         ram += extra
-        # The appended segment carries an init of its own, and a later segment's file replaces an earlier one of
-        # the same name. When that bundle is older than this checkout - a release is usually older than the copy
-        # of the project that installs from it - its init is older too, and one from before v2026.09.29 knows
-        # only the default ROOT_OFFSET: a device whose Linux region is elsewhere then mounted an empty offset and
-        # booted into standalone mode (issue #5). Our init is the one built for this device (the installer writes
-        # its offset in) and searches for the region as well, so it goes behind as a third segment, unpacked last.
-        ram += lz4_legacy(cpio_archive(set(), {'init': files['init']}))
 
     kern = a.kernel.read_bytes()
     hdr = bytearray(base[:PAGE])

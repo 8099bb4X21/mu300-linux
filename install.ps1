@@ -6,15 +6,10 @@
     Run with the device booted in rooted Android and connected over USB (adb).
       .\install.ps1 -Check     only inspect the device; writes nothing
       .\install.ps1            install Ubuntu, OpenWrt or both from the prebuilt release images
-      .\install.ps1 -Answers f.txt   take one answer per question from that file (run without a console; the file
-                               holds the password in plain text, delete it afterwards)
 
     Needs: adb, Python 3 and the lz4 module (pip install lz4). Windows 10/11 provide tar and curl.
     The published images contain no proprietary files: the Wi-Fi/Bluetooth firmware and the Android modem/GPU
-    userspace are pulled from *your* device into work\ and added during installation. A Windows file system
-    cannot hold every name the Android subset contains (the property area is a set of files called
-    u:object_r:<context>:s0), so the archive from the device is kept beside it as work\android-subset\
-    windows-source.tar.gz, and the tools that build the images take the subset from that file.
+    userspace are pulled from *your* device into work\ and added during installation.
     Only the Linux region, boot_b and 32 bytes of misc are written; boot_a, the GPT and userdata stay untouched.
 #>
 [CmdletBinding()]
@@ -25,7 +20,6 @@ param(
     [string]$Repo = 'dikeckaan/mu300-linux',
     [string]$Work = '',      # empty: .\work next to this script
     [string]$Lang = '',      # en, tr or zh; empty: ask (English is the default)
-    [string]$Answers = '',   # file with one answer per line: run without a console (see Ask; the password too)
     [switch]$NoSelfUpdate    # do not bring this copy up to date with GitHub first
 )
 
@@ -35,23 +29,6 @@ $T = '/data/local/tmp'
 $Top = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $Work) { $Work = Join-Path $Top 'work' }
 $MU300_IP = '192.168.77.1'
-
-# A console is not always available: a script driving the installer, a CI run, or a terminal that cannot answer
-# the password prompt (Read-Host -AsSecureString refuses a redirected stdin and blocks instead). -Answers <file>
-# then takes one answer per question, in the order they are asked, an empty line meaning "the default". The file
-# holds the password in plain text, so delete it afterwards; secret answers are never echoed.
-$script:AnswerQueue = $null
-if ($Answers) {
-    $q = New-Object 'System.Collections.Generic.Queue[string]'
-    foreach ($line in [IO.File]::ReadAllLines($Answers, [Text.Encoding]::UTF8)) { $q.Enqueue($line) }
-    $script:AnswerQueue = $q
-}
-function NextAnswer($question, [switch]$Secret) {
-    if (-not $script:AnswerQueue -or $script:AnswerQueue.Count -eq 0) { Die (T 'no answer left for the question: {1}' $question) }
-    $a = [string]$script:AnswerQueue.Dequeue()
-    Write-Host ('  ' + $(if ($Secret) { '*' * $a.Length } else { $a }))
-    $a
-}
 
 # Messages in other languages: i18n\<lang>.tsv, shared with install.sh (tools/i18n.sh) - one "English<TAB>
 # translation" line per message, {1}.. for the arguments; a message without a line there stays in English. The
@@ -145,19 +122,9 @@ function SelfUpdate {
             return $false
         }
         $src = (Get-ChildItem "$tmp\x" -Directory | Select-Object -First 1).FullName
-        # Files listed in .mu300-keep stay as they are: without this the published copy would replace the
-        # fixed scripts of this copy on the very next run, and the install would fail in the same place
-        # again. The git branch above does the same by refusing to touch a copy with local changes.
-        $keep = @()
-        $keepFile = Join-Path $Top '.mu300-keep'
-        if (Test-Path $keepFile) {
-            $keep = @([IO.File]::ReadAllLines($keepFile, [Text.Encoding]::UTF8) |
-                ForEach-Object { $_.Trim().Replace('\', '/') } | Where-Object { $_ -and -not $_.StartsWith('#') })
-        }
-        $n = 0; $kept = 0
+        $n = 0
         foreach ($f in Get-ChildItem $src -Recurse -File) {
             $rel = $f.FullName.Substring($src.Length + 1)
-            if ($keep -contains $rel.Replace('\', '/')) { $kept++; continue }
             $dst = Join-Path $Top $rel
             if ((Test-Path $dst) -and (Get-FileHash $dst).Hash -eq (Get-FileHash $f.FullName).Hash) { continue }
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
@@ -166,7 +133,6 @@ function SelfUpdate {
         }
         Set-Content -Path $stamp -Value $remote -Encoding Ascii
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-        if ($kept -gt 0) { Write-Host ('  ' + (T 'this copy has changes of its own, so {1} files were left as they are' $kept)) }
         if ($n -eq 0) { return $false }
         Write-Host ('  ' + (T '{1} files updated' $n))
     }
@@ -182,34 +148,10 @@ function Die($m) { Write-Host ("`n" + (T 'ERROR:') + " $m") -ForegroundColor Red
 # it runs, names are case-insensitive, and with it called $Cmd, SuDo's { adb shell "su -c '$cmd'" } ran
 # `su -c '<the text of the block>'` - so "su does not work on the device" on every Windows machine (issue #4).
 function Quiet([scriptblock]$QuietBlock_) { $ErrorActionPreference = 'Continue'; & $QuietBlock_ 2>$null }
-# With more than one adb device attached (a phone, an emulator, a device over the network) every plain adb command
-# fails with "more than one device/emulator", which read as "no adb device". Pick the F50 and point adb at it with
-# ANDROID_SERIAL: the only device, else the only one that says it is an F50/MU300, else ask (-Quiet never asks).
-function SelectDevice([switch]$Quiet) {
-    if ($env:ANDROID_SERIAL) { return }
-    $all = @((Quiet { adb devices -l }) | Where-Object { $_ -match '^\S+\s+device\b' })
-    if ($all.Count -eq 0) { return }
-    if ($all.Count -eq 1) { $env:ANDROID_SERIAL = ($all[0] -split '\s+')[0]; return }
-    $f50 = @($all | Where-Object { $_ -match 'model:F50|product:MU300|device:MU300' })
-    if ($f50.Count -eq 1) {
-        $env:ANDROID_SERIAL = ($f50[0] -split '\s+')[0]
-        Write-Host ('  ' + (T 'more than one adb device: using {1} (F50/MU300)' $env:ANDROID_SERIAL))
-        return
-    }
-    if ($Quiet) { return }
-    Write-Host ('  ' + (T 'more than one adb device - which one is the F50?'))
-    for ($i = 0; $i -lt $all.Count; $i++) {
-        $model = if ($all[$i] -match 'model:(\S+)') { $Matches[1] } else { '' }
-        Write-Host ('    {0}) {1} {2}' -f ($i + 1), ($all[$i] -split '\s+')[0], $model)
-    }
-    $n = 0
-    if (-not [int]::TryParse((Ask (T 'Device') '1'), [ref]$n) -or $n -lt 1 -or $n -gt $all.Count) { Die (T 'invalid choice') }
-    $env:ANDROID_SERIAL = ($all[$n - 1] -split '\s+')[0]
-}
 # [string]: with no device adb prints nothing, and `-notmatch` on that empty result is falsy, not true
-function AdbState { SelectDevice -Quiet; [string](Quiet { adb get-state }) }
+function AdbState { [string](Quiet { adb get-state }) }
 function Ask($question, $default) {
-    $a = if ($script:AnswerQueue) { NextAnswer $question } else { Read-Host "$question [$(T $default)]" }
+    $a = Read-Host "$question [$(T $default)]"
     if ([string]::IsNullOrWhiteSpace($a)) { return $default } else { return (NormalizeAnswer $a.Trim()) }
 }
 # adb shell with root; stdin is never forwarded so prompts of this script are not eaten
@@ -288,7 +230,6 @@ if (-not $Check) {
     if ($LASTEXITCODE -ne 0) { Die (T 'the lz4 Python module is required to build the boot image: pip install lz4') }
 }
 Quiet { adb start-server } | Out-Null
-SelectDevice
 if ((AdbState) -notmatch 'device') {
     # the device may be running MU300 Linux right now: then only SSH on the USB network answers
     $linux = Test-NetConnection -ComputerName $MU300_IP -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue
@@ -387,7 +328,7 @@ if ($Check) {
 if ($dirty -gt 0 -and (Ask (T 'Type overwrite to use this region anyway') 'no') -ne 'overwrite') { Die (T 'cancelled') }
 
 Say (T 'What should be installed?')
-Write-Host ('  ' + (T '1) Ubuntu LTS: 24.04 or 26.04, asked next (full distribution, apt, ~500 MiB RAM in use)'))
+Write-Host ('  ' + (T '1) Ubuntu 24.04 LTS (full distribution, apt, ~500 MiB RAM in use)'))
 Write-Host ('  ' + (T '2) OpenWrt {1} (router, LuCI web UI, ~140 MiB RAM in use)' '25.12.5'))
 Write-Host ('  ' + (T '3) both (switch later with: mu300-os ubuntu|openwrt)'))
 if ($SIZE -lt $NEED_BOTH) {
@@ -481,15 +422,10 @@ if ($existing -eq 'no') {
     }
     if ($FORMAT -eq 0 -and $OSES -contains 'ubuntu') { $WIPE_LEGACY = 1 }
 }
-if ($script:AnswerQueue) {
-    $p1 = NextAnswer (T 'Password for the "ubuntu" user (Ubuntu) and "root" (OpenWrt)') -Secret
-    $p2 = NextAnswer (T 'Repeat') -Secret
-} else {
-    $pw1 = Read-Host -AsSecureString (T 'Password for the "ubuntu" user (Ubuntu) and "root" (OpenWrt)')
-    $pw2 = Read-Host -AsSecureString (T 'Repeat')
-    $p1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw1))
-    $p2 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw2))
-}
+$pw1 = Read-Host -AsSecureString (T 'Password for the "ubuntu" user (Ubuntu) and "root" (OpenWrt)')
+$pw2 = Read-Host -AsSecureString (T 'Repeat')
+$p1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw1))
+$p2 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw2))
 if ($p1 -ne $p2 -or $p1.Length -lt 6) { Die (T 'passwords differ or are shorter than 6 characters') }
 
 New-Item -ItemType Directory -Force -Path "$Work\dumps", "$Work\firmware" | Out-Null
@@ -497,23 +433,13 @@ Say (T 'Pulling device data into {1} (stays on this computer)' $Work)
 SuDoToFile 'cat /dev/block/by-name/boot_a' "$Work\dumps\boot_a.img"
 SuDoToFile 'dd if=/dev/block/by-name/misc bs=4096 count=1 2>/dev/null' "$Work\dumps\misc-head.bin"
 if ((Get-Item "$Work\dumps\boot_a.img").Length -lt 1MB) { Die (T 'pulling boot_a failed') }
-# extract_subset.py builds the tree beside its place and renames it only when it is complete, so a
-# directory that is there holds the whole subset - and on Windows it also holds windows-source.tar.gz,
-# which is where the tools take the subset from there (see the header). An older run of the extractor
-# died on the property area's names and left a partial directory that the old check accepted as it was,
-# so both things it must have are tested instead of the directory alone.
-$subset = "$Work\android-subset"
-$haveSubset = (Test-Path "$subset\vendor\bin\modem_control") -and (Test-Path "$subset\linkerconfig\ld.config.txt")
-if ($haveSubset -and $env:OS -eq 'Windows_NT') { $haveSubset = Test-Path "$subset\windows-source.tar.gz" }
-if (-not $haveSubset) { Python "$Top\android-vendor\extract_subset.py" $subset }
+if (-not (Test-Path "$Work\android-subset")) { Python "$Top\android-vendor\extract_subset.py" "$Work\android-subset" }
 foreach ($f in 'wcnmodem.bin', 'gnssmodem.bin', 'wifi_board_config.ini', 'wifi_board_config_ab.ini', 'bt_configure_pskey.ini', 'bt_configure_rf.ini') {
     foreach ($d in '/odm/firmware', '/vendor/firmware', '/vendor/etc') {
         if ((SuDo "[ -f $d/$f ] && echo y") -eq 'y') { SuDoToFile "cat $d/$f" "$Work\firmware\$f"; break }
     }
 }
-if ($gpu -eq 'yes') {
-    # every run, not only the first: the script keeps what was already pulled and fills in the rest, and a
-    # run that was interrupted used to leave a half-full directory behind that the old guard trusted
+if ($gpu -eq 'yes' -and -not (Test-Path "$Work\android-gpu-subset")) {
     $env:MU300_CLOSURE_ROOT = "$Work\android-gpu-subset"
     Python "$Top\android-vendor\pull_closure.py" /vendor/lib64/libOpenCL.so /vendor/lib64/egl/libGLES_mali.so /vendor/lib64/hw/vulkan.ums9620.so
 }

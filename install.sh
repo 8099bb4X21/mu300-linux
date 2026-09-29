@@ -334,7 +334,7 @@ fi
 
 # ---------------------------------------------------------------- choices
 say "$(t 'What should be installed?')"
-echo "  $(t '1) Ubuntu LTS: 24.04 or 26.04, asked next (full distribution, apt, ~500 MiB RAM in use)')"
+echo "  $(t '1) Ubuntu 24.04 LTS (full distribution, apt, ~500 MiB RAM in use)')"
 echo "  $(t '2) OpenWrt {1} (router, LuCI web UI, ~140 MiB RAM in use)' "$OWRT_VER")"
 echo "  $(t '3) both (switch later with: mu300-os ubuntu|openwrt)')"
 [ $SIZE -lt $NEED_BOTH ] && echo "  $(t '(this device has {1}: {2})' "$(gib $SIZE)" "$([ $SIZE -ge $NEED_UBUNTU ] && t 'one system fits, not both' || t 'only OpenWrt fits')")"
@@ -434,10 +434,7 @@ su_do 'dd if=/dev/block/by-name/misc bs=4096 count=1 2>/dev/null > /data/local/t
 adb pull /data/local/tmp/mu300-pull.bin "$WORK/dumps/misc-head.bin" >/dev/null 2>&1
 su_do 'rm -f /data/local/tmp/mu300-pull.bin' >/dev/null
 [ -s "$WORK/dumps/misc-head.bin" ] || die "$(t 'could not read the misc header from the device')"
-# what a complete subset must hold, not only the directory: an interrupted run left a partial one behind that the
-# old check then accepted for good (the same guard as install.ps1, issue #6)
-[ -e "$WORK/android-subset/vendor/bin/modem_control" ] && [ -e "$WORK/android-subset/linkerconfig/ld.config.txt" ] ||
-    sh "$TOP/android-vendor/extract-subset.sh" "$WORK/android-subset"
+[ -d "$WORK/android-subset" ] || sh "$TOP/android-vendor/extract-subset.sh" "$WORK/android-subset"
 for f in wcnmodem.bin gnssmodem.bin wifi_board_config.ini wifi_board_config_ab.ini bt_configure_pskey.ini bt_configure_rf.ini; do
     for d in /odm/firmware /vendor/firmware /vendor/etc; do
         if [ "$(su_do "[ -f $d/$f ] && echo y")" = y ]; then dev_pull "$d/$f" "$WORK/firmware/$f"; break; fi
