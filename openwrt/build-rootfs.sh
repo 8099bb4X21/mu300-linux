@@ -64,10 +64,8 @@ docker run --rm --platform linux/arm64 \
   -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER //bin/sh -eu -c '
 mkdir -p /var/lock /var/run /tmp
 apk update >/dev/null
-# openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure;
-# i2c-tools, gpiod-tools: mu300-usb (the charger of the U30 Air) and mu300-nfc (its NFC tag)
-apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util \
-    i2c-tools gpiod-tools >/dev/null
+# openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure
+apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util >/dev/null
 # ujail drops CAP_PERFMON (38), which this 5.4 kernel does not know: jailed services (dnsmasq, ntpd) crash-loop
 apk del procd-ujail procd-seccomp >/dev/null 2>&1 || true
 # online firmware upgrades flash whole-disk armsr images: that would overwrite the eMMC, so remove them

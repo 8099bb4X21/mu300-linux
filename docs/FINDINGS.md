@@ -2082,30 +2082,3 @@ changes under a live connection.
 
 The PMIC's LED also carries the heat alarm (`thermal-guard`, now running on 5.4 too, where it only watches): one
 colour at a time, since the white outshines red and blue when they are mixed.
-
-### 33g. The U30 Air's NFC tag
-
-The device tree's `st,st21nfc` at `i2c@2260000` 0x08 is a leftover: nothing answers there. The tag is a Fudan FM11NT08
-dual-interface EEPROM at 0x57 on the same bus (I2C bus 2), which answers only while GPIO 190 (ZTE's
-`ntag-reset-gpio`, driven by its `fm11tag` module under 5.4) is low; GPIO 127 is its field-detect interrupt. The
-memory is NTAG-like: UID and lock bytes, the capability container `e1 10 6d 00` (872 bytes of NDEF), then the NDEF
-TLV from 0x10. ZTE's `Fm11ntagService` writes a WSC Wi-Fi record (WPA2-PSK, AES) with the hotspot's name and
-password; `mu300-nfc wifi` writes the same bytes (compared page by page against ZTE's: nothing to write).
-
-A phone got nothing from the tag at first, under Linux and under Android alike, although the field-detect interrupt
-counted every tap. ZTE's web interface had NFC off (`settings global webserver_nfc_switch_status=0`, the factory
-state of this unit); switching it on there once made the tag answer phones from then on, under Linux too, so the
-switch is kept in the chip, presumably in its configuration block at 0x3b0 (which also holds the I2C address).
-The data area was unchanged by it: reading all 1 KiB with the switch on and off, the only difference is bit 5 of
-byte 0x3bf (0x20 set: off), in the configuration block at 0x3b0 that also holds the I2C address (0x57 at 0x3b3).
-`mu300-nfc on|off` changes that bit alone. With it on, URLs and text written by `mu300-nfc` reached a phone; a
-Wi-Fi record joins Android phones, while iOS reads URL records by itself but does nothing with a WSC record.
-
-### 33h. A trial guard that outlived its experiment, again
-
-The U30 Air restarted about every ten minutes after coming back from Android (`su -c mu300-linux`). init said
-`stage=trial-guard 600s`: the device segment of boot_b still held the guard of an old `--trial-guard 600`
-experiment, and `mu300-update` keeps that segment. 33e made init honour a guard only in a trial boot, but a boot
-from Android with mu300-linux is exactly that. The generic ramdisk segment, which every update appends behind the
-device segment, now carries an empty `etc/mu300-trial-guard` (a later file replaces an earlier one), and an
-experiment's guard goes into a segment of its own behind the generic one.
