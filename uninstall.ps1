@@ -13,15 +13,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $T = '/data/local/tmp'
-# the USB network of each kind of device: F50 192.168.77.1, U30 Air 192.168.78.1; $MU300_IP is set to the one
-# that answers
 $MU300_IP = '192.168.77.1'
-function LinuxRunning {
-    foreach ($ip in @('192.168.77.1', '192.168.78.1')) {
-        if (Test-NetConnection -ComputerName $ip -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue) { $script:MU300_IP = $ip; return $true }
-    }
-    return $false
-}
 # cmd.exe runs a program from the current directory, PowerShell does not: with adb.exe next to the project (or
 # in the directory the installer is started from) but not on PATH, `adb devices` worked in cmd and the installer
 # said "adb not found". Look where people usually put platform-tools, and put the one found on PATH.
@@ -105,7 +97,7 @@ FindAdb
 if (-not (Get-Command adb -ErrorAction SilentlyContinue)) { Die 'adb not found' }
 SelectDevice
 if ((AdbState) -notmatch 'device') {
-    $linux = LinuxRunning
+    $linux = Test-NetConnection -ComputerName $MU300_IP -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue
     if (-not $linux) { Die 'no adb device (boot Android, enable USB debugging)' }
     Say 'The device is running MU300 Linux, not Android'
     Write-Host '  Uninstalling happens from Android (slot a), so the device has to reboot first.'

@@ -35,15 +35,7 @@ $T = '/data/local/tmp'
 # $PSScriptRoot can be empty in Windows PowerShell 5.1 (param defaults, `powershell -File` from cmd.exe)
 $Top = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $Work) { $Work = Join-Path $Top 'work' }
-# the USB network of each kind of device: F50 192.168.77.1, U30 Air 192.168.78.1; $MU300_IP is set to the one
-# that answers
 $MU300_IP = '192.168.77.1'
-function LinuxRunning {
-    foreach ($ip in @('192.168.77.1', '192.168.78.1')) {
-        if (Test-NetConnection -ComputerName $ip -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue) { $script:MU300_IP = $ip; return $true }
-    }
-    return $false
-}
 
 # A console is not always available: a script driving the installer, a CI run, or a terminal that cannot answer
 # the password prompt (Read-Host -AsSecureString refuses a redirected stdin and blocks instead). -Answers <file>
@@ -356,7 +348,7 @@ Quiet { adb start-server } | Out-Null
 SelectDevice
 if ((AdbState) -notmatch 'device') {
     # the device may be running MU300 Linux right now: then only SSH on the USB network answers
-    $linux = LinuxRunning
+    $linux = Test-NetConnection -ComputerName $MU300_IP -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue
     if (-not $linux) { Die (T 'no adb device (boot Android, enable USB debugging)') }
     Say (T 'The device is running MU300 Linux, not Android')
     Write-Host ('  ' + (T 'Installing and uninstalling happen from Android (slot a), so the device has to reboot first.'))
@@ -736,8 +728,7 @@ if ((SuDo 'magisk -v')) {
 }
 
 Say (T 'Done. Rebooting into {1}' $BOOT_OS)
-$ip = if ($DEVICE -eq 'u30air') { '192.168.78.1' } else { '192.168.77.1' }
-Write-Host ('  ' + (T 'USB network: {1}   SSH: {2}' $ip $(if ($BOOT_OS -eq 'ubuntu') { "ubuntu@$ip" } else { "root@$ip, LuCI http://$ip" })))
+Write-Host ('  ' + (T 'USB network: 192.168.77.1   SSH: {1}' $(if ($BOOT_OS -eq 'ubuntu') { 'ubuntu@192.168.77.1' } else { 'root@192.168.77.1, LuCI http://192.168.77.1' })))
 Write-Host ('  ' + (T 'switch systems: mu300-os ubuntu|openwrt   back to Android: mu300-next-boot android'))
 Write-Host ('  ' + (T 'back to Linux from Android (with Magisk): su -c mu300-linux'))
 & adb reboot | Out-Null

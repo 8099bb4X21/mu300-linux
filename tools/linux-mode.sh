@@ -3,17 +3,12 @@
 # Uses: say(), die(), ask(), and t() from tools/i18n.sh (loaded here when the caller has not)
 command -v t >/dev/null 2>&1 || . "$TOP/tools/i18n.sh"
 
-# the USB network of each kind of device: F50 192.168.77.1, U30 Air 192.168.78.1 (MU300_IP: another address)
-MU300_IPS=${MU300_IP:-192.168.77.1 192.168.78.1}
+MU300_IP=${MU300_IP:-192.168.77.1}
 
-# true when something answers on the Linux SSH port of the USB network; MU300_IP is then that device, and only it
-# is watched from here on (another device may still be running Linux next to it)
+# true when something answers on the Linux SSH port of the USB network
 linux_mode_running() {
     command -v nc >/dev/null || return 1
-    for _lm_ip in $MU300_IPS; do
-        nc -z -G 3 -w 3 "$_lm_ip" 22 >/dev/null 2>&1 && { MU300_IP=$_lm_ip; MU300_IPS=$_lm_ip; return 0; }
-    done
-    return 1
+    nc -z -G 3 -w 3 "$MU300_IP" 22 >/dev/null 2>&1
 }
 
 # ask the running Linux to boot Android next and reboot; then wait for adb

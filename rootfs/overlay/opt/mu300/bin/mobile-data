@@ -13,8 +13,10 @@ IFACE=sipa_eth$((CID - 1))
 # "write error: Invalid argument"), and under `set -e` that killed up() one line before it could report the
 # connection it had just established - so the call was live while the caller saw a failure. Cosmetic writes
 # must never decide that.
-# led on|off|error: see mu300-led (which LED that is depends on the device)
-led() { /opt/mu300/bin/mu300-led data "$1" 2>/dev/null || true; }
+led() {
+    [ -w /sys/class/leds/sc27xx:blue/brightness ] || return 0
+    echo "$1" > /sys/class/leds/sc27xx:blue/brightness 2>/dev/null || true
+}
 
 # radio.log：radio_on 的每一步决策都留一行，重启后可以逐行对账（V50 开机提速研究，docs/FINDINGS.md §43）。
 radio_say() { printf 't=%-9s %s\n' "$(cut -d' ' -f1 /proc/uptime)" "$*" >>/etc/mu300/radio.log 2>/dev/null || true; }
@@ -613,7 +615,7 @@ watch() {
         fails=$((fails + 1))
         [ "$fails" -lt 2 ] && continue
         echo "mobile data lost (modem reset or detached), reconnecting" >&2
-        led off
+        led 0
         if [ "${MU300_NETIFD:-0}" = 1 ]; then
             ifup "${MU300_WAN:-wan}"   # OpenWrt: let netifd run the mu300cell protocol again
         else
