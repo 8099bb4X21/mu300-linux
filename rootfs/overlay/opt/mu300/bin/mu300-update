@@ -361,18 +361,6 @@ boot_update() {  # boot_update TAG   (MU300_KERNEL_BUNDLE=FILE uses a local mu30
         printf 'boot: release %s predates on-device boot updates; the boot image is unchanged\n' "$tag"
         rm -rf "$tmp"; return 0
     fi
-    # A bundle names the devices it runs on (./devices). One without that file is from before the U30 Air: its 5.4
-    # ramdisk does not load the U30 Air's modules and its mainline kernel does not bring up its USB (FINDINGS 33,
-    # 33c) - on a U30 Air either one boots to a device with no USB at all.
-    me=$(/opt/mu300/bin/mu300-device)
-    if [ "$me" != f50 ]; then
-        ok=
-        if grep -qx './devices' "$tmp/list"; then untar -xzf "$bundle" -C "$tmp" ./devices && grep -qw "$me" "$tmp/devices" && ok=1; fi
-        if [ -z "$ok" ]; then
-            printf 'boot: the kernel of %s does not support the %s; the boot image is unchanged\n' "$tag" "$me" >&2
-            rm -rf "$tmp"; return 1
-        fi
-    fi
     untar -xzf "$bundle" -C "$tmp" ./Image ./ramdisk-generic.lz4 || { echo "boot: unpacking $bundle failed" >&2; return 1; }
     [ -s "$tmp/Image" ] && [ -s "$tmp/ramdisk-generic.lz4" ] || { echo "boot: no kernel in the bundle" >&2; return 1; }
     # A kernel the systems were not built with (the mainline bundle) brings its modules along: they go into every

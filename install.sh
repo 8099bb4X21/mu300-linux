@@ -509,8 +509,6 @@ if [ "$KERNEL" != 5.4 ]; then
     KMAIN=$REL/kernel-$KERNEL
     rm -rf "$KMAIN" && mkdir -p "$KMAIN" && tar -xzf "$REL/mu300-kernel-$KERNEL.tar.gz" -C "$KMAIN"
     [ -s "$KMAIN/Image" ] && [ -s "$KMAIN/ramdisk-generic.lz4" ] && [ -s "$KMAIN/kernel.release" ] || die "$(t '{1} is incomplete' "mu300-kernel-$KERNEL.tar.gz")"
-    # a bundle names the devices it runs on; older mainline kernels do not bring up the U30 Air's USB (FINDINGS 33c)
-    [ $DEVICE = f50 ] || grep -qw $DEVICE "$KMAIN/devices" 2>/dev/null || die "$(t 'release {1} does not support this device yet; use a newer one' "$RELEASE")"
 fi
 say "$(t 'Adding the vendor files from your device to the images')"
 for os in $OSES; do
@@ -532,10 +530,6 @@ docker run --rm mu300-ubuntu:24.04 cat /bin/busybox > "$WORK/busybox"; chmod +x 
 docker run --rm -v "$TOP/tools":/src:ro -v "$WORK/tools":/o mu300-kbuild sh -c '
   gcc -O2 -static -o /o/logdw/logdw /src/logdw/logdw.c &&
   gcc -O2 -static -o /o/bt-init/mu300-bt-init /src/bt-init/mu300-bt-init.c'
-# the VPN engines, as tools/make-release.sh puts them into the published images (without them mu300-vpn only
-# fails with "xray: not found")
-[ -s "$WORK/sing-box" ] || sh "$TOP/tools/fetch-sing-box.sh" "$WORK/sing-box"
-[ -s "$WORK/xray" ] && [ -s "$WORK/hev-socks5-tunnel" ] || sh "$TOP/tools/fetch-xray.sh" "$WORK"
 if [ -d "$WORK/android-gpu-subset" ]; then
     L=$(mktemp -d "$WORK/cllibs.XXXX")
     cp "$WORK/android-gpu-subset/vendor/lib64/libOpenCL.so" "$WORK/android-subset/apex/com.android.runtime/lib64/bionic/libc.so" \
@@ -557,8 +551,7 @@ case " $OSES " in *" ubuntu "*) reuse ubuntu || {
     # shellcheck disable=SC2086
     docker run --rm -v "$B":/w -v "$WORK/out/modules":/kmods:ro -v "$WORK/out":/kout:ro -v "$WORK/firmware":/firmware:ro \
       -v "$WORK/android-subset":/android-subset:ro -v "$WORK/tools/logdw/logdw":/logdw:ro \
-      -v "$WORK/tools/bt-init/mu300-bt-init":/bt-init:ro -v "$WORK/sing-box":/sing-box:ro -v "$WORK/xray":/xray:ro \
-      -v "$WORK/hev-socks5-tunnel":/hev-socks5-tunnel:ro $gpuargs mu300-ubuntu:24.04 bash /w/assemble.sh >/dev/null
+      -v "$WORK/tools/bt-init/mu300-bt-init":/bt-init:ro $gpuargs mu300-ubuntu:24.04 bash /w/assemble.sh >/dev/null
     mv "$B/mu300-ubuntu-24.04-rootfs.tar.gz" "$WORK/mu300-ubuntu.tar.gz"; rm -rf "$B"; } ;;
 esac
 case " $OSES " in *" openwrt "*) reuse openwrt || {

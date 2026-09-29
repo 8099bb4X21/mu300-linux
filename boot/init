@@ -122,13 +122,9 @@ log "stage=device $DEVICE order=$MODULE_ORDER"
 
 # The USB network. Its subnet goes with the kind of device, so that an F50 and a U30 Air on one computer do not
 # collide: F50 192.168.77.1, U30 Air 192.168.78.1 (the system's lan.conf overrides it after switch_root). The
-# gadget's MAC addresses and USB serial number go with the device's serial number: two devices on one computer
-# used to have the same ones, and macOS then gave the second one no network interface at all.
+# gadget's MAC addresses go with the serial number: two devices on one computer used to have the same ones.
 case $DEVICE in u30air) NET=192.168.78 ;; *) NET=192.168.77 ;; esac
-# (a mainline kernel forces its own command line: the bootloader's is still in the device tree)
-SERIALNO=$(cat /proc/cmdline /proc/device-tree/chosen/bootargs 2>/dev/null | tr '\0' ' ' |
-    sed -n 's/.*androidboot.serialno=\([^ ]*\).*/\1/p' | head -n1)
-h=$(echo "$SERIALNO" | md5sum)
+h=$(sed -n 's/.*androidboot.serialno=\([^ ]*\).*/\1/p' /proc/cmdline | md5sum)
 MAC=02:50:$(echo "$h" | cut -c1-2):$(echo "$h" | cut -c3-4):${NET##*.}
 
 load_vendor_modules() {
@@ -209,7 +205,7 @@ setup_usb_gadget() {
     echo 0xEF > "$g/bDeviceClass"
     echo 0x02 > "$g/bDeviceSubClass"
     echo 0x01 > "$g/bDeviceProtocol"
-    echo "MU300LINUX${SERIALNO:+-$SERIALNO}" > "$g/strings/0x409/serialnumber"
+    echo MU300LINUX > "$g/strings/0x409/serialnumber"
     echo Linux > "$g/strings/0x409/manufacturer"
     echo "MU300 Linux USB Ethernet" > "$g/strings/0x409/product"
     echo "Linux net (${netfuncs:-none}) + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
@@ -436,20 +432,6 @@ if [ $root_mounted = 1 ] && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
     kill $(jobs -p) 2>/dev/null
     killall udhcpd 2>/dev/null
     for p in /proc/[0-9]*; do [ "${p#/proc/}" = 1 ] || kill -9 "${p#/proc/}" 2>/dev/null; done
-    # Trial guard, only in images built with --trial-guard SECONDS (tools/flash-trial.sh experiments, never an
-    # install): the timer above ends here, and a trial kernel that boots but never brings up USB (6.18 on the U30
-    # Air) left a device that only failing five boots by hand brought back. So one more timer outlives
-    # switch_root: unless /run/stay exists by then (created over SSH), it reboots - into Android, as slot a is
-    # already restored. switch_root deletes this ramdisk, so it runs from a copy of busybox in /run, reached
-    # through its working directory once /run has moved.
-    if [ -s /etc/mu300-trial-guard ]; then
-        g=$(cat /etc/mu300-trial-guard)
-        # (named busybox: busybox takes the applet from its own name when that is not "busybox")
-        mkdir -p /run/.trial-guard && cp /bin/busybox /run/.trial-guard/busybox
-        log "stage=trial-guard ${g}s"
-        (cd /run && exec .trial-guard/busybox sh -c ".trial-guard/busybox sleep $g; [ -e stay ] && exit 0; .trial-guard/busybox sync; .trial-guard/busybox reboot -f") \
-            </dev/null >/dev/null 2>&1 &
-    fi
     umount /config 2>/dev/null
     mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run
     mount --move /dev /newroot/dev
