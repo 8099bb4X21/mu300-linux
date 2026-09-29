@@ -55,40 +55,24 @@ select_device() {  # select_device [quiet]: quiet never asks, it only picks what
     [ -n "${ANDROID_SERIAL:-}" ] && return 0
     _sd_all=$(adb devices -l 2>/dev/null | awk 'NR > 1 && $2 == "device"')
     [ -n "$_sd_all" ] || return 0
+    [ "$(printf '%s\n' "$_sd_all" | wc -l | tr -d ' ')" = 1 ] && { export ANDROID_SERIAL=$(printf '%s\n' "$_sd_all" | awk '{print $1}'); return 0; }
     _sd_f50=$(printf '%s\n' "$_sd_all" | grep -E 'model:F50|product:MU300|device:MU300|device:U30Air' | awk '{print $1}')
-    _sd_one=
-    [ -n "$_sd_f50" ] && [ "$(printf '%s\n' "$_sd_f50" | wc -l | tr -d ' ')" = 1 ] && _sd_one=$_sd_f50
-    # the only adb device, and an F50/U30 Air: nothing to ask
-    if [ -n "$_sd_one" ] && [ "$(printf '%s\n' "$_sd_all" | wc -l | tr -d ' ')" = 1 ]; then
-        export ANDROID_SERIAL=$_sd_one; return 0
+    if [ -n "$_sd_f50" ] && [ "$(printf '%s\n' "$_sd_f50" | wc -l | tr -d ' ')" = 1 ]; then
+        export ANDROID_SERIAL=$_sd_f50
+        echo "  $(t 'more than one adb device: using {1} ({2})' "$ANDROID_SERIAL" "$(printf '%s\n' "$_sd_all" | grep "^$ANDROID_SERIAL " | sed -n 's/.*model:\([^ ]*\).*/\1/p')")"
+        return 0
     fi
-    # quiet (waiting for the device to come back as Android): only the one F50/U30 Air, never a question
-    if [ "${1:-}" = quiet ]; then
-        [ -n "$_sd_one" ] && { export ANDROID_SERIAL=$_sd_one; return 0; }
-        return 1
-    fi
-    # Otherwise always ask: a phone or tablet next to the device is what the installer must never write to, and
-    # picking one by itself is how it got close (the F50 was in Linux, a tablet was the only one in Android)
-    echo "  $(t 'which adb device is the F50 or U30 Air?')"
+    [ "${1:-}" = quiet ] && return 1
+    echo "  $(t 'more than one adb device - which one is the F50 or U30 Air?')"
     printf '%s\n' "$_sd_all" | awk '{ m = ""; for (i = 3; i <= NF; i++) if ($i ~ /^model:/) m = substr($i, 7); printf "    %d) %s %s\n", NR, $1, m }'
-    _sd_def=1
-    [ -n "$_sd_one" ] && _sd_def=$(printf '%s\n' "$_sd_all" | awk -v s="$_sd_one" '$1 == s {print NR}')
-    ask _sd_n "$(t 'Device')" "$_sd_def"
+    ask _sd_n "$(t 'Device')" 1
     _sd_s=$(printf '%s\n' "$_sd_all" | awk -v n="$_sd_n" 'NR == n {print $1}')
     [ -n "$_sd_s" ] || die "$(t 'invalid choice')"
     export ANDROID_SERIAL=$_sd_s
 }
 
 # call before anything else that needs adb
-# is one of the adb devices an F50/U30 Air?
-target_attached() { adb devices -l 2>/dev/null | awk 'NR > 1 && $2 == "device"' | grep -q -E 'model:F50|product:MU300|device:MU300|device:U30Air'; }
-
 require_android() {
-    # The device in Linux, and only a phone or tablet in Android: that is not the one to install to - offer to
-    # send the device back to Android first
-    if [ -z "${ANDROID_SERIAL:-}" ] && ! target_attached && linux_mode_running; then
-        linux_mode_to_android && return 0
-    fi
     select_device
     if [ "$(adb get-state 2>/dev/null)" = device ]; then
         # an Android that is still starting answers adb before su and storage are ready: pulls then failed

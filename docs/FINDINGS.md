@@ -2028,29 +2028,3 @@ its job - and the panic was in pstore.
 
 The charger (SGM41511, `ti,bq2560x_chg` on I2C) still has no driver under mainline: it charges on its power-on
 defaults and reports nothing; I2C is not even enabled there. Under 5.4 the vendor SQC stack drives it.
-
-### 33e. USB host on the U30 Air, and a trial guard that outlived its trial
-
-Mainline had the gadget side of the dwc3 only: no host stack, no `/sys/bus/usb` at all. With dual-role dwc3, xHCI,
-mass storage, HID and the USB network/serial drivers it is a host as well, and it still starts as a gadget (the
-dwc3 node has `usb-role-switch` and no default mode: peripheral), so the USB network to a computer comes up as
-before. Two things the vendor stack does elsewhere:
-
-- The role. Under 5.4 the PMIC's Type-C block decides; it has no mainline driver, so the role is chosen from
-  userspace: dwc3 opens its role switch to it in 7.2, patch `6.18/0007` does it on UMS9620 in 6.18 (a patch 7.2
-  does not need goes into `patches/<version>/`). dwc3 tells the PHY about the role through `otg_set_vbus()`, which
-  the PHY did not provide: it has an otg structure now (host eye pattern, A-type ID, D+/D- pull-downs).
-- The 5 V. `vbus-supply` is the charger's `otg-vbus` regulator, and the charger (SGM41511, part 0010 in REG0B, on
-  the I2C controller at 22a0000) has no driver under mainline. `mu300-usb` sets its OTG_CONFIG bit (REG01 bit 5)
-  and turns its watchdog off (REG05 5:4), which would otherwise return it to its defaults 40 s after the write,
-  boost included. It refuses host mode while REG08 reports power good (a computer or charger on VBUS), and turns
-  the boost off at boot: the chip runs on the battery and keeps its registers across a reboot.
-
-A Logitech receiver (HID) and a flash drive (FAT, mounted and read) worked through a USB-C adapter under 6.18 and
-7.2. The drive read at ~3 MB/s with or without the PHY's host settings; it is an old stick, not yet compared
-elsewhere. HDMI through the same adapter needs DisplayPort alternate mode over USB-C, which this project has on
-neither kernel.
-
-Two restarts during these tests, both about 600 s after boot, were not the USB: `mu300-update` keeps the device
-segment of whatever image is in boot_b, and boot_b held a `--trial-guard 600` experiment - so every boot restarted
-after ten minutes. init now honours a guard only in a trial boot (Linux not the default), and says so.

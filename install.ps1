@@ -214,24 +214,22 @@ function SelectDevice([switch]$Quiet) {
     if ($env:ANDROID_SERIAL) { return }
     $all = @((Quiet { adb devices -l }) | Where-Object { $_ -match '^\S+\s+device\b' })
     if ($all.Count -eq 0) { return }
+    if ($all.Count -eq 1) { $env:ANDROID_SERIAL = ($all[0] -split '\s+')[0]; return }
     $f50 = @($all | Where-Object { $_ -match 'model:F50|product:MU300|device:MU300|device:U30Air' })
-    # the only adb device, and an F50/U30 Air: nothing to ask
-    if ($all.Count -eq 1 -and $f50.Count -eq 1) { $env:ANDROID_SERIAL = ($all[0] -split '\s+')[0]; return }
-    # -Quiet (waiting for the device to come back as Android): only the one F50/U30 Air, never a question.
-    # Otherwise always ask: a phone or tablet next to it is what the installer must never write to.
-    if ($Quiet) {
-        if ($f50.Count -eq 1) { $env:ANDROID_SERIAL = ($f50[0] -split '\s+')[0] }
+    if ($f50.Count -eq 1) {
+        $env:ANDROID_SERIAL = ($f50[0] -split '\s+')[0]
+        $m = if ($f50[0] -match 'model:(\S+)') { $Matches[1] } else { '' }
+        Write-Host ('  ' + (T 'more than one adb device: using {1} ({2})' $env:ANDROID_SERIAL $m))
         return
     }
-    Write-Host ('  ' + (T 'which adb device is the F50 or U30 Air?'))
-    $def = 1
+    if ($Quiet) { return }
+    Write-Host ('  ' + (T 'more than one adb device - which one is the F50 or U30 Air?'))
     for ($i = 0; $i -lt $all.Count; $i++) {
         $model = if ($all[$i] -match 'model:(\S+)') { $Matches[1] } else { '' }
         Write-Host ('    {0}) {1} {2}' -f ($i + 1), ($all[$i] -split '\s+')[0], $model)
-        if ($f50.Count -eq 1 -and $all[$i] -eq $f50[0]) { $def = $i + 1 }
     }
     $n = 0
-    if (-not [int]::TryParse((Ask (T 'Device') "$def"), [ref]$n) -or $n -lt 1 -or $n -gt $all.Count) { Die (T 'invalid choice') }
+    if (-not [int]::TryParse((Ask (T 'Device') '1'), [ref]$n) -or $n -lt 1 -or $n -gt $all.Count) { Die (T 'invalid choice') }
     $env:ANDROID_SERIAL = ($all[$n - 1] -split '\s+')[0]
 }
 # [string]: with no device adb prints nothing, and `-notmatch` on that empty result is falsy, not true
@@ -355,14 +353,10 @@ if (-not $Check) {
     if ($LASTEXITCODE -ne 0) { Die (T 'the lz4 Python module is required to build the boot image: pip install lz4') }
 }
 Quiet { adb start-server } | Out-Null
-# The device in Linux, and only a phone or tablet in Android: that is not the one to install to - offer to send the
-# device back to Android first
-$target = @((Quiet { adb devices -l }) | Where-Object { $_ -match '^\S+\s+device\b' -and $_ -match 'model:F50|product:MU300|device:MU300|device:U30Air' })
-$linuxFirst = (-not $env:ANDROID_SERIAL) -and $target.Count -eq 0 -and (LinuxRunning)
-if (-not $linuxFirst) { SelectDevice }
-if ($linuxFirst -or (AdbState) -notmatch 'device') {
+SelectDevice
+if ((AdbState) -notmatch 'device') {
     # the device may be running MU300 Linux right now: then only SSH on the USB network answers
-    $linux = $linuxFirst -or (LinuxRunning)
+    $linux = LinuxRunning
     if (-not $linux) { Die (T 'no adb device (boot Android, enable USB debugging)') }
     Say (T 'The device is running MU300 Linux, not Android')
     Write-Host ('  ' + (T 'Installing and uninstalling happen from Android (slot a), so the device has to reboot first.'))
