@@ -16,8 +16,9 @@
 #   PWHASH             SHA-512 crypt hash for the "ubuntu" (Ubuntu) and "root" (OpenWrt) accounts
 #   IMPORT_HOTSPOT=0|1 copy Android's hotspot SSID/passphrase into each system
 set -e
-T=/data/local/tmp
-. $T/mu300-install.env
+T=${MU300_INSTALL_TMP:-/data/local/tmp}
+P=${MU300_PAYLOAD_DIR:-$T}
+. $P/mu300-install.env
 M=$T/mu300root
 say() { echo "[device] $*"; }
 
@@ -108,15 +109,17 @@ if [ "$IMPORT_HOTSPOT" = 1 ]; then
 fi
 
 for os in $OSES; do
-    tarball=$T/mu300-$os.tar.gz
+    tarball=$P/mu300-$os.tar.gz
     [ -f $tarball ] || { say "missing $tarball"; exit 1; }
     say "installing $os"
     rm -rf $M/$os.new && mkdir $M/$os.new
     tar -xzpf $tarball -C $M/$os.new
     # prebuilt images: firmware and Android userspace pulled from this device by install.sh (tools/vendor-overlay.py)
-    if [ -f $T/mu300-vendor-$os.tar.gz ]; then
-        tar -xzpf $T/mu300-vendor-$os.tar.gz -C $M/$os.new
-        rm -f $T/mu300-vendor-$os.tar.gz
+    if [ -f $P/mu300-vendor-$os.tar.gz ]; then
+        tar -xzpf $P/mu300-vendor-$os.tar.gz -C $M/$os.new
+        [ "${MU300_KEEP_PAYLOAD:-0}" = 1 ] || rm -f $P/mu300-vendor-$os.tar.gz
+    elif [ "${MU300_VENDOR_FROM_DEVICE:-0}" = 1 ]; then
+        sh "$P/mu300-vendor-from-device.sh" "$M/$os.new" "$os"
     fi
     # update: carry the settings and user data of the previous installation over to the new system
     if [ "${UPDATE:-0}" = 1 ] && [ -d $M/$os ]; then
@@ -181,12 +184,12 @@ for os in $OSES; do
             openwrt) sed -i "s|^root:[^:]*:|root:$PWHASH:|" $R/etc/shadow ;;
         esac
     fi
-    rm -f $tarball
+    [ "${MU300_KEEP_PAYLOAD:-0}" = 1 ] || rm -f $tarball
 done
 mkdir -p $M/.mu300
 echo "$BOOT_OS" > $M/.mu300/boot-os
 case ${BOOT_ATTEMPTS:-} in [1-6]) echo "$BOOT_ATTEMPTS" > $M/.mu300/boot-attempts ;; esac
 [ -n "$ssid" ] && say "hotspot: SSID $ssid imported (passphrase ${#psk} chars)"
 say "installed: $(ls -d $M/ubuntu $M/openwrt 2>/dev/null | sed "s|$M/||g" | tr '\n' ' ')boot-os=$BOOT_OS default-linux=$DEFAULT_LINUX"
-rm -f $T/mu300-install.env
+[ "${MU300_KEEP_PAYLOAD:-0}" = 1 ] || rm -f $P/mu300-install.env
 echo MU300-INSTALL-OK   # install.sh checks for this line (set -e stops before it on any failure)

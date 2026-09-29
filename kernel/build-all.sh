@@ -72,11 +72,22 @@ echo "==> collecting"
 rm -rf /work/out && mkdir -p /work/out/modules
 cp /src/out-linux/arch/arm64/boot/Image /src/out-linux/modules.builtin /src/out-linux/modules.builtin.modinfo /work/out/
 find /src/out-linux -name "*.ko" -exec cp {} /work/out/modules/ \;
-cp /src/ext-wlan_combo/sprd_wlan_combo.ko /src/ext-sprdbt/sprdbt_tty.ko /work/out/modules/
+# Keep the external modules explicit instead of relying only on the recursive
+# collection above.  This makes the output contract visible and lets the
+# checks below reject a partial kernel build.
+cp /src/out-linux/sprd_wlan_combo.ko /src/out-linux/mali_kbase.ko \
+   /src/ext-sprdbt/sprdbt_tty.ko /work/out/modules/
 llvm-strip --strip-debug /work/out/modules/*.ko
+for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
+    [ -s "/work/out/modules/$f" ] || { echo "required module was not collected: $f" >&2; exit 1; }
+done
 echo "$(ls /work/out/modules | wc -l) modules, $(strings /work/out/Image | grep -m1 "^Linux version 5" | cut -d" " -f1-3)"
 '
 mkdir -p "$OUT"
 rm -rf "$OUT/modules"
 cp -R "$W/out/." "$OUT/"
+for f in Image modules.builtin modules.builtin.modinfo \
+         modules/wcn_bsp.ko modules/sprd_wlan_combo.ko modules/sprdbt_tty.ko modules/mali_kbase.ko; do
+    [ -s "$OUT/$f" ] || { echo "incomplete kernel output: $OUT/$f" >&2; exit 1; }
+done
 echo "kernel outputs in $OUT"

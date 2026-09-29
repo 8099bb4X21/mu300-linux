@@ -13,7 +13,10 @@ KOUT=${MU300_KERNEL_OUT:-$TOP/out}
 REPO=${MU300_REPO:-dikeckaan/mu300-linux}
 D=$TOP/release/$TAG
 IN=$D/inputs
-[ -f "$KOUT/Image" ] && ls "$KOUT"/modules/*.ko >/dev/null 2>&1 || { echo "kernel outputs missing in $KOUT (kernel/build-all.sh)" >&2; exit 1; }
+for f in Image modules.builtin modules.builtin.modinfo modules/wcn_bsp.ko \
+         modules/sprd_wlan_combo.ko modules/sprdbt_tty.ko modules/mali_kbase.ko; do
+    [ -s "$KOUT/$f" ] || { echo "kernel output missing: $KOUT/$f (run kernel/build-all.sh)" >&2; exit 1; }
+done
 [ -z "$(git -C "$TOP" status --porcelain)" ] || { echo "commit your changes first: the release must match a commit" >&2; exit 1; }
 rm -rf "$D" && mkdir -p "$IN/out" "$IN/tools/logdw" "$IN/tools/bt-init" "$IN/tools/gpu"
 
@@ -50,7 +53,7 @@ docker run --rm -v "$B":/w -v "$IN/out/modules":/kmods:ro -v "$IN/out":/kout:ro 
 mv "$B/mu300-ubuntu-24.04-rootfs.tar.gz" "$D/mu300-ubuntu-rootfs.tar.gz"; rm -rf "$B"
 
 echo "==> OpenWrt root filesystem (generic)"
-MU300_INPUTS="$IN" MU300_VERSION="$TAG" sh "$TOP/openwrt/build-rootfs.sh" mu300-openwrt-release.tar.gz >/dev/null
+MU300_GENERIC=1 MU300_INPUTS="$IN" MU300_VERSION="$TAG" sh "$TOP/openwrt/build-rootfs.sh" mu300-openwrt-release.tar.gz >/dev/null
 mv "$TOP/openwrt/mu300-openwrt-release.tar.gz" "$D/mu300-openwrt-rootfs.tar.gz"
 
 echo "==> audit"
@@ -65,6 +68,26 @@ for a in mu300-kernel mu300-ubuntu-rootfs mu300-openwrt-rootfs; do
     if [ -n "$bad" ]; then echo "$a contains files that must not be published:"; echo "$bad" | head -20; fail=1; fi
     mid=$(tar -xzOf "$D/$a.tar.gz" ./etc/machine-id 2>/dev/null || true)
     [ -z "$mid" ] || { echo "$a has a machine-id"; fail=1; }
+done
+# Positive audit: privacy checks above cannot detect a rootfs that is simply
+# missing a feature.  Every public release must contain this runtime set.
+need_entry() {
+    archive=$1 entry=$2
+    tar -tzf "$archive" | sed 's|^\./||' | grep -Fx "$entry" >/dev/null || {
+        echo "$(basename "$archive") is missing $entry" >&2; fail=1
+    }
+}
+for f in Image busybox logdw modules/wcn_bsp.ko modules/sprd_wlan_combo.ko modules/sprdbt_tty.ko modules/mali_kbase.ko; do
+    need_entry "$D/mu300-kernel.tar.gz" "$f"
+done
+for f in opt/mu300/bin/busybox opt/mu300/bin/logdw opt/mu300/bin/mu300-bt-init \
+         opt/mu300/bin/sing-box opt/mu300/bin/xray opt/mu300/bin/hev-socks5-tunnel \
+         lib/modules/5.4.254-gb50db5b6224c/wcn_bsp.ko \
+         lib/modules/5.4.254-gb50db5b6224c/sprd_wlan_combo.ko \
+         lib/modules/5.4.254-gb50db5b6224c/sprdbt_tty.ko \
+         lib/modules/5.4.254-gb50db5b6224c/mali_kbase.ko \
+         etc/mu300/build-manifest.sha256; do
+    need_entry "$D/mu300-openwrt-rootfs.tar.gz" "$f"
 done
 [ $fail = 0 ] || { echo "audit failed, nothing published" >&2; exit 1; }
 rm -rf "$IN"

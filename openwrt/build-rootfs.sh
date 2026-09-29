@@ -2,7 +2,9 @@
 # Build the MU300 OpenWrt (or ImmortalWrt) rootfs tarball (runs on the host; needs Docker with arm64 support).
 #   openwrt/build-rootfs.sh OUT.tar.gz
 #   MU300_FLAVOUR=immortalwrt openwrt/build-rootfs.sh OUT.tar.gz
-# Inputs (same as rootfs/assemble.sh, all optional except modules):
+# Inputs (same as rootfs/assemble.sh). Public runtime inputs are mandatory;
+# proprietary device inputs are mandatory unless MU300_GENERIC=1 is used for a
+# publishable image that install.sh will combine with a per-device overlay:
 #   out/modules/*.ko  out/modules.builtin*  firmware/  android-subset/  android-gpu-subset/
 #   tools/logdw/logdw  tools/bt-init/mu300-bt-init  tools/gpu/cltest  busybox (static, full)
 #   xray, hev-socks5-tunnel (tools/fetch-xray.sh) and sing-box (tools/fetch-sing-box.sh), for mu300-vpn
@@ -10,7 +12,10 @@
 set -eu
 FLAVOUR=${MU300_FLAVOUR:-openwrt}
 case $FLAVOUR in
-    openwrt)     VER=${MU300_WRT_VER:-25.12.5}; BASEURL=https://downloads.openwrt.org/releases ;;
+    openwrt)     VER=${MU300_WRT_VER:-25.12.5}; BASEURL=https://downloads.openwrt.org/releases
+                 # Pin the base image used by the default build. Network retrieval of
+                 # sha256sums is still used for a version override.
+                 [ "$VER" != 25.12.5 ] || PINNED_SHA256=493336e176fdc1d6a377763e87a58c5854c24f51e83e586b209783e4bb648d42 ;;
     # ImmortalWrt is an OpenWrt fork: same package manager, same layout, more drivers and LuCI apps
     immortalwrt) VER=${MU300_WRT_VER:-25.12.2}; BASEURL=https://downloads.immortalwrt.org/releases ;;
     *) echo "unknown flavour '$FLAVOUR' (openwrt or immortalwrt)" >&2; exit 1 ;;
@@ -27,7 +32,9 @@ cd "$TOP"
 if [ ! -f "openwrt/$TARBALL" ]; then
     curl -fL -o "openwrt/$TARBALL" "$URL/$TARBALL"
 fi
-want=$(curl -fsL "$URL/sha256sums" | sed -n "s/^\([0-9a-f]*\) \*$TARBALL$/\1/p")
+want=${MU300_WRT_SHA256:-${PINNED_SHA256:-}}
+[ -n "$want" ] || want=$(curl -fsL "$URL/sha256sums" | sed -n "s/^\([0-9a-f]*\) \*$TARBALL$/\1/p")
+[ -n "$want" ] || { echo "could not obtain the expected checksum for $TARBALL" >&2; exit 1; }
 have=$(shasum -a 256 "openwrt/$TARBALL" 2>/dev/null || sha256sum "openwrt/$TARBALL")
 [ "${have%% *}" = "$want" ] || { echo "checksum mismatch for $TARBALL" >&2; exit 1; }
 docker import --platform linux/arm64 "openwrt/$TARBALL" mu300-$FLAVOUR-base:$VER >/dev/null
@@ -40,17 +47,37 @@ docker run --rm --platform linux/arm64 -v "$(W "$REGDB")":/o ubuntu:26.04 sh -c 
   "apt-get update -qq >/dev/null && apt-get install -y -qq wireless-regdb >/dev/null && cp /usr/lib/firmware/regulatory.db /usr/lib/firmware/regulatory.db.p7s /o/"
 
 opt() { [ -e "$IN/$1" ] && echo "-v $(W "$IN/$1"):/in/$2:ro" || true; }
+gpu_opt() { [ "${MU300_GPU:-auto}" = 0 ] || opt "$1" "$2"; }
 
-# The required input first, with a readable message: without it docker fails somewhere inside the build.
-ls "$IN/out/modules"/*.ko >/dev/null 2>&1 || {
-    echo "no kernel modules in $IN/out/modules - build them first (kernel/build-linux.sh), or point" >&2
-    echo "MU300_INPUTS at the directory that has out/modules, firmware/ and android-subset/." >&2
+# Validate a complete input set before rootfs assembly does any work.
+# A missing static busybox makes mu300-at fall back to one-second polling; a
+# missing WLAN module leaves a valid-looking image with no radio at all.
+missing=
+for o in out/modules/wcn_bsp.ko out/modules/sprd_wlan_combo.ko out/modules/sprdbt_tty.ko \
+         out/modules/mali_kbase.ko \
+         tools/logdw/logdw tools/bt-init/mu300-bt-init busybox \
+         sing-box xray hev-socks5-tunnel; do
+    [ -s "$IN/$o" ] || missing="$missing\n  $o"
+done
+if [ "${MU300_GENERIC:-0}" != 1 ]; then
+    for o in firmware/wcnmodem.bin firmware/gnssmodem.bin firmware/wifi_board_config.ini \
+             firmware/wifi_board_config_ab.ini firmware/bt_configure_pskey.ini firmware/bt_configure_rf.ini \
+             android-subset/vendor/bin/modem_control android-subset/apex/com.android.runtime/bin/linker64; do
+        [ -s "$IN/$o" ] || missing="$missing\n  $o"
+    done
+fi
+if [ "${MU300_GPU:-auto}" != 0 ] && { [ -d "$IN/android-gpu-subset" ] || [ -e "$IN/tools/gpu/cltest" ]; }; then
+    for o in out/modules/mali_kbase.ko tools/gpu/cltest android-gpu-subset/vendor/lib64/libOpenCL.so; do
+        [ -e "$IN/$o" ] || missing="$missing\n  $o"
+    done
+fi
+if [ -n "$missing" ]; then
+    printf 'refusing to build an incomplete OpenWrt image; missing:%b\n' "$missing" >&2
+    echo "set MU300_INPUTS to the complete staging directory; use MU300_GENERIC=1 only for release images" >&2
     exit 1
-}
-# The optional ones decide whether the image can use the modem, Wi-Fi, the GPU or the VPN at all. Missing ones
-# used to be skipped silently, which produces an image that boots and then does nothing useful.
-for o in firmware android-subset android-gpu-subset tools/logdw/logdw tools/bt-init/mu300-bt-init tools/gpu/cltest busybox sing-box xray hev-socks5-tunnel upstream/out/modules; do
-    [ -e "$IN/$o" ] && echo "  + $o" || echo "  - $o   (missing: the image is built without it)"
+fi
+for o in out/modules firmware android-subset android-gpu-subset tools/logdw/logdw tools/bt-init/mu300-bt-init tools/gpu/cltest busybox sing-box xray hev-socks5-tunnel upstream/out/modules; do
+    [ -e "$IN/$o" ] && echo "  + $o" || echo "  - $o"
 done
 # shellcheck disable=SC2046
 # Git Bash/MSYS converts -v paths and breaks Docker Desktop; use Windows-native paths
@@ -58,11 +85,14 @@ docker run --rm --platform linux/arm64 \
   -v "$(W "$TOP/rootfs/overlay/opt/mu300")":/in/opt-mu300:ro -v "$(W "$TOP/rootfs/overlay/etc/mu300/vpn.conf.example")":/in/vpn.conf.example:ro -v "$(W "$TOP/openwrt/overlay")":/in/overlay:ro \
   -v "$(W "$TOP/boot/module-order.txt")":/in/module-order.txt:ro -v "$(W "$IN/out/modules")":/in/modules:ro \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
-  $(opt firmware firmware) $(opt android-subset android-subset) $(opt android-gpu-subset android-gpu-subset) \
-  $(opt tools/logdw/logdw logdw) $(opt tools/bt-init/mu300-bt-init bt-init) $(opt tools/gpu/cltest cltest) \
+  $(opt firmware firmware) $(opt android-subset android-subset) $(gpu_opt android-gpu-subset android-gpu-subset) \
+  $(opt tools/logdw/logdw logdw) $(opt tools/bt-init/mu300-bt-init bt-init) $(gpu_opt tools/gpu/cltest cltest) \
   $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(opt upstream/out/modules mainline-modules) -v "$(W "$TOP/openwrt")":/out -v "$(W "$REGDB")":/in/regdb:ro \
   -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER //bin/sh -eu -c '
 mkdir -p /var/lock /var/run /tmp
+# This is the exact operation used by mu300-at.  Reject an incompatible
+# busybox now instead of turning every AT response into a one-second wait.
+/in/busybox sleep 0.01
 apk update >/dev/null
 # openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure
 apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util >/dev/null
@@ -109,7 +139,7 @@ for b in xray hev-socks5-tunnel; do [ -f /in/$b ] && { cp /in/$b $R/opt/mu300/bi
 if [ -e /in/busybox ]; then
     cp /in/busybox $R/opt/mu300/bin/busybox; chmod 755 $R/opt/mu300/bin/busybox
     mkdir -p $R/opt/mu300/busybox-bin
-    for a in od timeout losetup telnetd getty; do
+    for a in od timeout losetup telnetd getty sleep; do
         chroot $R /bin/sh -c "command -v $a" >/dev/null 2>&1 && continue
         ln -sf ../bin/busybox $R/opt/mu300/busybox-bin/$a
     done
@@ -152,6 +182,23 @@ rm -rf $R/lib/modules/6.* $R/boot
 if ls /in/mainline-modules/*.ko >/dev/null 2>&1; then
     mkdir -p $R/lib/modules/6.18.52 && cp /in/mainline-modules/*.ko $R/lib/modules/6.18.52/
 fi
+# Audit the assembled tree, not just the host inputs.  This catches a bad
+# mount, copy, rename or future refactor before a tarball can be published or
+# installed.
+for f in opt/mu300/bin/busybox opt/mu300/bin/logdw opt/mu300/bin/mu300-bt-init \
+         opt/mu300/bin/sing-box opt/mu300/bin/xray opt/mu300/bin/hev-socks5-tunnel \
+         lib/modules/$KREL/wcn_bsp.ko lib/modules/$KREL/sprd_wlan_combo.ko \
+         lib/modules/$KREL/sprdbt_tty.ko lib/modules/$KREL/mali_kbase.ko; do
+    [ -s "$R/$f" ] || { echo "assembled rootfs is missing $f" >&2; exit 1; }
+done
+# Leave a machine-readable inventory in every image. It gives post-install
+# diagnostics a cheap way to distinguish a changed runtime file from a build
+# that never contained it.
+(
+    cd "$R"
+    find opt/mu300/bin lib/modules/$KREL www/luci-static/resources/mu300 \
+         www/luci-static/resources/view/mu300 -type f | sort | xargs sha256sum
+) > "$R/etc/mu300/build-manifest.sha256"
 cd $R && tar -czf /out/$OUT .
 ls -la /out/$OUT'
 rm -rf "$REGDB"

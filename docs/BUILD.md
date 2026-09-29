@@ -80,8 +80,8 @@ python3 boot/build-boot-image.py --stock-boot dumps/boot_a.img --misc-head dumps
 3. Assemble and deploy:
 ```sh
 cid=$(docker create mu300-ubuntu:24.04); docker export $cid > rootfs/base.tar; docker rm $cid
-tools/fetch-xray.sh       # optional: xray + hev-socks5-tunnel, mu300-vpn's default engine (pinned, sha256-checked)
-tools/fetch-sing-box.sh   # optional: the sing-box engine for mu300-vpn (pinned release, sha256-checked)
+tools/fetch-xray.sh       # xray + hev-socks5-tunnel, mu300-vpn's default engine (pinned, sha256-checked)
+tools/fetch-sing-box.sh   # sing-box engine for mu300-vpn (pinned release, sha256-checked)
 docker run --rm -v "$PWD/rootfs":/w -v "$PWD/out/modules":/kmods:ro -v "$PWD/out":/kout:ro \
   -v "$PWD/firmware":/firmware:ro -v "$PWD/android-subset":/android-subset:ro -v "$PWD/tools/logdw/logdw":/logdw:ro \
   -v "$PWD/tools/bt-init/mu300-bt-init":/bt-init:ro -v "$PWD/sing-box":/sing-box:ro -v "$PWD/xray":/xray:ro -v "$PWD/hev-socks5-tunnel":/hev-socks5-tunnel:ro mu300-ubuntu:24.04 bash /w/assemble.sh
@@ -89,6 +89,28 @@ docker run --rm -v "$PWD/rootfs":/w -v "$PWD/out/modules":/kmods:ro -v "$PWD/out
 Push `mu300-ubuntu-24.04-rootfs.tar.gz` to the device and extract it with `tools/android-mount-mu300root.sh`.
 `firmware/` holds `wcnmodem.bin`, `gnssmodem.bin` and `wifi_board_config*.ini` from the device's `/odm/firmware`, plus
 `bt_configure_pskey.ini` and `bt_configure_rf.ini` from `/vendor/etc`.
+
+The OpenWrt builder now refuses incomplete inputs before doing any package work and audits the assembled tree before
+creating the tarball. A normal device build requires the static BusyBox, `logdw`, `mu300-bt-init`, all three VPN
+engines, the WCN/WLAN/Bluetooth modules, modem firmware and the Android modem subset. `tools/make-release.sh` alone
+uses `MU300_GENERIC=1`, because published rootfs archives intentionally omit proprietary device files; `install.sh`
+adds a separately audited overlay pulled from the user's own device. Do not use `MU300_GENERIC=1` for a directly
+deployable local image.
+Each completed OpenWrt image also contains `/etc/mu300/build-manifest.sha256`, covering MU300 executables, kernel
+modules and LuCI assets so an installed system can be compared with the exact image contents later.
+
+For a self-contained TF-card installer that is flashed from Magisk while Android slot a is running:
+
+```sh
+MU300_INPUTS=work tools/build-openwrt-tf-magisk.sh mu300-linux-openwrt-tf.zip
+```
+
+The package formats the TF card as `mu300sd`, installs OpenWrt, imports the current device's proprietary vendor
+runtime, writes and verifies `boot_b`, then dynamically arms slot b. It deliberately refuses Android slot b because
+the current boot image's rollback block is defined as Linux-on-b / Android-on-a.
+
+The normal ADB installer has the same storage path: `./install.sh --tf` requires a usable TF card and refuses to
+fall back to the internal free-eMMC region. It can be combined with `--build` for a completely local build.
 
 ### 5. Boot Linux
 ```sh

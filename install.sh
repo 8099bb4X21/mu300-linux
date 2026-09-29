@@ -8,6 +8,7 @@
 # Android, so take a full backup with tools/backup-device.sh first.
 #   ./install.sh                 install Ubuntu, OpenWrt or both from the prebuilt release images
 #   ./install.sh --build         build kernel outputs/root filesystems locally instead (see README "Build and run")
+#   ./install.sh --tf            require the TF card for the rootfs (never fall back to internal storage)
 #
 # Prebuilt: needs adb, python3, lz4, curl. Downloads the images of the newest release (or $MU300_RELEASE) and checks
 # their sha256.
@@ -24,12 +25,13 @@ OWRT_VER=25.12.5
 RELEASE=${MU300_RELEASE:-}
 REPO=${MU300_REPO:-dikeckaan/mu300-linux}
 T=/data/local/tmp
-MODE=prebuilt; CHECK_ONLY=0
+MODE=prebuilt; CHECK_ONLY=0; FORCE_TF=0
 for a in "$@"; do
     case $a in
         --check) CHECK_ONLY=1 ;;
         --build) MODE=build ;;
         --prebuilt) MODE=prebuilt ;;
+        --tf) FORCE_TF=1 ;;
         -h|--help) sed -n '2,13s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *) echo "unknown option $a (see --help)" >&2; exit 2 ;;
     esac
@@ -257,7 +259,9 @@ if [ "$(su_do 'ls -d /sys/block/mmcblk1 2>/dev/null')" ]; then
     sd_size=$((sd_sect * 512))
     if [ $sd_size -ge $((700 * 1024 * 1024)) ]; then
         sd_default=no; [ $SIZE -lt $((700 * 1024 * 1024)) ] && sd_default=yes
-        ask sd "Put the Linux filesystem on the TF card ($sd_dev, $(gib $sd_size)) instead of the internal storage? (yes/no)" $sd_default
+        if [ $FORCE_TF = 1 ]; then sd=yes
+        else ask sd "Put the Linux filesystem on the TF card ($sd_dev, $(gib $sd_size)) instead of the internal storage? (yes/no)" $sd_default
+        fi
         if [ "$sd" = yes ]; then
             SD_MODE=1; SIZE=$sd_size
         fi
@@ -265,6 +269,7 @@ if [ "$(su_do 'ls -d /sys/block/mmcblk1 2>/dev/null')" ]; then
         echo "TF card present but too small ($(gib $sd_size)); ignoring it"
     fi
 fi
+[ $FORCE_TF = 0 ] || [ $SD_MODE = 1 ] || die "--tf was requested, but no usable TF card (at least 700 MiB) was found"
 # Smaller eMMC variants leave less room behind userdata, and how much is needed depends on the choice further
 # down - OpenWrt alone fits in a few hundred megabytes. So refuse only what cannot hold anything at all, and
 # check the real requirement once the systems are known. There is nowhere else to put this region on these
@@ -451,6 +456,9 @@ for f in $files; do
 done
 rm -rf "$REL/kernel" && mkdir -p "$REL/kernel" && tar -xzf "$REL/mu300-kernel.tar.gz" -C "$REL/kernel"
 KOUT=$REL/kernel
+for f in Image busybox logdw modules/wcn_bsp.ko modules/sprd_wlan_combo.ko modules/sprdbt_tty.ko modules/mali_kbase.ko; do
+    [ -s "$KOUT/$f" ] || die "release kernel bundle is incomplete: missing $f"
+done
 BUSYBOX=$KOUT/busybox; LOGDW=$KOUT/logdw
 say "Adding the vendor files from your device to the images"
 for os in $OSES; do
@@ -463,6 +471,9 @@ PWHASH=$([ -n "$pw1" ] && printf '%s\n' "$pw1" | python3 "$TOP/tools/sha512crypt
 else
 # ---------------------------------------------------------------- build
 say "Building helper binaries"
+for f in Image modules/wcn_bsp.ko modules/sprd_wlan_combo.ko modules/sprdbt_tty.ko modules/mali_kbase.ko; do
+    [ -s "$KOUT/$f" ] || die "local kernel output is incomplete: missing $KOUT/$f; run kernel/build-all.sh"
+done
 mkdir -p "$WORK/out" "$WORK/tools/logdw" "$WORK/tools/bt-init" "$WORK/tools/gpu"
 rm -rf "$WORK/out/modules" && cp -R "$KOUT/modules" "$WORK/out/modules"
 cp "$KOUT/modules.builtin" "$KOUT/modules.builtin.modinfo" "$WORK/out/" 2>/dev/null || true
@@ -471,6 +482,10 @@ docker run --rm mu300-ubuntu:24.04 cat /bin/busybox > "$WORK/busybox"; chmod +x 
 docker run --rm -v "$TOP/tools":/src:ro -v "$WORK/tools":/o mu300-kbuild sh -c '
   gcc -O2 -static -o /o/logdw/logdw /src/logdw/logdw.c &&
   gcc -O2 -static -o /o/bt-init/mu300-bt-init /src/bt-init/mu300-bt-init.c'
+# The OpenWrt VPN page is part of every full build, so its engines must be too.
+# Both fetchers are pinned and checksum-verified.
+sh "$TOP/tools/fetch-sing-box.sh" "$WORK/sing-box"
+sh "$TOP/tools/fetch-xray.sh" "$WORK"
 if [ -d "$WORK/android-gpu-subset" ]; then
     L=$(mktemp -d "$WORK/cllibs.XXXX")
     cp "$WORK/android-gpu-subset/vendor/lib64/libOpenCL.so" "$WORK/android-subset/apex/com.android.runtime/lib64/bionic/libc.so" \
