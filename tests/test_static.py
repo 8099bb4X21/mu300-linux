@@ -8,6 +8,7 @@ import unittest
 from helpers import BIN, TOP, shells
 
 OPENWRT = TOP / 'openwrt' / 'overlay'
+LUCI_MU300 = TOP / 'openwrt' / 'luci-app-mu300'
 
 
 def shebang(p):
@@ -26,6 +27,7 @@ def shell_scripts():
         TOP / 'kernel' / 'build-all.sh', TOP / 'tools' / 'i18n.sh', TOP / 'tools' / 'self-update.sh',
         TOP / 'tools' / 'linux-mode.sh', TOP / 'android-vendor' / 'ueventd-perms.sh']
     cands += [p for p in OPENWRT.rglob('*') if p.is_file()]
+    cands += [p for p in (LUCI_MU300 / 'root').rglob('*') if p.is_file()]
     out = []
     for p in sorted(set(cands)):
         if not p.is_file():
@@ -59,6 +61,30 @@ class Syntax(unittest.TestCase):
 
 
 class Rules(unittest.TestCase):
+    def test_luci_mu300_is_one_package(self):
+        # The web UI used to be scattered through the base OpenWrt overlay.
+        # Keep one package as the canonical owner so built-in and installable
+        # copies cannot drift apart.
+        required = (
+            'Makefile',
+            'root/usr/libexec/rpcd/mu300dash',
+            'root/usr/share/luci/menu.d/luci-app-mu300.json',
+            'root/usr/share/rpcd/acl.d/luci-app-mu300.json',
+            'root/opt/mu300/bin/mu300-dash-info',
+            'root/opt/mu300/bin/mu300-dash-cell',
+            'htdocs/luci-static/resources/mu300/common.js',
+            'htdocs/luci-static/resources/view/mu300/home.js',
+            'htdocs/luci-static/resources/view/mu300/at.js',
+            'htdocs/luci-static/resources/view/mu300/sms.js',
+            'htdocs/luci-static/resources/view/mu300/locks.js',
+        )
+        for rel in required:
+            with self.subTest(path=rel):
+                self.assertTrue((LUCI_MU300 / rel).is_file())
+        self.assertFalse((OPENWRT / 'usr/libexec/rpcd/mu300dash').exists())
+        legacy_views = OPENWRT / 'www/luci-static/resources/view/mu300'
+        self.assertFalse(any(p.is_file() for p in legacy_views.rglob('*')))
+
     def test_powershell_device_commands_have_no_double_quotes(self):
         # Windows PowerShell 5.1 drops the double quotes inside an argument to a native program: `tr -d "\000"`
         # reached the device as tr -d \000 ("delete the character 0"), and every empty region was "not empty".
@@ -102,8 +128,9 @@ class Rules(unittest.TestCase):
     def test_init_finds_partitions_after_the_modules(self):
         # the eMMC driver is one of the vendor modules: misc and boot_b cannot be found before they are loaded
         init = (TOP / 'boot' / 'init').read_text()
-        calls = [l.strip() for l in init.splitlines() if l.strip() in ('load_vendor_modules', 'find_partitions')]
-        self.assertEqual(calls, ['load_vendor_modules', 'find_partitions'])
+        calls = [l.strip() for l in init.splitlines()
+                 if l.strip() in ('load_vendor_modules', 'find_misc_and_bootb')]
+        self.assertEqual(calls, ['load_vendor_modules', 'find_misc_and_bootb'])
 
     def test_every_device_has_its_files(self):
         # a device the installers know needs its module order; its modules come from kernel/build-<device>.sh

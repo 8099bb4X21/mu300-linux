@@ -1,5 +1,5 @@
 #!/bin/sh
-# mu300dash -- the rpcd backend of the LuCI dashboard (luci-app-mu300dash).
+# mu300dash -- the compatibility RPC object of luci-app-mu300.
 #
 # Called by LuCI as:  ubus call mu300dash <method> '{...}'
 #   rpcd runs this script as:  mu300dash call <method>   with the params JSON on stdin,
@@ -321,7 +321,7 @@ do_list() {
 	"sms_list": { "page": "String" },
 	"sms_show": { "id": "String" },
 	"sms_send": { "num": "String", "text": "String" },
-	"sms_delete": { "id": "String" },
+	"sms_delete": { "id": "String", "sim": "String" },
 	"sms_sync": { }
 }
 EOF

@@ -1,7 +1,7 @@
 #!/bin/sh
 # mu300-dash-info -- the dashboard's system/network snapshot: ONE line of JSON on stdout.
 #
-# The LuCI home page (luci-app-mu300dash) polls this through the rpcd backend
+# The LuCI home page (luci-app-mu300) polls this through the rpcd backend
 # /usr/libexec/rpcd/mu300dash every few seconds. It reads only files and asks
 # ubus/uci/iw, so it never touches the modem's AT channel - the cell readings
 # live in mu300-dash-cell, which has its own cache and its own pace.

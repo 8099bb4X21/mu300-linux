@@ -83,6 +83,7 @@ done
 # Git Bash/MSYS converts -v paths and breaks Docker Desktop; use Windows-native paths
 docker run --rm --platform linux/arm64 \
   -v "$(W "$TOP/rootfs/overlay/opt/mu300")":/in/opt-mu300:ro -v "$(W "$TOP/rootfs/overlay/etc/mu300/vpn.conf.example")":/in/vpn.conf.example:ro -v "$(W "$TOP/openwrt/overlay")":/in/overlay:ro \
+  -v "$(W "$TOP/openwrt/luci-app-mu300")":/in/luci-app-mu300:ro \
   -v "$(W "$TOP/boot/module-order.txt")":/in/module-order.txt:ro -v "$(W "$IN/out/modules")":/in/modules:ro \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
   $(opt firmware firmware) $(opt android-subset android-subset) $(gpu_opt android-gpu-subset android-gpu-subset) \
@@ -118,6 +119,12 @@ printf "127.0.0.1\tlocalhost\n\n::1\tlocalhost ip6-localhost ip6-loopback\nff02:
 printf "mu300\n" > $R/etc/hostname   # the real one comes from uci (etc/uci-defaults/90-mu300)
 cp -a /in/opt-mu300 $R/opt/mu300
 cp -a /in/overlay/. $R/
+# Install the LuCI application through the same package-owned trees used by
+# OpenWrt package builds. No dashboard/AT/SMS web file lives in the base
+# overlay, so disabling or packaging the app cannot silently leave half of it.
+cp -a /in/luci-app-mu300/root/. $R/
+mkdir -p $R/www
+cp -a /in/luci-app-mu300/htdocs/. $R/www/
 mv $R/sbin/sysupgrade $R/sbin/sysupgrade.openwrt && mv $R/usr/libexec/mu300-sysupgrade $R/sbin/sysupgrade
 M=$R/lib/modules/$KREL; mkdir -p $M
 cp /in/modules/*.ko $M/          # ubox kmodloader expects the modules flat in /lib/modules/<release>/
@@ -152,7 +159,7 @@ mkdir -p $R/etc/mu300
 cp /in/vpn.conf.example $R/etc/mu300/vpn.conf.example
 printf "%s\n" "${MU300_VERSION:-dev}" > $R/etc/mu300/image-version
 # enable the services (rc.common "enable" needs ubus, which is not running in the build container)
-for s in mu300-vendor mu300-hw mu300-usb-ready mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-ndp mu300-smsd mu300-dash mu300-atwatch; do
+for s in mu300-vendor mu300-hw mu300-usb-ready mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-ndp mu300-smsd mu300-atwatch; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
@@ -171,8 +178,8 @@ for p in $R/etc/init.d/mu300-* $R/etc/hotplug.d/iface/10-mu300-usb \
          $R/sbin/sysupgrade $R/usr/libexec/rpcd/mu300dash; do
     chown 0:0 $p; chmod 0755 $p
 done
-for p in $R/usr/share/luci/menu.d/luci-app-mu300dash.json \
-         $R/usr/share/rpcd/acl.d/luci-app-mu300dash.json; do
+for p in $R/usr/share/luci/menu.d/luci-app-mu300.json \
+         $R/usr/share/rpcd/acl.d/luci-app-mu300.json; do
     chown 0:0 $p; chmod 0644 $p
 done
 chown -R 0:0 $R/www/luci-static/resources/mu300 $R/www/luci-static/resources/view/mu300
@@ -193,7 +200,16 @@ fi
 for f in opt/mu300/bin/busybox opt/mu300/bin/logdw opt/mu300/bin/mu300-bt-init opt/mu300/bin/mu300-keys \
          opt/mu300/bin/sing-box opt/mu300/bin/xray opt/mu300/bin/hev-socks5-tunnel \
          lib/modules/$KREL/wcn_bsp.ko lib/modules/$KREL/sprd_wlan_combo.ko \
-         lib/modules/$KREL/sprdbt_tty.ko lib/modules/$KREL/mali_kbase.ko; do
+         lib/modules/$KREL/sprdbt_tty.ko lib/modules/$KREL/mali_kbase.ko \
+         opt/mu300/bin/mu300-dash-info opt/mu300/bin/mu300-dash-cell \
+         opt/mu300/bin/mu300-dash-act opt/mu300/bin/mu300-dash-lock \
+         usr/libexec/rpcd/mu300dash usr/share/luci/menu.d/luci-app-mu300.json \
+         usr/share/rpcd/acl.d/luci-app-mu300.json \
+         www/luci-static/resources/mu300/common.js \
+         www/luci-static/resources/view/mu300/home.js \
+         www/luci-static/resources/view/mu300/at.js \
+         www/luci-static/resources/view/mu300/sms.js \
+         www/luci-static/resources/view/mu300/locks.js; do
     [ -s "$R/$f" ] || { echo "assembled rootfs is missing $f" >&2; exit 1; }
 done
 # Leave a machine-readable inventory in every image. It gives post-install

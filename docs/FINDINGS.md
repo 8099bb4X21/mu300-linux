@@ -1197,7 +1197,7 @@ rpcd's script-plugin reply path (`plugin.c`: script stdout is fed chunk-wise int
 `json_tokener_parse_ex` and then converted to blobmsg), i.e. a narrow race between specific reply
 content and chunk boundaries while a lock apply restarts the protocol stack.
 
-Mitigation deployed (openwrt overlay `usr/libexec/rpcd/mu300dash`), three browser-driven applies
+Mitigation deployed (`openwrt/luci-app-mu300/root/usr/libexec/rpcd/mu300dash`), three browser-driven applies
 survived with zero logouts afterwards:
 
 * every method's raw stdout is appended to `/tmp/mu300-dash/last-outputs.log` (last 400 entries) -
