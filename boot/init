@@ -170,12 +170,6 @@ setup_usb_gadget() {
     echo 0x0525 > "$g/idVendor"
     echo 0xa4a1 > "$g/idProduct"
     echo 0x0200 > "$g/bcdUSB"
-    # Miscellaneous / IAD: the network and the ACM functions each span two interfaces, and without this device class
-    # Windows' composite driver ignores their association descriptors and hands out the interfaces one by one, so a
-    # class driver never sees its function as a whole
-    echo 0xEF > "$g/bDeviceClass"
-    echo 0x02 > "$g/bDeviceSubClass"
-    echo 0x01 > "$g/bDeviceProtocol"
     echo MU300LINUX > "$g/strings/0x409/serialnumber"
     echo Linux > "$g/strings/0x409/manufacturer"
     echo "MU300 Linux USB Ethernet" > "$g/strings/0x409/product"

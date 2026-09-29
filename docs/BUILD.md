@@ -8,7 +8,7 @@ filesystems instead of downloading them, or if you maintain the project. See [`.
 ```
 LK (slot b, tries=2) ─► custom 5.4 kernel + vendor_boot DTB
    └─► initramfs /init (boot/init)
-         ├─ load 85 modules in a fixed order (boot/module-order.txt)
+         ├─ load 86 modules in a fixed order (boot/module-order.txt)
          ├─ misc: restore slot a, unless the rootfs says default-boot=linux
          ├─ bind USB gadget: NCM (usb0 up immediately) + ACM console
          ├─ losetup -o 27762098176 /dev/mmcblk0 → ext4 "mu300root" (free space after userdata)
