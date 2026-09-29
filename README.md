@@ -32,8 +32,7 @@ is talking to; see [Supported devices](#supported-devices).
 | LEDs used by Linux | the blue LED: mobile data | power, network (blue: data, red: no service), Wi-Fi |
 | USB network | `192.168.77.1` | `192.168.78.1` (so both can be plugged into one computer) |
 | Tested | everything below | 5.4, 6.18 and 7.2: USB, Wi-Fi hotspot, Bluetooth, mobile data, VPN, LEDs |
-| Battery | - | level, voltage, current, temperature and charging state in `mu300-toolkit` and `/sys/class/power_supply` on every kernel (mainline: `sc27xx-fgu`) |
-| Buttons | power: held 3 s shuts down | power: a short press wakes the LEDs (they go dark after 60 s), held 3 s shuts down; the Wi-Fi key switches the hotspot 2.4 / 5 GHz, held 3 s turns it off or on |
+| Battery level | - | shown by `mu300-toolkit` with kernel 5.4; the mainline kernels (6.18, 7.2) have no driver for its charger and fuel gauge, it charges but does not report |
 
 Both run the same kernel, the same systems and the same releases; what differs is a handful of drivers for the U30
 Air's charger and LEDs, which its boot image loads in place of the F50's ([`kernel/u30air.fragment`](kernel/u30air.fragment)).

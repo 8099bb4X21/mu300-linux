@@ -2006,25 +2006,3 @@ Under 6.18 and 7.2 the U30 Air has USB, mobile data, the VPN, the hotspot, Bluet
 the UMP9620) have no mainline drivers; the charger IC keeps charging on its own defaults. Kernel bundles now name
 the devices they run on (`./devices`): mu300-update and the installers do not put a bundle from before this onto a
 U30 Air.
-
-### 33d. The U30 Air's battery under mainline
-
-Under 6.18 the PMIC's efuse, ADC and fuel gauge (`sprd,ump9620-efuse/-adc/-fgu`) appeared as platform devices with
-no driver: mainline's sc27xx drivers know the SC2731/SC2730 family only. Patches 0004-0006 add UMP9620 from the
-values in Unisoc's 5.4 drivers:
-
-- efuse: 64 blocks, read directly from a window at 0x40 once the controller's RTC clock is on and ungated
-- ADC: its own scale table and ratios, a battery-voltage detection graph for scale 1, calibration from two efuse
-  words per graph (bits 15:4), and a vote for its 26 MHz clock in an AON register (`sprd_adc_pm_reg`) around each
-  conversion
-- fuel gauge: enable bits at 0x2008/0x2010, the 4200 mV calibration in bits 15:7. `bat-temp` is the NTC's voltage
-  on this board, not a temperature (71.2 "degrees" at first): the battery node's `voltage-temp-table` converts it.
-  The charger IC has no driver, so the status comes from the battery current. Mainline read a discharge current
-  as ~2 billion: `u32 cur - 8192` wraps below zero; the vendor driver casts to s64 first.
-
-The first status fallback asked for the capacity, whose calibration asks for the status: a stack overflow in the
-first second of every boot. Five of them in a row put the device back into Android by itself - the fallback did
-its job - and the panic was in pstore.
-
-The charger (SGM41511, `ti,bq2560x_chg` on I2C) still has no driver under mainline: it charges on its power-on
-defaults and reports nothing; I2C is not even enabled there. Under 5.4 the vendor SQC stack drives it.
