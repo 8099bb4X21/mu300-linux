@@ -6,8 +6,7 @@
 #   mu300-update boot             only the kernel and the boot image
 #   mu300-update rollback [OS]    go back to the previous version kept as <os>.old
 #   mu300-update rollback-boot    go back to the previous boot image
-#   mu300-update kernel [5.4|6.18|7.2]  show, or change, the kernel (vendor 5.4, mainline 6.18 LTS or the newest
-#                                 stable mainline, 7.2) and install it
+#   mu300-update kernel [5.4|6.18]  show, or change, the kernel (vendor 5.4 or mainline 6.18) and install it
 #   mu300-update clean            delete the kept <os>.old copies
 #
 # How it works: the new filesystem is unpacked next to the old one as <os>.new on the Linux partition, your settings
@@ -45,32 +44,18 @@ STAGE=$DISK/.mu300-update
 fetch_verified() {
     base=https://github.com/$REPO/releases/download/$1
     mkdir -p "$STAGE"
-    # SHA256SUMS is fetched once per run, never trusted from an earlier one: a release published again under the
-    # same tag left a stale copy that every file then failed (and the updater it had verified replaced this one).
-    # Only without GitHub does the kept copy of the same tag stand in.
-    if [ "${SUMS_FETCHED:-}" != "$1" ]; then
-        if _sums=$(fetch_stdout "$base/SHA256SUMS") && [ -n "$_sums" ]; then
-            printf '%s\n' "$_sums" > "$STAGE/SHA256SUMS"
-            echo "$1" > "$STAGE/SHA256SUMS.tag"
-            SUMS_FETCHED=$1
-        elif [ "$(cat "$STAGE/SHA256SUMS.tag" 2>/dev/null)" != "$1" ] || [ ! -s "$STAGE/SHA256SUMS" ]; then
-            echo "cannot download SHA256SUMS of $1" >&2
-            return 1
-        fi
+    if [ "$(cat "$STAGE/SHA256SUMS.tag" 2>/dev/null)" != "$1" ] || [ ! -s "$STAGE/SHA256SUMS" ]; then
+        fetch_stdout "$base/SHA256SUMS" > "$STAGE/SHA256SUMS" && [ -s "$STAGE/SHA256SUMS" ] ||
+            { rm -f "$STAGE/SHA256SUMS"; echo "cannot download SHA256SUMS of $1" >&2; return 1; }
+        echo "$1" > "$STAGE/SHA256SUMS.tag"
     fi
     want=$(awk -v f="$2" '$2 == f || $2 == "*" f {print $1}' "$STAGE/SHA256SUMS")
     [ -n "$want" ] || { echo "$2 is not part of release $1" >&2; return 2; }
     for try in 1 2 3; do
         [ -s "$STAGE/$2" ] && [ "$(sha256sum "$STAGE/$2" | cut -d' ' -f1)" = "$want" ] && return 0
         fetch_file "$base/$2" "$STAGE/$2" && [ "$(sha256sum "$STAGE/$2" | cut -d' ' -f1)" = "$want" ] && return 0
-        # a corrupt or stale file cannot be resumed: start over. The kept SHA256SUMS may be the stale part - a
-        # release published again under the same tag - so it is fetched again too.
+        # a corrupt or stale file cannot be resumed: start over
         rm -f "$STAGE/$2"
-        if _sums=$(fetch_stdout "$base/SHA256SUMS") && [ -n "$_sums" ]; then
-            printf '%s\n' "$_sums" > "$STAGE/SHA256SUMS"
-            want=$(awk -v f="$2" '$2 == f || $2 == "*" f {print $1}' "$STAGE/SHA256SUMS")
-            [ -n "$want" ] || { echo "$2 is not part of release $1" >&2; return 2; }
-        fi
         sleep 5
     done
     echo "downloading $2 failed" >&2
@@ -276,14 +261,12 @@ apply_one() {  # apply_one OS TAG
 BOOTDIR=$DISK/boot
 PERSIST_LOG=$((48 << 20))   # boot_b keeps the persistent init log from 48 MiB on (boot/build-boot-image.py)
 
-# Which kernel this device runs: the vendor 5.4 (mu300-kernel.tar.gz) or a mainline one (mu300-kernel-<version>.tar.gz:
-# 6.18, the long-term release, and 7.2, the newest stable one).
+# Which kernel this device runs: the vendor 5.4 (mu300-kernel.tar.gz) or mainline 6.18 (mu300-kernel-6.18.tar.gz).
 # Kept on the Linux partition, so both systems and every update follow it - without it an update of a device on
 # 6.18 installed the release's 5.4 kernel. "mu300-update kernel 6.18" changes it.
 KERNEL_CHOICE=$BOOTDIR/kernel
-KERNELS="5.4 6.18 7.2"
-kernel_choice() { c=$(cat "$KERNEL_CHOICE" 2>/dev/null); case " $KERNELS " in *" $c "*) echo "$c" ;; *) echo 5.4 ;; esac; }
-kernel_asset() { case $(kernel_choice) in 5.4) echo mu300-kernel.tar.gz ;; *) echo "mu300-kernel-$(kernel_choice).tar.gz" ;; esac; }
+kernel_choice() { c=$(cat "$KERNEL_CHOICE" 2>/dev/null); case $c in 6.18) echo 6.18 ;; *) echo 5.4 ;; esac; }
+kernel_asset() { case $(kernel_choice) in 6.18) echo mu300-kernel-6.18.tar.gz ;; *) echo mu300-kernel.tar.gz ;; esac; }
 
 part_dev() {  # part_dev NAME -> /dev/<block device of that partition>
     for u in /sys/class/block/*/uevent; do
@@ -431,12 +414,12 @@ boot_update() {  # boot_update TAG   (MU300_KERNEL_BUNDLE=FILE uses a local mu30
     BOOT_CHANGED=1
 }
 
-kernel_cmd() {  # kernel [5.4|6.18|7.2]: show or change the kernel, and install it
+kernel_cmd() {  # kernel [5.4|6.18]: show or change the kernel, and install it
     mounted_disk
     case ${1:-} in
         '') printf 'kernel: %s (running %s)\n' "$(kernel_choice)" "$(uname -r)"; return 0 ;;
-        5.4|6.18|7.2) ;;
-        *) die "usage: mu300-update kernel [5.4|6.18|7.2]" ;;
+        5.4|6.18) ;;
+        *) die "usage: mu300-update kernel [5.4|6.18]" ;;
     esac
     mkdir -p "$BOOTDIR"
     old=$(kernel_choice)
@@ -447,7 +430,6 @@ kernel_cmd() {  # kernel [5.4|6.18|7.2]: show or change the kernel, and install 
         echo "$old" > "$KERNEL_CHOICE"
         die "the $1 kernel was not installed; staying on $old"
     fi
-    rm -rf "$STAGE"
     sync
     printf '\nkernel %s selected. Reboot to start it (mu300-update rollback-boot goes back).\n' "$1"
 }
@@ -616,12 +598,12 @@ case ${1:-check} in
     check) check ;;
     apply) shift; apply "$@" ;;
     boot) mounted_disk; t=${MU300_RELEASE:-$(latest_release)}; [ -n "$t" ] || die "could not reach GitHub (is the device online?)"
-          boot_update "$t" || exit 1; rm -rf "$STAGE"; [ -n "${BOOT_CHANGED:-}" ] && printf '\nReboot to start the new kernel.\n' ;;
+          boot_update "$t" || exit 1; [ -n "${BOOT_CHANGED:-}" ] && printf '\nReboot to start the new kernel.\n' ;;
     rollback) shift; rollback "$@" ;;
     rollback-boot) rollback_boot ;;
     kernel) shift; kernel_cmd "$@" ;;
     accounts) accounts ;;
     clean) clean ;;
-    -h|--help|help) sed -n '2,12s/^# \{0,1\}//p' "$0" ;;
-    *) echo "usage: mu300-update check|apply [os...]|boot|kernel [5.4|6.18|7.2]|rollback [os]|rollback-boot|clean" >&2; exit 2 ;;
+    -h|--help|help) sed -n '2,11s/^# \{0,1\}//p' "$0" ;;
+    *) echo "usage: mu300-update check|apply [os...]|boot|kernel [5.4|6.18]|rollback [os]|rollback-boot|clean" >&2; exit 2 ;;
 esac

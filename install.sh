@@ -374,15 +374,15 @@ if [ $MODE = prebuilt ]; then
     echo "  $(t "1) 5.4   Unisoc's vendor kernel (Android 12 base): the longest tested, everything this project supports")"
     echo "  $(t '2) 6.18  mainline Linux, current long-term (LTS) release: newer drivers and security fixes, the same')"
     echo "  $(t '         functions (hotspot, mobile data, SMS, Bluetooth, VPN, GPU); no USB-C video output yet')"
-    echo "  $(t '3) 7.2   the newest stable mainline Linux (7.2 for now): the newest drivers, the same functions')"
-    echo "  $(t '         as 6.18; tested less than 6.18')"
-    echo "  $(t 'This can be changed later on the device: sudo mu300-update kernel 5.4|6.18|7.2')"
+    echo "  $(t '3) latest stable mainline kernel (7.2 for now)')"
+    echo "  $(t 'Either one can be changed later on the device: sudo mu300-update kernel 5.4|6.18')"
     while :; do
         ask kchoice "$(t 'Kernel')" 1
         case $kchoice in
             1|5.4) KERNEL=5.4; break ;;
             2|6.18) KERNEL=6.18; break ;;
-            3|7.2) KERNEL=7.2; break ;;
+            3|7.2) echo "  $(t 'The latest stable kernel (7.2) already runs on the device and will be available very soon;')"
+                   echo "  $(t 'for now please choose 5.4 or 6.18 (switching later is one command: mu300-update kernel).')" ;;
             *) echo "  $(t 'enter 1, 2 or 3')" ;;
         esac
     done
@@ -459,11 +459,11 @@ base=${MU300_RELEASE_URL:-https://github.com/$REPO/releases/download/$RELEASE}
 say "$(t 'Downloading release {1}' "$RELEASE")"
 curl -fsSL -o "$REL/SHA256SUMS" "$base/SHA256SUMS" || die "$(t 'cannot download {1}' "$base/SHA256SUMS")"
 files=mu300-kernel.tar.gz
-[ "$KERNEL" = 5.4 ] || files="$files mu300-kernel-$KERNEL.tar.gz"
+[ "$KERNEL" = 6.18 ] && files="$files mu300-kernel-6.18.tar.gz"
 for os in $OSES; do files="$files mu300-$os-rootfs.tar.gz"; done
 for f in $files; do
     want=$(awk -v f="$f" '$2 == f || $2 == "*" f {print $1}' "$REL/SHA256SUMS")
-    [ -n "$want" ] || die "$(t '{1} is not part of release {2}' "$f" "$RELEASE")$([ "$f" = "mu300-kernel-$KERNEL.tar.gz" ] && [ "$KERNEL" != 5.4 ] && echo " $(t '(choose kernel 5.4, or a newer release)')")"
+    [ -n "$want" ] || die "$(t '{1} is not part of release {2}' "$f" "$RELEASE")$([ "$f" = mu300-kernel-6.18.tar.gz ] && echo " $(t '(choose kernel 5.4, or a newer release)')")"
     have=$( (shasum -a 256 "$REL/$f" 2>/dev/null || sha256sum "$REL/$f" 2>/dev/null) | cut -d' ' -f1)
     if [ "$have" != "$want" ]; then
         echo "  $f"
@@ -476,18 +476,17 @@ done
 rm -rf "$REL/kernel" && mkdir -p "$REL/kernel" && tar -xzf "$REL/mu300-kernel.tar.gz" -C "$REL/kernel"
 KOUT=$REL/kernel
 BUSYBOX=$KOUT/busybox; LOGDW=$KOUT/logdw
-# a mainline kernel (6.18, 7.2): its bundle, unpacked
-KMAIN=
-if [ "$KERNEL" != 5.4 ]; then
-    KMAIN=$REL/kernel-$KERNEL
-    rm -rf "$KMAIN" && mkdir -p "$KMAIN" && tar -xzf "$REL/mu300-kernel-$KERNEL.tar.gz" -C "$KMAIN"
-    [ -s "$KMAIN/Image" ] && [ -s "$KMAIN/ramdisk-generic.lz4" ] && [ -s "$KMAIN/kernel.release" ] || die "$(t '{1} is incomplete' "mu300-kernel-$KERNEL.tar.gz")"
+K618=
+if [ "$KERNEL" = 6.18 ]; then
+    K618=$REL/kernel-6.18
+    rm -rf "$K618" && mkdir -p "$K618" && tar -xzf "$REL/mu300-kernel-6.18.tar.gz" -C "$K618"
+    [ -s "$K618/Image" ] && [ -s "$K618/ramdisk-generic.lz4" ] && [ -s "$K618/kernel.release" ] || die "$(t '{1} is incomplete' mu300-kernel-6.18.tar.gz)"
 fi
 say "$(t 'Adding the vendor files from your device to the images')"
 for os in $OSES; do
     python3 "$TOP/tools/vendor-overlay.py" --os $os --firmware "$WORK/firmware" --android-subset "$WORK/android-subset" \
       $([ -d "$WORK/android-gpu-subset" ] && [ "$gpu" = yes ] && echo --gpu-subset "$WORK/android-gpu-subset") \
-      $([ -n "$KMAIN" ] && echo --kernel-bundle "$KMAIN") \
+      $([ -n "$K618" ] && echo --kernel-bundle "$K618") \
       --out "$WORK/mu300-vendor-$os.tar.gz"
 done
 # empty password = no password: PWHASH stays empty and android-install skips the shadow edit
@@ -545,7 +544,7 @@ else
     sed "s/^ROOT_OFFSET=[0-9]*/ROOT_OFFSET=$OFF/" "$TOP/boot/init" > "$WORK/init"
 fi
 python3 "$TOP/boot/build-boot-image.py" --stock-boot "$WORK/dumps/boot_a.img" --misc-head "$WORK/dumps/misc-head.bin" \
-  --kernel "${KMAIN:-$KOUT}/Image" ${KMAIN:+--append-ramdisk "$KMAIN/ramdisk-generic.lz4"} \
+  --kernel "${K618:-$KOUT}/Image" ${K618:+--append-ramdisk "$K618/ramdisk-generic.lz4"} \
   --modules "$KOUT/modules" --init "$WORK/init" --busybox "$BUSYBOX" \
   --logdw "$LOGDW" --ueventd-perms "$TOP/android-vendor/ueventd-perms.sh" \
   --android-subset "$WORK/android-subset" --out "$WORK/boot-linux-slotb.img" >/dev/null

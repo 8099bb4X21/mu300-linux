@@ -1795,9 +1795,7 @@ ignored that result, failed on the next dependency ("does not exist"), and the f
 under the connection thread it had already started. On Ubuntu the delegate is loaded before there is traffic,
 the call returns 0, and none of this happens. Fixed in the module: `-EINPROGRESS` is success, the result of
 `sipa_delegator_start()` is checked, the Wi-Fi offload dependencies (unused here) are warnings, and the delegator
-is no longer devm-allocated. The 5.4 kernel has the same driver in its own tree and the same crash on OpenWrt ("Kernel
-panic - not syncing: CFI failure (target: 0x0)" in `dele-4-5`, caught while testing v2026.09.29); it gets the same
-fix as `kernel/patches/sipa-delegate-einprogress.patch`.
+is no longer devm-allocated.
 
 ### 31g. Three warnings on every boot, three vendor bugs
 6.18 printed three `WARNING:`s on every boot; each one is a bug in the vendor drivers:
@@ -1820,14 +1818,6 @@ A look at `dmesg` itself (Ubuntu's journal misses the first seconds of the kerne
 And the idle load average of 2.0 was two kernel threads parked in D state for good: `slog-0-0` polls every 2 s for
 the modem log to be switched on with an uninterruptible `msleep()`, and the Wi-Fi `SC2355_TX_THREAD` waits for work
 with `wait_for_completion()`. They now sleep interruptibly and in `TASK_IDLE`; the idle load is about 0.4.
-
-7.x adds one of its own: a workqueue has to say whether it is per-CPU or unbound (`WQ_PERCPU`, which 6.18 has
-too, or `WQ_UNBOUND`), and `trusty` and six Mali queues said neither ("trusty-nop-wq is using neither WQ_PERCPU or
-WQ_UNBOUND"). They say `WQ_PERCPU` now - what the kernel picked for them anyway.
-
-The Wi-Fi lock and the Bluetooth port come from the same vendor sources as the 5.4 modules, so the 5.4 build
-patches them as well (`kernel/patches/wlan_combo-tx-complock-irqsave.patch`, `sprdbt-tty-one-port.patch`); there
-the second port really was written past the end of `ports[]`, since 5.4 does not check.
 
 The 6.18 bundle also carries `modules.builtin` and `modules.builtin.modinfo` now: without them depmod warned and
 `modprobe` of a built-in driver failed. Three boots after the fixes: no warnings, Wi-Fi AP, mobile data, Bluetooth
@@ -1852,16 +1842,6 @@ The command line still carries four bring-up flags. Measured on the running syst
   never came up - it waits for suppliers in the vendor device tree that no driver provides - and since Linux
   itself was fine, the boot counted as good and the board stayed in a Linux without USB until it was forced back
   to Android.
-
-### 31i. A Wi-Fi card that is late at boot panicked the board
-Rebooting OpenWrt on 5.4 again and again (testing v2026.09.29), one boot ended in "WCN BOOT: error: Waiting for
-PCIe scan card timeout", `sprd_pcie_remove`, "Unable to handle kernel paging request at virtual address
-ffffffffffffffe8" in `__wake_up_locked` from `complete()`, and a panic - back to Android. The SC2355 does not always
-show up on the PCIe bus within the 5 s the vendor driver waits; the timeout then removes the half-probed card, and
-`sprd_pcie_remove()` completes `remove_done`, which only `sprd_pcie_remove_card()` initialises - a completion that
-was never set up. It is initialised before every scan now, `remove` checks for a probe that never set its data, and
-a timed-out scan is tried once more before Wi-Fi and Bluetooth are given up. Both copies of the driver: the 5.4
-tree (`kernel/patches/wcn-pcie-scan-timeout.patch`) and `upstream/modules/wcn_bsp`.
 
 ## Updating on the device
 
@@ -1900,24 +1880,6 @@ newer boot images count failed boots instead (5 in a row before Android).
 
 The full old-user path (installer boot_b with kernel #11, both systems reinstalled, boot image written) then took
 40 s, and the board started the new kernel.
-
-### 32a. The offset in init, replaced by every boot image update
-A user installed 6.18 with the installer and got "MU300 standalone Linux ... automatically reboots to Android
-after 300 seconds": the root filesystem was not found. `boot/init` finds the Linux region at `ROOT_OFFSET`, a number
-in the file - our test board's region (27762098176). The installer writes the device's own offset into that
-line, but that init lives in the device's ramdisk segment, and the generic segment behind it - what
-`mu300-update` puts there for every kernel and boot image update since v2026.09.27, and what the installer adds for
-a mainline kernel - brings its own init, which replaces the file, with the default. On every device whose region
-is somewhere else, each such boot image went looking at the test board's offset, dropped into standalone mode and
-went back to Android: the boot image did not have to be broken for "the update always ends in Android", which is
-very likely what the report of section 32 was too. The test board never showed it: its region is the default.
-
-init now finds the region itself, as the installer places it - the first 2 MiB boundary after the last partition
-(from sysfs) - and takes the first candidate that holds the mu300root filesystem (ext4 magic and label), the
-number in the file only as the last one. Tested with a generic segment whose default was wrong on purpose:
-"stage=root-offset found=27762098176 (default 12884901888)", and the board booted. A device left in Android by
-this needs one reinstall from a computer (the installer's `update` keeps settings and data); from v2026.09.29 on
-every generic segment carries the new init.
 
 Found on the way: the account merge rewrote `/etc/passwd` and friends in place (a reader at first boot could see a
 half-written file: `Failed to resolve user 'messagebus'`); it now writes a copy and renames it, and

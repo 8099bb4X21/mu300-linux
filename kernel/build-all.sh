@@ -46,7 +46,7 @@ echo "==> sources"
 fetch /src/zte-u30air "$KERNEL_REPO" "$KERNEL_REV"
 cd /src/zte-u30air
 # the tree is the pinned commit plus exactly these patches: reapply from a clean checkout whenever they change
-KPATCHES="bluetooth-marlin3-link-policy of-reserved-mem-skip of-reserved-mem-add regdb-wens-certificate sipa-delegate-einprogress wcn-pcie-scan-timeout"
+KPATCHES="bluetooth-marlin3-link-policy of-reserved-mem-skip of-reserved-mem-add regdb-wens-certificate"
 sum=$(cd /work/patches && cat $(for p in $KPATCHES; do echo $p.patch; done) | sha256sum | cut -d" " -f1)
 if [ "$(cat .mu300-patches 2>/dev/null)" != "$sum" ]; then
     git checkout -q -f "$KERNEL_REV" && git clean -q -fdx -e .mu300-patches
@@ -58,8 +58,6 @@ M=kernel_modules/kernel5.4
 fetch /src/realme "$MODULES_REPO" "$MODULES_REV" $M/wcn/wlan/wlan_combo $M/wcn/bluetooth/driver $M/gpu/natt/mali
 [ -d /src/ext-wlan_combo ] || cp -r /src/realme/$M/wcn/wlan/wlan_combo /src/ext-wlan_combo
 [ -d /src/ext-sprdbt ] || cp -r /src/realme/$M/wcn/bluetooth/driver /src/ext-sprdbt
-# like build-wlan.sh does for Wi-Fi: the MU300 fixes of the Bluetooth driver, skipped when already applied
-(cd /src/ext-sprdbt && for p in /work/patches/sprdbt-*.patch; do patch -p1 --forward -s < "$p" || true; done)
 [ -d /src/ext-mali ] || cp -r /src/realme/$M/gpu/natt/mali /src/ext-mali
 
 echo "==> kernel"
