@@ -9,6 +9,7 @@
 * as published by the Free Software Foundation.
 */
 
+#include <linux/delay.h>
 #include "cmdevt.h"
 #include "common/common.h"
 #include "rx.h"
@@ -34,21 +35,23 @@ static void mm_check_mh_buffer(struct device *dev, void *buffer, dma_addr_t pa,
 		/* Check whether this buffer is ok to use */
 		while ((desc->data_write_done != 1) &&
 		       (retry < MAX_RETRY_NUM)) {
-			pr_err("%s: hw still writing: 0x%lx, 0x%lx\n",
-			       __func__, (unsigned long)buffer,
-			       (unsigned long)pa);
-			/* FIXME: Should we delay here? */
-			dma_sync_single_for_device(dev, pa, size, direction);
+			/*
+			 * MU300: re-read the descriptor from memory. The vendor code called
+			 * dma_sync_single_for_device() here, which on arm64 invalidated
+			 * FROM_DEVICE buffers until 5.19 and cleans them since: the CPU kept
+			 * reading the stale line, every retry failed, and the pr_err below
+			 * (at loglevel 8, over the serial console, from the RX path) could
+			 * stall the CPU for good under load.
+			 */
+			udelay(1);
+			dma_sync_single_for_cpu(dev, pa, size, direction);
 			retry++;
 		}
 	}
 
-	if (retry >= MAX_RETRY_NUM) {
-		/* TODO: How to deal with this situation? */
-		dma_sync_single_for_device(dev, pa, size, direction);
-		pr_err("%s: hw still writing: 0x%lx, 0x%lx\n",
-		       __func__, (unsigned long)buffer, (unsigned long)pa);
-	}
+	if (retry >= MAX_RETRY_NUM)
+		pr_err_ratelimited("%s: hw still writing: 0x%lx, 0x%lx\n",
+				   __func__, (unsigned long)buffer, (unsigned long)pa);
 }
 
 static void mm_clear_mh_buffer(void *buffer)
@@ -436,7 +439,7 @@ static void mm_normal_data_process(struct mem_mgmt *mm_entry,
 	struct sprd_hif *hif = rx_mgmt->hif;
 
 	if (unlikely(len < sizeof(struct rx_msdu_desc))) {
-		pr_err("%s: data len is %d, too short\n", __func__, len);
+		pr_err_ratelimited("%s: data len is %d, too short\n", __func__, len);
 		free_data = true;
 	} else {
 		if (hif->hw_type == SPRD_HW_SC2355_PCIE)
@@ -450,7 +453,7 @@ static void mm_normal_data_process(struct mem_mgmt *mm_entry,
 			skb = mm_build_skb(data, skb_len, buffer_type);
 		else {
 			/* Should not happen */
-			pr_err("%s: data len is %d, skb need %d\n",
+			pr_err_ratelimited("%s: data len is %d, skb need %d\n",
 			       __func__, len, skb_len);
 			skb = mm_data2skb_process(mm_entry, data,
 						  SKB_WITH_OVERHEAD(skb_len));
@@ -549,7 +552,8 @@ void *sc2355_mm_phys_to_virt(struct device *dev, unsigned long pcie_addr,
 	pa = pcie_addr & (~(SPRD_MH_ADDRESS_BIT) & SPRD_PHYS_MASK);
 	buffer = phys_to_virt(pa);
 
-	dma_sync_single_for_device(dev, pa, size, direction);
+	/* MU300: for_cpu, not for_device: the CPU is about to read what the device wrote (see mm_check_mh_buffer) */
+	dma_sync_single_for_cpu(dev, pa, size, direction);
 
 	if (is_mh)
 		mm_check_mh_buffer(dev, buffer, pa, size, direction);

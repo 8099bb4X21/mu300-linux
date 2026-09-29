@@ -6,7 +6,7 @@
 # proprietary device inputs are mandatory unless MU300_GENERIC=1 is used for a
 # publishable image that install.sh will combine with a per-device overlay:
 #   out/modules/*.ko  out/modules.builtin*  firmware/  android-subset/  android-gpu-subset/
-#   tools/logdw/logdw  tools/bt-init/mu300-bt-init  tools/gpu/cltest  busybox (static, full)
+#   tools/logdw/logdw  tools/bt-init/mu300-bt-init  tools/keys/mu300-keys  tools/gpu/cltest  busybox (static, full)
 #   xray, hev-socks5-tunnel (tools/fetch-xray.sh) and sing-box (tools/fetch-sing-box.sh), for mu300-vpn
 #   upstream/out/modules/*.ko (optional: out-of-tree WCN modules for the mainline 6.18 kernel)
 set -eu
@@ -55,7 +55,7 @@ gpu_opt() { [ "${MU300_GPU:-auto}" = 0 ] || opt "$1" "$2"; }
 missing=
 for o in out/modules/wcn_bsp.ko out/modules/sprd_wlan_combo.ko out/modules/sprdbt_tty.ko \
          out/modules/mali_kbase.ko \
-         tools/logdw/logdw tools/bt-init/mu300-bt-init busybox \
+         tools/logdw/logdw tools/bt-init/mu300-bt-init tools/keys/mu300-keys busybox \
          sing-box xray hev-socks5-tunnel; do
     [ -s "$IN/$o" ] || missing="$missing\n  $o"
 done
@@ -76,7 +76,7 @@ if [ -n "$missing" ]; then
     echo "set MU300_INPUTS to the complete staging directory; use MU300_GENERIC=1 only for release images" >&2
     exit 1
 fi
-for o in out/modules firmware android-subset android-gpu-subset tools/logdw/logdw tools/bt-init/mu300-bt-init tools/gpu/cltest busybox sing-box xray hev-socks5-tunnel upstream/out/modules; do
+for o in out/modules firmware android-subset android-gpu-subset tools/logdw/logdw tools/bt-init/mu300-bt-init tools/keys/mu300-keys tools/gpu/cltest busybox sing-box xray hev-socks5-tunnel upstream/out/modules; do
     [ -e "$IN/$o" ] && echo "  + $o" || echo "  - $o"
 done
 # shellcheck disable=SC2046
@@ -86,7 +86,7 @@ docker run --rm --platform linux/arm64 \
   -v "$(W "$TOP/boot/module-order.txt")":/in/module-order.txt:ro -v "$(W "$IN/out/modules")":/in/modules:ro \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
   $(opt firmware firmware) $(opt android-subset android-subset) $(gpu_opt android-gpu-subset android-gpu-subset) \
-  $(opt tools/logdw/logdw logdw) $(opt tools/bt-init/mu300-bt-init bt-init) $(gpu_opt tools/gpu/cltest cltest) \
+  $(opt tools/logdw/logdw logdw) $(opt tools/bt-init/mu300-bt-init bt-init) $(opt tools/keys/mu300-keys keys) $(gpu_opt tools/gpu/cltest cltest) \
   $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(opt upstream/out/modules mainline-modules) -v "$(W "$TOP/openwrt")":/out -v "$(W "$REGDB")":/in/regdb:ro \
   -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER //bin/sh -eu -c '
 mkdir -p /var/lock /var/run /tmp
@@ -94,8 +94,10 @@ mkdir -p /var/lock /var/run /tmp
 # busybox now instead of turning every AT response into a one-second wait.
 /in/busybox sleep 0.01
 apk update >/dev/null
-# openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure
-apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util >/dev/null
+# openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure;
+# i2c-tools, gpiod-tools: mu300-usb (the charger of the U30 Air) and mu300-nfc (its NFC tag)
+apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util \
+    i2c-tools gpiod-tools >/dev/null
 # ujail drops CAP_PERFMON (38), which this 5.4 kernel does not know: jailed services (dnsmasq, ntpd) crash-loop
 apk del procd-ujail procd-seccomp >/dev/null 2>&1 || true
 # online firmware upgrades flash whole-disk armsr images: that would overwrite the eMMC, so remove them
@@ -133,6 +135,7 @@ fi
 [ -e /in/cltest ] && { mkdir -p $R/opt/mu300/android/system/bin; cp /in/cltest $R/opt/mu300/android/system/bin/cltest; chmod 755 $R/opt/mu300/android/system/bin/cltest; }
 [ -e /in/logdw ] && { cp /in/logdw $R/opt/mu300/bin/logdw; chmod 755 $R/opt/mu300/bin/logdw; }
 [ -e /in/bt-init ] && { cp /in/bt-init $R/opt/mu300/bin/mu300-bt-init; chmod 755 $R/opt/mu300/bin/mu300-bt-init; }
+[ -e /in/keys ] && { cp /in/keys $R/opt/mu300/bin/mu300-keys; chmod 755 $R/opt/mu300/bin/mu300-keys; }
 [ -f /in/sing-box ] && { cp /in/sing-box $R/opt/mu300/bin/sing-box; chmod 755 $R/opt/mu300/bin/sing-box; }
 for b in xray hev-socks5-tunnel; do [ -f /in/$b ] && { cp /in/$b $R/opt/mu300/bin/$b; chmod 755 $R/opt/mu300/bin/$b; }; done
 # full static busybox for the tools OpenWrt busybox leaves out (od, timeout, mountpoint, losetup, rfkill, telnetd)
@@ -180,12 +183,14 @@ chmod 0644 $R/www/luci-static/resources/mu300/*.js $R/www/luci-static/resources/
 rm -rf $R/lib/modules/6.* $R/boot
 # out-of-tree modules for the experimental mainline kernel (upstream/)
 if ls /in/mainline-modules/*.ko >/dev/null 2>&1; then
-    mkdir -p $R/lib/modules/6.18.52 && cp /in/mainline-modules/*.ko $R/lib/modules/6.18.52/
+    # the release the modules were built for (their vermagic), not a version written down here
+    krel=$(for f in /in/mainline-modules/*.ko; do tr "\0" "\n" < $f | sed -n "s/^vermagic=\([^ ]*\) .*/\1/p"; break; done)
+    [ -n "$krel" ] && mkdir -p $R/lib/modules/$krel && cp /in/mainline-modules/*.ko $R/lib/modules/$krel/
 fi
 # Audit the assembled tree, not just the host inputs.  This catches a bad
 # mount, copy, rename or future refactor before a tarball can be published or
 # installed.
-for f in opt/mu300/bin/busybox opt/mu300/bin/logdw opt/mu300/bin/mu300-bt-init \
+for f in opt/mu300/bin/busybox opt/mu300/bin/logdw opt/mu300/bin/mu300-bt-init opt/mu300/bin/mu300-keys \
          opt/mu300/bin/sing-box opt/mu300/bin/xray opt/mu300/bin/hev-socks5-tunnel \
          lib/modules/$KREL/wcn_bsp.ko lib/modules/$KREL/sprd_wlan_combo.ko \
          lib/modules/$KREL/sprdbt_tty.ko lib/modules/$KREL/mali_kbase.ko; do
