@@ -34,17 +34,8 @@ while IFS= read -r l; do
     [ "$g" = "$v" ] || grep -qx "$k" /work/config-ignored.txt 2>/dev/null || bad="$bad\nNOT SET: $k want $v got ${g:-unset}";; esac
 done < /work/mu300-mainline.config
 [ -z "$bad" ] || { printf "config options not taken:$bad\n" >&2; exit 1; }
-# on failure show the compiler's own messages: a plain grep for "error" also matches object names like
-# fdt_strerror.o and used to fill the report with those
-make O=$O ARCH=arm64 -j"$(nproc)" Image > $O/build.log 2>&1 || {
-    grep -n -E ": (fatal )?error: |-Werror|treated as errors|undefined reference|No such file|Killed|internal compiler error|\*\*\*" -A3 $O/build.log | head -80 || true
-    echo "--- end of build.log:"; tail -25 $O/build.log || true
-    exit 1
-}
+make O=$O ARCH=arm64 -j"$(nproc)" Image > $O/build.log 2>&1 || { grep -E "error|Error|ERROR" $O/build.log | head -20; exit 1; }
 cpp -nostdinc -undef -D__DTS__ -x assembler-with-cpp -I include -I scripts/dtc/include-prefixes \
   /work/dts/ums9620-mu300.dts | dtc -I dts -O dtb -o $O/ums9620-mu300.dtb -
-mkdir -p /work/out
 cp $O/arch/arm64/boot/Image $O/ums9620-mu300.dtb /work/out/
-# for depmod on the device: modprobe of a built-in driver fails without them
-cp $O/modules.builtin $O/modules.builtin.modinfo /work/out/
 ls -la /work/out

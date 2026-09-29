@@ -6,7 +6,6 @@
 #   mu300-update boot             only the kernel and the boot image
 #   mu300-update rollback [OS]    go back to the previous version kept as <os>.old
 #   mu300-update rollback-boot    go back to the previous boot image
-#   mu300-update kernel [5.4|6.18]  show, or change, the kernel (vendor 5.4 or mainline 6.18) and install it
 #   mu300-update clean            delete the kept <os>.old copies
 #
 # How it works: the new filesystem is unpacked next to the old one as <os>.new on the Linux partition, your settings
@@ -27,44 +26,16 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# A transfer that stalls is cut off and retried rather than waited for: with older boot images the IPA's downlink
-# can die in the middle of one (docs/FINDINGS.md 32), and without a timeout the update hung for good.
 fetch_stdout() {  # fetch_stdout URL
-    if have curl; then curl -fsSL --connect-timeout 30 --max-time 120 --retry 3 "$1"
-    else wget -T 60 -qO- "$1"; fi
+    if have curl; then curl -fsSL "$1"
+    else wget -qO- "$1"; fi
 }
-fetch_file() {  # fetch_file URL OUT (resumes a partial OUT)
-    if have curl; then curl -fL --retry 5 --retry-delay 5 --connect-timeout 30 --speed-limit 1024 --speed-time 60 -C - -o "$2" "$1"
-    else wget -c -T 60 -O "$2" "$1"; fi
-}
-
-# fetch_verified TAG ASSET: the release file in $STAGE, checked against the release's SHA256SUMS; a file that is
-# already there and matches is not downloaded again, a partial one is resumed
-STAGE=$DISK/.mu300-update
-fetch_verified() {
-    base=https://github.com/$REPO/releases/download/$1
-    mkdir -p "$STAGE"
-    if [ "$(cat "$STAGE/SHA256SUMS.tag" 2>/dev/null)" != "$1" ] || [ ! -s "$STAGE/SHA256SUMS" ]; then
-        fetch_stdout "$base/SHA256SUMS" > "$STAGE/SHA256SUMS" && [ -s "$STAGE/SHA256SUMS" ] ||
-            { rm -f "$STAGE/SHA256SUMS"; echo "cannot download SHA256SUMS of $1" >&2; return 1; }
-        echo "$1" > "$STAGE/SHA256SUMS.tag"
-    fi
-    want=$(awk -v f="$2" '$2 == f || $2 == "*" f {print $1}' "$STAGE/SHA256SUMS")
-    [ -n "$want" ] || { echo "$2 is not part of release $1" >&2; return 2; }
-    for try in 1 2 3; do
-        [ -s "$STAGE/$2" ] && [ "$(sha256sum "$STAGE/$2" | cut -d' ' -f1)" = "$want" ] && return 0
-        fetch_file "$base/$2" "$STAGE/$2" && [ "$(sha256sum "$STAGE/$2" | cut -d' ' -f1)" = "$want" ] && return 0
-        # a corrupt or stale file cannot be resumed: start over
-        rm -f "$STAGE/$2"
-        sleep 5
-    done
-    echo "downloading $2 failed" >&2
-    return 1
+fetch_file() {  # fetch_file URL OUT
+    if have curl; then curl -fL --retry 3 -o "$2" "$1"
+    else wget -O "$2" "$1"; fi
 }
 
 installed_version() { [ -r "$VERSION_FILE" ] && cat "$VERSION_FILE" || echo unknown; }
-# the directory the running system booted from (it stays in use under any name until the reboot)
-is_root() { [ -d "$1" ] && [ / -ef "$1" ]; }
 running_os() { [ -e /etc/openwrt_release ] && echo openwrt || echo ubuntu; }
 
 # systems present on the Linux partition
@@ -91,7 +62,7 @@ check() {
     printf 'newest release    %s\n' "$latest"
     printf 'systems on disk   %s\n' "$(installed_systems)"
     printf 'running now       %s\n' "$(running_os)"
-    printf 'kernel            %s (boot image: %s; kernel choice %s)\n' "$(uname -r)" "$(cat "$BOOTDIR/installed.tag" 2>/dev/null || echo "from the installer")" "$(kernel_choice)"
+    printf 'kernel            %s (boot image: %s)\n' "$(uname -r)" "$(cat "$BOOTDIR/installed.tag" 2>/dev/null || echo "from the installer")"
     for os in $(installed_systems); do
         [ -d "$DISK/$os.old" ] && printf 'rollback available for %s (%s)\n' "$os" "$(cat "$DISK/$os.old/etc/mu300/image-version" 2>/dev/null || echo unknown)"
     done
@@ -158,12 +129,8 @@ merge_accounts() {  # merge_accounts OLD_ROOT NEW_ROOT   ("" is the running syst
                     if ((f == "group" || f == "gshadow") && (x in lg)) print old[x]
                 }
             }' "$o/etc/$f" "$n/etc/$f" > "$n/etc/$f.mu300" || { rm -f "$n/etc/$f.mu300"; return 1; }
-        # renamed into place, never rewritten: a crash (or a reader at boot) never sees a half-written passwd.
-        # The copy made with cp -p keeps the file's owner and mode (shadow is root:shadow 0640; no stat on OpenWrt).
-        if [ -s "$n/etc/$f.mu300" ]; then
-            cp -p "$n/etc/$f" "$n/etc/$f.mu300-new" && cat "$n/etc/$f.mu300" > "$n/etc/$f.mu300-new" && sync &&
-                mv -f "$n/etc/$f.mu300-new" "$n/etc/$f" || { rm -f "$n/etc/$f.mu300" "$n/etc/$f.mu300-new"; return 1; }
-        fi
+        # cat, not mv: keeps the file's owner and mode (shadow is root:shadow 0640)
+        [ -s "$n/etc/$f.mu300" ] && cat "$n/etc/$f.mu300" > "$n/etc/$f"
         rm -f "$n/etc/$f.mu300"
     done
     rm -f "$n$ACCOUNTS_MARK"
@@ -186,9 +153,19 @@ apply_one() {  # apply_one OS TAG
     new=$DISK/$os.new
     [ -d "$old" ] || die "$os is not installed"
     tarball=mu300-$os-rootfs.tar.gz
-    tmp=$STAGE
-    # downloaded and checked in apply() already, together with everything else this update needs
-    [ -s "$tmp/$tarball" ] || die "$tarball was not downloaded"
+    base=https://github.com/$REPO/releases/download/$tag
+    tmp=$DISK/.mu300-update
+    mkdir -p "$tmp"
+
+    say "$os: downloading $tag"
+    sums=$(fetch_stdout "$base/SHA256SUMS") || die "cannot download SHA256SUMS"
+    want=$(printf '%s\n' "$sums" | awk -v f="$tarball" '$2 == f || $2 == "*" f {print $1}')
+    [ -n "$want" ] || die "$tarball is not part of release $tag"
+    free=$(df -k "$DISK" | awk 'NR==2 {print $4}')
+    [ "$free" -gt 2000000 ] || die "less than 2 GB free on the Linux partition"
+    fetch_file "$base/$tarball" "$tmp/$tarball" || die "download failed"
+    have=$(sha256sum "$tmp/$tarball" | cut -d' ' -f1)
+    [ "$have" = "$want" ] || { rm -f "$tmp/$tarball"; die "checksum mismatch, nothing was changed"; }
 
     say "$os: unpacking"
     rm -rf "$new"; mkdir -p "$new"
@@ -242,7 +219,6 @@ apply_one() {  # apply_one OS TAG
 
     say "$os: switching over"
     sync
-    is_root "$DISK/$os.old" && { rm -rf "$new"; die "$os was updated already and is still running the old copy: reboot first"; }
     rm -rf "$DISK/$os.old"
     mv "$old" "$DISK/$os.old" || die "could not move the old system aside"
     mv "$new" "$old" || { mv "$DISK/$os.old" "$old"; die "could not put the new system in place (old one restored)"; }
@@ -260,13 +236,6 @@ apply_one() {  # apply_one OS TAG
 # install from a computer).
 BOOTDIR=$DISK/boot
 PERSIST_LOG=$((48 << 20))   # boot_b keeps the persistent init log from 48 MiB on (boot/build-boot-image.py)
-
-# Which kernel this device runs: the vendor 5.4 (mu300-kernel.tar.gz) or mainline 6.18 (mu300-kernel-6.18.tar.gz).
-# Kept on the Linux partition, so both systems and every update follow it - without it an update of a device on
-# 6.18 installed the release's 5.4 kernel. "mu300-update kernel 6.18" changes it.
-KERNEL_CHOICE=$BOOTDIR/kernel
-kernel_choice() { c=$(cat "$KERNEL_CHOICE" 2>/dev/null); case $c in 6.18) echo 6.18 ;; *) echo 5.4 ;; esac; }
-kernel_asset() { case $(kernel_choice) in 6.18) echo mu300-kernel-6.18.tar.gz ;; *) echo mu300-kernel.tar.gz ;; esac; }
 
 part_dev() {  # part_dev NAME -> /dev/<block device of that partition>
     for u in /sys/class/block/*/uevent; do
@@ -308,16 +277,19 @@ boot_update() {  # boot_update TAG   (MU300_KERNEL_BUNDLE=FILE uses a local mu30
     tag=$1
     dev=$(part_dev boot_b) || { echo "boot: no boot_b partition found, boot image not updated" >&2; return 1; }
     psize=$(( $(cat "/sys/class/block/${dev##*/}/size") * 512 ))
-    tmp=$STAGE/boot
+    tmp=$DISK/.mu300-update/boot
     rm -rf "$tmp"; mkdir -p "$tmp" "$BOOTDIR"
 
     say "boot: kernel and boot image"
     bundle=${MU300_KERNEL_BUNDLE:-}
     if [ -z "$bundle" ]; then
-        # apply() has fetched it already; for "boot" and "kernel" this is the download
-        asset=$(kernel_asset)
-        fetch_verified "$tag" "$asset" || { echo "boot: no verified $asset of $tag (kernel $(kernel_choice)), nothing was changed" >&2; return 1; }
-        bundle=$STAGE/$asset
+        base=https://github.com/$REPO/releases/download/$tag
+        sums=$(fetch_stdout "$base/SHA256SUMS") || { echo "boot: cannot download SHA256SUMS" >&2; return 1; }
+        want=$(printf '%s\n' "$sums" | awk '$2 == "mu300-kernel.tar.gz" || $2 == "*mu300-kernel.tar.gz" {print $1}')
+        [ -n "$want" ] || { echo "boot: release $tag has no kernel bundle" >&2; return 1; }
+        bundle=$tmp/mu300-kernel.tar.gz
+        fetch_file "$base/mu300-kernel.tar.gz" "$bundle" || { echo "boot: download failed" >&2; return 1; }
+        [ "$(sha256sum "$bundle" | cut -d' ' -f1)" = "$want" ] || { echo "boot: checksum mismatch, nothing was changed" >&2; return 1; }
     fi
     [ -s "$bundle" ] || { echo "boot: $bundle not found" >&2; return 1; }
     tar -tzf "$bundle" > "$tmp/list" 2>/dev/null || { echo "boot: $bundle is not a readable tar.gz" >&2; return 1; }
@@ -332,21 +304,12 @@ boot_update() {  # boot_update TAG   (MU300_KERNEL_BUNDLE=FILE uses a local mu30
     # switch back. Ubuntu keeps them under extra/ and indexes them; OpenWrt keeps them flat and loads by path.
     if grep -qx './kernel.release' "$tmp/list"; then
         tar -xzf "$bundle" -C "$tmp" ./kernel.release ./modules || { echo "boot: unpacking the modules failed" >&2; return 1; }
-        for f in modules.builtin modules.builtin.modinfo; do
-            if grep -qx "./$f" "$tmp/list"; then tar -xzf "$bundle" -C "$tmp" "./$f" || true; fi
-        done
         krel=$(cat "$tmp/kernel.release")
         case $krel in ''|*/*|.*) echo "boot: bad kernel release '$krel' in the bundle" >&2; return 1 ;; esac
         for os in $(installed_systems); do
             case $os in ubuntu) d=$DISK/$os/lib/modules/$krel/extra ;; *) d=$DISK/$os/lib/modules/$krel ;; esac
             mkdir -p "$d" && cp "$tmp"/modules/*.ko "$d/" || { echo "boot: installing the modules into $os failed" >&2; return 1; }
-            if [ "$os" = ubuntu ]; then
-                # what the kernel has built in (bundles from v2026.09.29 on): modprobe of a built-in driver then
-                # succeeds, and depmod stops warning
-                for f in modules.builtin modules.builtin.modinfo; do [ ! -f "$tmp/$f" ] || cp "$tmp/$f" "$DISK/$os/lib/modules/$krel/"; done
-                [ -e "$DISK/$os/lib/modules/$krel/modules.order" ] || : > "$DISK/$os/lib/modules/$krel/modules.order"
-                if command -v depmod >/dev/null; then depmod -b "$DISK/$os" "$krel" 2>/dev/null || true; fi
-            fi
+            if [ "$os" = ubuntu ] && command -v depmod >/dev/null; then depmod -b "$DISK/$os" "$krel" 2>/dev/null || true; fi
         done
         printf 'boot: %s modules for %s installed into: %s\n' "$(ls "$tmp/modules" | wc -l | tr -d ' ')" "$krel" "$(installed_systems)"
     fi
@@ -394,7 +357,6 @@ boot_update() {  # boot_update TAG   (MU300_KERNEL_BUNDLE=FILE uses a local mu30
     # keep the current image for rollback-boot, then write
     cp "$tmp/body" "$BOOTDIR/prev.body"; cp "$tmp/vbmeta" "$BOOTDIR/prev.vbmeta"; cp "$tmp/footer" "$BOOTDIR/prev.footer"
     cat "$BOOTDIR/installed.tag" > "$BOOTDIR/prev.tag" 2>/dev/null || echo installer > "$BOOTDIR/prev.tag"
-    cat "$BOOTDIR/installed.kernel" > "$BOOTDIR/prev.kernel" 2>/dev/null || echo 5.4 > "$BOOTDIR/prev.kernel"
     sync
     if ! write_boot "$dev" "$psize" "$tmp/new" "$tmp/vbmeta" "$tmp/newfooter"; then
         echo "boot: writing boot_b failed verification; restoring the previous image" >&2
@@ -405,33 +367,11 @@ boot_update() {  # boot_update TAG   (MU300_KERNEL_BUNDLE=FILE uses a local mu30
     sha256sum < "$tmp/new" | cut -d' ' -f1 > "$BOOTDIR/written.sha256"
     echo "$id" > "$BOOTDIR/installed.id"
     echo "$tag" > "$BOOTDIR/installed.tag"
-    kernel_choice > "$BOOTDIR/installed.kernel"
     sync
     rm -rf "$tmp"
-    [ -n "${MU300_KERNEL_BUNDLE:-}" ] || rm -f "$bundle"
     printf 'boot: updated to %s (kernel %s bytes, ramdisk %s bytes). If it does not start, the device falls back\n' "$tag" "$nksz" "$nrsz"
     printf '      to Android by itself; mu300-update rollback-boot restores the previous image.\n'
     BOOT_CHANGED=1
-}
-
-kernel_cmd() {  # kernel [5.4|6.18]: show or change the kernel, and install it
-    mounted_disk
-    case ${1:-} in
-        '') printf 'kernel: %s (running %s)\n' "$(kernel_choice)" "$(uname -r)"; return 0 ;;
-        5.4|6.18) ;;
-        *) die "usage: mu300-update kernel [5.4|6.18]" ;;
-    esac
-    mkdir -p "$BOOTDIR"
-    old=$(kernel_choice)
-    echo "$1" > "$KERNEL_CHOICE"
-    t=${MU300_RELEASE:-$(latest_release)}
-    [ -n "$t" ] || { echo "$old" > "$KERNEL_CHOICE"; die "could not reach GitHub (is the device online?)"; }
-    if ! boot_update "$t"; then
-        echo "$old" > "$KERNEL_CHOICE"
-        die "the $1 kernel was not installed; staying on $old"
-    fi
-    sync
-    printf '\nkernel %s selected. Reboot to start it (mu300-update rollback-boot goes back).\n' "$1"
 }
 
 rollback_boot() {
@@ -444,105 +384,31 @@ rollback_boot() {
     sha256sum < "$BOOTDIR/prev.body" | cut -d' ' -f1 > "$BOOTDIR/written.sha256"
     rm -f "$BOOTDIR/installed.id"
     cat "$BOOTDIR/prev.tag" > "$BOOTDIR/installed.tag" 2>/dev/null
-    # the image that is back belongs to a kernel choice too: without this the next update would reinstall the
-    # kernel just rolled back from
-    if [ -s "$BOOTDIR/prev.kernel" ]; then
-        cat "$BOOTDIR/prev.kernel" > "$KERNEL_CHOICE"
-        cat "$BOOTDIR/prev.kernel" > "$BOOTDIR/installed.kernel"
-    fi
     sync
     printf 'boot: previous boot image (%s) restored. Reboot to start it.\n' "$(cat "$BOOTDIR/prev.tag" 2>/dev/null || echo unknown)"
-}
-
-# Older boot images lose the mobile downlink for good when the IPA goes idle and fails to power off
-# (docs/FINDINGS.md 32) - after about two quiet minutes, which the unpacking alone takes. A packet every few seconds
-# keeps it from going idle while the update runs (two targets, one of them reachable from mainland China).
-keepalive_start() {
-    have ping || return 0
-    ( while :; do ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 & ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; sleep 3; done ) &
-    KEEPALIVE=$!
-}
-keepalive_stop() { [ -n "${KEEPALIVE:-}" ] && kill "$KEEPALIVE" 2>/dev/null; KEEPALIVE=; }
-offline_hint() {
-    printf 'If this device ran for a while without traffic, older boot images can lose mobile data\n' >&2
-    printf 'until the next boot: reboot, then run mu300-update apply right away.\n' >&2
-}
-
-# While the update unpacks and writes boot_b, mobile data is left alone: the watchdog of the connection would
-# otherwise redial (AT commands, the IPA brought down and up) in the middle of it. The connection stays as it is.
-pause_data() {
-    DATA_PAUSED=
-    if have systemctl && systemctl -q is-active mu300-mobile-data-watch 2>/dev/null; then
-        systemctl stop mu300-mobile-data-watch && DATA_PAUSED=1
-    fi
-}
-resume_data() {
-    [ -n "${DATA_PAUSED:-}" ] || return 0
-    DATA_PAUSED=
-    systemctl start mu300-mobile-data-watch 2>/dev/null || true
 }
 
 apply() {
     mounted_disk
     tag=${MU300_RELEASE:-$(latest_release)}
-    [ -n "$tag" ] || { offline_hint; die "could not reach GitHub (is the device online?)"; }
-    # The release's own updater does the update when it differs from this one (releases from v2026.09.28 on
-    # carry it): fixes to the update itself then reach a device before the update runs, not one update later.
-    # $0 is usually the link in /usr/local/bin: the file it points to is replaced, never the link (a file there
-    # would be kept by every later update, with usr/local, and hide the updater of the system)
-    self=$(readlink -f "$0" 2>/dev/null || echo "$0")
-    if [ -z "${MU300_SELF_UPDATED:-}" ] && fetch_verified "$tag" mu300-update 2>/dev/null &&
-        ! cmp -s "$STAGE/mu300-update" "$self" && sh -n "$STAGE/mu300-update"; then
-        printf 'continuing with the mu300-update of %s\n' "$tag"
-        keepalive_stop
-        cp "$STAGE/mu300-update" "$self.new" && chmod 755 "$self.new" && mv -f "$self.new" "$self" 2>/dev/null || true
-        MU300_SELF_UPDATED=1 MU300_RELEASE=$tag exec sh "$STAGE/mu300-update" apply "$@"
-    fi
+    [ -n "$tag" ] || die "could not reach GitHub (is the device online?)"
     list=$*
     [ -n "$list" ] || list=$(installed_systems)
     BOOT_CHANGED=
     SYSTEM_CHANGED=
-    todo=
     for os in $list; do
         case $os in ubuntu|openwrt) ;; *) die "unknown system '$os'" ;; esac
-        [ -d "$DISK/$os" ] || die "$os is not installed"
         # already there: an older mu300-update installed this release's system, and this run is for the boot image
         if [ "$(cat "$DISK/$os$VERSION_FILE" 2>/dev/null)" = "$tag" ] && [ -z "${MU300_FORCE:-}" ]; then
             printf '%s: already %s\n' "$os" "$tag"
             continue
         fi
-        is_root "$DISK/$os.old" && die "$os was updated already and is still running the old copy: reboot first"
-        todo="$todo $os"
-    done
-
-    # Everything is downloaded and checked first, and only then is anything changed. Older boot images can lose
-    # the mobile downlink after two quiet minutes (docs/FINDINGS.md 32): a download that followed the minutes of
-    # unpacking hung there, and a device that reset in the middle of writing boot_b could only start Android.
-    say "downloading $tag"
-    free=$(df -k "$DISK" | awk 'NR==2 {print $4}')
-    [ "$free" -gt $((1000000 + 1000000 * $(echo $todo | wc -w))) ] || die "not enough free space on the Linux partition (about 1 GB, plus 1 GB for every system to update)"
-    for os in $todo; do
-        fetch_verified "$tag" "mu300-$os-rootfs.tar.gz" || { offline_hint; die "nothing was changed; run mu300-update apply again to continue the download"; }
-    done
-    boot_asset=
-    if [ -z "${MU300_KERNEL_BUNDLE:-}" ]; then
-        boot_asset=$(kernel_asset)
-        fetch_verified "$tag" "$boot_asset"; r=$?
-        # a release without this bundle leaves the boot image alone (boot_update says so); anything else stops here
-        [ "$r" = 0 ] || [ "$r" = 2 ] || { offline_hint; die "nothing was changed; run mu300-update apply again to continue the download"; }
-    fi
-    echo "all files are here and verified; from now on the network is not needed"
-
-    pause_data
-    for os in $todo; do
         apply_one "$os" "$tag"
         SYSTEM_CHANGED=1
     done
     # the kernel goes with the modules of the systems just installed, so it follows them
     boot_ok=1
     boot_update "$tag" || { boot_ok=; printf '\nThe boot image was not updated (see above)%s.\n' "${SYSTEM_CHANGED:+; the systems were}"; }
-    resume_data
-    [ -z "$boot_ok" ] || rm -rf "$STAGE"
     if [ -z "$SYSTEM_CHANGED$BOOT_CHANGED" ]; then
         [ -n "$boot_ok" ] || return 1
         printf '\nNothing to do.\n'
@@ -566,13 +432,10 @@ rollback() {
     for os in $list; do
         [ -d "$DISK/$os.old" ] || { printf '%s: no previous version kept\n' "$os"; continue; }
         sync
-        is_root "$DISK/$os.old" && { printf '%s: the previous version is the one running now: reboot first\n' "$os"; continue; }
-        is_root "$DISK/$os.broken" || rm -rf "$DISK/$os.broken"
+        rm -rf "$DISK/$os.broken"
         mv "$DISK/$os" "$DISK/$os.broken" || die "$os: could not move the current system aside"
         mv "$DISK/$os.old" "$DISK/$os" || { mv "$DISK/$os.broken" "$DISK/$os"; die "$os: rollback failed (current system restored)"; }
-        # the running system is still in use until the reboot: its copy stays as <os>.broken for now (the next
-        # rollback or "clean" after the reboot removes it)
-        is_root "$DISK/$os.broken" || rm -rf "$DISK/$os.broken"
+        rm -rf "$DISK/$os.broken"
         sync
         printf '%s: rolled back to %s\n' "$os" "$(cat "$DISK/$os$VERSION_FILE" 2>/dev/null || echo unknown)"
         done_any=1
@@ -583,17 +446,15 @@ rollback() {
 clean() {
     mounted_disk
     for os in ubuntu openwrt; do
-        if is_root "$DISK/$os.old"; then printf '%s: the previous version is still running: reboot first\n' "$os"
-        elif [ -d "$DISK/$os.old" ]; then rm -rf "$DISK/$os.old" && printf '%s: previous version deleted\n' "$os"; fi
-        is_root "$DISK/$os.broken" || rm -rf "$DISK/$os.broken"
+        [ -d "$DISK/$os.old" ] || continue
+        rm -rf "$DISK/$os.old"
+        printf '%s: previous version deleted\n' "$os"
     done
-    rm -rf "$STAGE"
     sync
     df -h "$DISK" | tail -1
 }
 
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
-case ${1:-check} in apply|boot|kernel) keepalive_start; trap 'keepalive_stop; resume_data' EXIT; trap 'exit 130' INT TERM HUP ;; esac
 case ${1:-check} in
     check) check ;;
     apply) shift; apply "$@" ;;
@@ -601,9 +462,8 @@ case ${1:-check} in
           boot_update "$t" || exit 1; [ -n "${BOOT_CHANGED:-}" ] && printf '\nReboot to start the new kernel.\n' ;;
     rollback) shift; rollback "$@" ;;
     rollback-boot) rollback_boot ;;
-    kernel) shift; kernel_cmd "$@" ;;
     accounts) accounts ;;
     clean) clean ;;
-    -h|--help|help) sed -n '2,11s/^# \{0,1\}//p' "$0" ;;
-    *) echo "usage: mu300-update check|apply [os...]|boot|kernel [5.4|6.18]|rollback [os]|rollback-boot|clean" >&2; exit 2 ;;
+    -h|--help|help) sed -n '2,10s/^# \{0,1\}//p' "$0" ;;
+    *) echo "usage: mu300-update check|apply [os...]|boot|rollback [os]|rollback-boot|clean" >&2; exit 2 ;;
 esac
