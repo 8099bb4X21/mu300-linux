@@ -60,8 +60,7 @@ need `adb` on your computer. Getting to that point is not part of this project.
 * A ZTE F50 / MU300, rooted, connected by USB, with USB debugging enabled.
 * A computer with `adb` and Python 3:
   * **macOS or Linux:** also `lz4` and `curl` (both usually already installed).
-  * **Windows 10/11:** PowerShell, plus `pip install lz4`. Use `install.ps1` / `uninstall.ps1` below, or
-    `install.cmd` / `uninstall.cmd` from cmd.exe (no execution-policy change needed).
+  * **Windows 10/11:** PowerShell, plus `pip install lz4`. Use `install.ps1` / `uninstall.ps1` below.
 * About 15 minutes.
 
 ## Install
@@ -82,7 +81,6 @@ repository: it contains your IMEI.
 ```sh
 ./install.sh --check          # macOS / Linux
 .\install.ps1 -Check          # Windows (PowerShell)
-install.cmd -Check            # Windows (cmd)
 ```
 
 It reports the storage size, where Android's partitions end and how much free space follows them. On the 64 GB
@@ -97,8 +95,7 @@ neither case, stop and open an issue with what `--check` printed; they identify 
 
 ```sh
 ./install.sh                  # macOS / Linux
-.\install.ps1                 # Windows (PowerShell)
-install.cmd                   # Windows (cmd)
+.\install.ps1                 # Windows
 ```
 
 It asks a few questions (Ubuntu, OpenWrt or both; which one boots; a password), downloads the ready-made images,
@@ -195,8 +192,7 @@ With the device back in Android:
 
 ```sh
 ./uninstall.sh                # macOS / Linux
-.\uninstall.ps1               # Windows (PowerShell)
-uninstall.cmd                 # Windows (cmd)
+.\uninstall.ps1               # Windows
 ```
 
 It makes Android the boot system again, restores the second boot partition and erases the Linux filesystem. Your
@@ -290,7 +286,7 @@ and would overwrite the device's storage. A normal `apk upgrade` is fine, except
 | Path | Contents |
 |---|---|
 | `install.sh`, `uninstall.sh` | installer and remover for macOS/Linux |
-| `install.ps1`, `uninstall.ps1` | the same for Windows (PowerShell); `install.cmd`, `uninstall.cmd` launch them from cmd.exe |
+| `install.ps1`, `uninstall.ps1` | the same for Windows (PowerShell) |
 | `kernel/` | kernel build environment, config, patches |
 | `boot/` | initramfs `init`, boot image builder, slot handling |
 | `rootfs/` | Ubuntu image: `Dockerfile`, `assemble.sh`, services and scripts in `overlay/` |

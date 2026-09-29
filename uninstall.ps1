@@ -17,23 +17,17 @@ $MU300_IP = '192.168.77.1'
 
 function Say($m) { Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Die($m) { Write-Host "`nERROR: $m" -ForegroundColor Red; exit 1 }
-# Windows PowerShell 5.1 turns every stderr line of a native command into an ErrorRecord once stderr is
-# redirected, and with ErrorActionPreference Stop that aborts the script (adb's "daemon not running",
-# "no devices", push progress). Run such commands with Continue and drop their stderr.
-function Quiet([scriptblock]$Cmd) { $ErrorActionPreference = 'Continue'; & $Cmd 2>$null }
-# [string]: with no device adb prints nothing, and `-notmatch` on that empty result is falsy, not true
-function AdbState { [string](Quiet { adb get-state }) }
 function Ask($question, $default) {
     $a = Read-Host "$question [$default]"
     if ([string]::IsNullOrWhiteSpace($a)) { return $default } else { return $a.Trim() }
 }
-function SuDo($cmd) { (Quiet { adb shell "su -c '$cmd'" }) -join "`n" -replace "`r", '' }
+function SuDo($cmd) { (& adb shell "su -c '$cmd'" 2>$null) -join "`n" -replace "`r", '' }
 # see install.ps1: `su -c` may run on a pty that rewrites LF as CRLF, so binaries are written on the device
 # and pulled rather than streamed (issue #2)
 function SuDoToFile($cmd, $path) {
     $dev = '/data/local/tmp/mu300-pull.bin'
     & adb shell "su -c '$cmd > $dev'" | Out-Null
-    Quiet { adb pull $dev "$path" } | Out-Null
+    & adb pull $dev "$path" 2>$null | Out-Null
     & adb shell "su -c 'rm -f $dev'" | Out-Null
 }
 $script:PyExe = $null
@@ -51,7 +45,7 @@ function Hex32 { (SuDo 'dd if=/dev/block/by-name/misc bs=1 skip=2048 count=32 2>
 
 Say 'Checking host tools and device'
 if (-not (Get-Command adb -ErrorAction SilentlyContinue)) { Die 'adb not found' }
-if ((AdbState) -notmatch 'device') {
+if ((& adb get-state 2>$null) -notmatch 'device') {
     $linux = Test-NetConnection -ComputerName $MU300_IP -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue
     if (-not $linux) { Die 'no adb device (boot Android, enable USB debugging)' }
     Say 'The device is running MU300 Linux, not Android'
@@ -71,10 +65,10 @@ if ((AdbState) -notmatch 'device') {
     }
     Write-Host '  waiting for Android'
     for ($i = 0; $i -lt 60; $i++) {
-        if ((AdbState) -match 'device') { break }
+        if ((& adb get-state 2>$null) -match 'device') { break }
         Start-Sleep 5
     }
-    if ((AdbState) -notmatch 'device') { Die 'the device did not come back as Android' }
+    if ((& adb get-state 2>$null) -notmatch 'device') { Die 'the device did not come back as Android' }
 }
 if ((SuDo 'id -u') -ne '0') { Die 'su does not work on the device' }
 $model = "$(SuDo 'getprop ro.product.model') / $(SuDo 'getprop ro.product.device')"
