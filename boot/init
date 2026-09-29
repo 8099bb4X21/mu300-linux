@@ -170,10 +170,6 @@ setup_usb_gadget() {
     echo 0x0525 > "$g/idVendor"
     echo 0xa4a1 > "$g/idProduct"
     echo 0x0200 > "$g/bcdUSB"
-    # Windows asks for the MS OS descriptors (below) once per VID/PID/bcdDevice and caches the answer, "none"
-    # included: the default bcdDevice follows the kernel version and was cached as "none" by every PC that met
-    # the earlier gadget. A value of our own makes them ask again. Change it whenever the descriptors change.
-    echo 0x0301 > "$g/bcdDevice"
     # Miscellaneous / IAD: the network and the ACM functions each span two interfaces, and without this device class
     # Windows' composite driver ignores their association descriptors and hands out the interfaces one by one, so a
     # class driver never sees its function as a whole
