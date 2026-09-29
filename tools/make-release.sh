@@ -14,7 +14,6 @@ REPO=${MU300_REPO:-dikeckaan/mu300-linux}
 D=$TOP/release/$TAG
 IN=$D/inputs
 [ -f "$KOUT/Image" ] && ls "$KOUT"/modules/*.ko >/dev/null 2>&1 || { echo "kernel outputs missing in $KOUT (kernel/build-all.sh)" >&2; exit 1; }
-ls "$KOUT"/modules-u30air/*.ko >/dev/null 2>&1 || { echo "U30 Air modules missing in $KOUT/modules-u30air (kernel/build-all.sh)" >&2; exit 1; }
 [ -z "$(git -C "$TOP" status --porcelain)" ] || { echo "commit your changes first: the release must match a commit" >&2; exit 1; }
 rm -rf "$D" && mkdir -p "$IN/out" "$IN/tools/logdw" "$IN/tools/bt-init" "$IN/tools/gpu"
 
@@ -23,12 +22,10 @@ cp -R "$KOUT/modules" "$IN/out/modules"
 cp "$KOUT/modules.builtin" "$KOUT/modules.builtin.modinfo" "$IN/out/"
 docker build -q -t mu300-kbuild "$TOP/kernel" >/dev/null
 docker build -q -t mu300-ubuntu:24.04 "$TOP/rootfs" >/dev/null
-docker build -q --build-arg BASE=ubuntu:26.04 -t mu300-ubuntu:26.04 "$TOP/rootfs" >/dev/null
 docker run --rm mu300-ubuntu:24.04 cat /bin/busybox > "$IN/busybox"; chmod +x "$IN/busybox"
 docker run --rm -v "$TOP/tools":/src:ro -v "$IN/tools":/o mu300-kbuild sh -c '
   gcc -O2 -static -o /o/logdw/logdw /src/logdw/logdw.c &&
-  gcc -O2 -static -o /o/bt-init/mu300-bt-init /src/bt-init/mu300-bt-init.c &&
-  mkdir -p /o/keys && gcc -O2 -static -o /o/keys/mu300-keys /src/keys/mu300-keys.c'
+  gcc -O2 -static -o /o/bt-init/mu300-bt-init /src/bt-init/mu300-bt-init.c'
 # cltest links against Android's libraries at build time only; use a local build when there is one
 [ -f "$TOP/tools/gpu/cltest" ] && cp "$TOP/tools/gpu/cltest" "$IN/tools/gpu/cltest"
 sh "$TOP/tools/fetch-sing-box.sh" "$IN/sing-box"
@@ -37,44 +34,20 @@ sh "$TOP/tools/fetch-xray.sh" "$IN"
 echo "==> kernel bundle"
 K=$D/kernel && mkdir -p "$K"
 cp -R "$IN/out/modules" "$K/modules"
-cp -R "$KOUT/modules-u30air" "$K/modules-u30air"
-# the devices this bundle runs on (mu300-update and the installers check it)
-echo "f50 u30air" > "$K/devices"
 cp "$KOUT/Image" "$KOUT/modules.builtin" "$KOUT/modules.builtin.modinfo" "$IN/busybox" "$IN/tools/logdw/logdw" "$K/"
-# the device-independent part of the boot ramdisk, which mu300-update puts behind the device's own ramdisk to update
-# the kernel and the boot image without a computer (same builder and file list as install.sh)
-python3 "$TOP/boot/build-boot-image.py" --generic-ramdisk --modules "$IN/out/modules" --busybox "$IN/busybox" \
-  --device-modules "u30air=$KOUT/modules-u30air" \
-  --logdw "$IN/tools/logdw/logdw" --ueventd-perms "$TOP/android-vendor/ueventd-perms.sh" \
-  --out "$K/ramdisk-generic.lz4" >/dev/null
 tar -C "$K" -czf "$D/mu300-kernel.tar.gz" .
 rm -rf "$K"
 
-echo "==> mainline kernel bundles"
-# "mu300-update kernel 6.18|7.2": built by upstream/build.sh + build-modules.sh at this commit - 6.18 into
-# upstream/out, 7.2 into upstream/out-7.2 (OUTDIR=out-7.2 KV=7.2.x); each build must be the version its name says
-for kv in 6.18:out 7.2:out-7.2; do
-    v=${kv%%:*}; o=$TOP/upstream/${kv#*:}
-    [ -f "$o/Image" ] || { echo "$o/Image missing (upstream/build.sh, build-modules.sh)" >&2; exit 1; }
-    rel=$(strings "$o/Image" | sed -n 's/^Linux version \([^ ]*\) .*/\1/p' | head -1)
-    case $rel in "$v".*) ;; *) echo "$o holds $rel, not $v" >&2; exit 1 ;; esac
-    MU300_UPSTREAM_OUT=$o sh "$TOP/upstream/make-bundle.sh" "$D/mu300-kernel-$v.tar.gz" "$D/mu300-kernel.tar.gz"
-done
-
-# 24.04 keeps the name it always had (older installers and mu300-update ask for it); 26.04 has its own
-for u in 24.04 26.04; do
-    echo "==> Ubuntu $u root filesystem (generic)"
-    B=$D/ubuntu-build && rm -rf "$B" && mkdir -p "$B"
-    tar -C "$TOP/rootfs" --exclude ./base.tar --exclude './*.tar.gz' -cf - . | tar -xf - -C "$B"
-    cid=$(docker create mu300-ubuntu:$u /bin/true); docker export "$cid" > "$B/base.tar"; docker rm "$cid" >/dev/null
-    cltest=""; [ -f "$IN/tools/gpu/cltest" ] && cltest="-v $IN/tools/gpu/cltest:/cltest:ro"
-    # shellcheck disable=SC2086
-    docker run --rm -v "$B":/w -v "$IN/out/modules":/kmods:ro -v "$IN/out":/kout:ro -v "$IN/tools/logdw/logdw":/logdw:ro \
-      -v "$IN/tools/bt-init/mu300-bt-init":/bt-init:ro -v "$IN/tools/keys/mu300-keys":/keys:ro -v "$IN/sing-box":/sing-box:ro -v "$IN/xray":/xray:ro -v "$IN/hev-socks5-tunnel":/hev-socks5-tunnel:ro $cltest \
-      -e MU300_VERSION="$TAG" mu300-ubuntu:$u bash /w/assemble.sh >/dev/null
-    out=mu300-ubuntu-rootfs.tar.gz; [ $u = 24.04 ] || out=mu300-ubuntu-$u-rootfs.tar.gz
-    mv "$B/mu300-ubuntu-$u-rootfs.tar.gz" "$D/$out"; rm -rf "$B"
-done
+echo "==> Ubuntu root filesystem (generic)"
+B=$D/ubuntu-build && mkdir -p "$B"
+tar -C "$TOP/rootfs" --exclude ./base.tar --exclude './*.tar.gz' -cf - . | tar -xf - -C "$B"
+cid=$(docker create mu300-ubuntu:24.04 /bin/true); docker export "$cid" > "$B/base.tar"; docker rm "$cid" >/dev/null
+cltest=""; [ -f "$IN/tools/gpu/cltest" ] && cltest="-v $IN/tools/gpu/cltest:/cltest:ro"
+# shellcheck disable=SC2086
+docker run --rm -v "$B":/w -v "$IN/out/modules":/kmods:ro -v "$IN/out":/kout:ro -v "$IN/tools/logdw/logdw":/logdw:ro \
+  -v "$IN/tools/bt-init/mu300-bt-init":/bt-init:ro -v "$IN/sing-box":/sing-box:ro -v "$IN/xray":/xray:ro -v "$IN/hev-socks5-tunnel":/hev-socks5-tunnel:ro $cltest \
+  -e MU300_VERSION="$TAG" mu300-ubuntu:24.04 bash /w/assemble.sh >/dev/null
+mv "$B/mu300-ubuntu-24.04-rootfs.tar.gz" "$D/mu300-ubuntu-rootfs.tar.gz"; rm -rf "$B"
 
 echo "==> OpenWrt root filesystem (generic)"
 MU300_INPUTS="$IN" MU300_VERSION="$TAG" sh "$TOP/openwrt/build-rootfs.sh" mu300-openwrt-release.tar.gz >/dev/null
@@ -82,7 +55,7 @@ mv "$TOP/openwrt/mu300-openwrt-release.tar.gz" "$D/mu300-openwrt-rootfs.tar.gz"
 
 echo "==> audit"
 fail=0
-for a in mu300-kernel mu300-kernel-6.18 mu300-kernel-7.2 mu300-ubuntu-rootfs mu300-ubuntu-26.04-rootfs mu300-openwrt-rootfs; do
+for a in mu300-kernel mu300-ubuntu-rootfs mu300-openwrt-rootfs; do
     bad=$(tar -tzf "$D/$a.tar.gz" | sed 's|^\./||' | grep -E \
         -e '(^|/)lib/firmware/(wcnmodem|gnssmodem|wifi_board_config|bt_configure)' \
         -e '^opt/mu300/android/.+' -e '__properties__|dev-properties' \
@@ -95,9 +68,7 @@ for a in mu300-kernel mu300-kernel-6.18 mu300-kernel-7.2 mu300-ubuntu-rootfs mu3
 done
 [ $fail = 0 ] || { echo "audit failed, nothing published" >&2; exit 1; }
 rm -rf "$IN"
-# the updater itself: an older mu300-update fetches this one and continues with it
-cp "$TOP/rootfs/overlay/opt/mu300/bin/mu300-update" "$D/mu300-update"
-(cd "$D" && { shasum -a 256 *.tar.gz mu300-update 2>/dev/null || sha256sum *.tar.gz mu300-update; } > SHA256SUMS)
+(cd "$D" && { shasum -a 256 *.tar.gz 2>/dev/null || sha256sum *.tar.gz; } > SHA256SUMS)
 ls -la "$D"
 
 [ "$PUBLISH" = --publish ] || { echo "built release/$TAG (run again with --publish to upload)"; exit 0; }
@@ -106,18 +77,13 @@ kernel_rev=$(sed -n 's/^KERNEL_REV=//p' "$TOP/kernel/build-all.sh")
 modules_rev=$(sed -n 's/^MODULES_REV=//p' "$TOP/kernel/build-all.sh")
 notes=$(mktemp)
 cat > "$notes" <<EOF
-Prebuilt images for \`./install.sh\` (ZTE F50 / MU300 and ZTE U30 Air; the installer recognises which). Check your device
-first with \`./install.sh --check\`.
+Prebuilt images for \`./install.sh\` (ZTE F50 / MU300). Check your device first with \`./install.sh --check\`.
 
 | file | contents |
 |---|---|
-| mu300-kernel.tar.gz | Linux 5.4.254 \`Image\` and modules (with the U30 Air's own in \`modules-u30air/\`), static busybox and logdw for the boot image, and the generic boot ramdisk segment \`mu300-update\` uses |
-| mu300-kernel-6.18.tar.gz | mainline Linux 6.18 (longterm) for \`mu300-update kernel 6.18\`: \`Image\`, modules, generic boot ramdisk segment |
-| mu300-kernel-7.2.tar.gz | mainline Linux 7.2 (newest stable) for \`mu300-update kernel 7.2\`: the same parts |
+| mu300-kernel.tar.gz | Linux 5.4.254 \`Image\` and modules, static busybox and logdw for the boot image |
 | mu300-ubuntu-rootfs.tar.gz | Ubuntu 24.04 LTS root filesystem |
-| mu300-ubuntu-26.04-rootfs.tar.gz | Ubuntu 26.04 LTS root filesystem |
 | mu300-openwrt-rootfs.tar.gz | OpenWrt 25.12.5 root filesystem |
-| mu300-update | the on-device updater of this release (\`mu300-update apply\` switches to it before it changes anything) |
 
 The images contain **no proprietary files**: the installer pulls the Wi-Fi/Bluetooth firmware and the Android
 modem/GPU userspace from your own device and adds them during installation.
@@ -130,9 +96,9 @@ sing-box from https://github.com/SagerNet/sing-box/releases, Xray from https://g
 hev-socks5-tunnel from https://github.com/heiher/hev-socks5-tunnel/releases.
 EOF
 if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
-    gh release upload "$TAG" -R "$REPO" --clobber "$D"/*.tar.gz "$D/mu300-update" "$D/SHA256SUMS"
+    gh release upload "$TAG" -R "$REPO" --clobber "$D"/*.tar.gz "$D/SHA256SUMS"
 else
     gh release create "$TAG" -R "$REPO" --target "$commit" --title "MU300 Linux $TAG" --notes-file "$notes" \
-      "$D"/*.tar.gz "$D/mu300-update" "$D/SHA256SUMS"
+      "$D"/*.tar.gz "$D/SHA256SUMS"
 fi
 rm -f "$notes"

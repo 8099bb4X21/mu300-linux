@@ -1,21 +1,23 @@
 //<script>
 /*
- * 【插件】mu300 系统切换器 v2
+ * 【插件】mu300 系统切换器
  * 运行环境：设备 Android 侧的网页管理面板（与飞猫系列插件同一宿主）
  *
- * 功能：一键从 Android 切换到 Linux（OpenWrt）。
- * 方法：运行时检测当前槽位（getprop ro.boot.slot_suffix），推导 Linux 在
- *       哪个槽；从 misc 分区读取现有 32 字节 bootloader_control 块，
- *       动态构建目标槽的引导块（改 slot_suffix 和元数据字节，重算 CRC32），
- *       回读校验通过后才重启。
+ * 功能：一键从 Android 切换到 Linux（当前 boot-os 指向的系统，本机为 OpenWrt）。
+ * 方法：向 misc 分区 2048 偏移写入 32 字节 slot-b 引导块（与本仓库
+ *       boot/android-boot-linux.sh、mu300-next-boot linux 使用的是同一份块数据），
+ *       回读校验通过后才重启，校验失败绝不重启。
  *
- * v2：不再硬编码 slot 字母——任意 A/B 布局都能用。
+ * 安全设计：
+ *   1. 写入前先读 ro.boot.slot_suffix，仅当 Android 正运行于 slot _a 时才允许
+ *      切换（本机布局 Android=a / Linux=b；其它布局直接拒绝，防止误写）。
+ *   2. 写入后回读 misc 并与期望的 32 字节逐字节比对，一致才 reboot。
+ *   3. 块数据 CRC 由 LK 校验，写坏的最坏结果是引导选择不变，不会变砖。
  */
 (() => {
+    // slot-b 试验引导块（tries=2）：本仓库 work/boot-linux-slotb.misc-slot-b-trial.bin 的字节
+    const BC_BLOCK_HEX = '5f62000042434142010200009e002f000000000000000000000000009bf8546d';
     const MISC_PATH = '/dev/block/by-name/misc';
-    const BC_OFFSET = 2048;
-    const ARMED_META = 0x2f;  // priority 15, tries 2, successful 0
-    const IDLE_META  = 0x9e;  // priority 14, tries 1, successful 1
 
     const run = async (command, timeout = 15000) => {
         try {
@@ -26,77 +28,37 @@
         }
     };
 
-    const readMisc = async () => {
+    const hexToPrintf = (hex) =>
+        hex.match(/../g).map((b) => '\\x' + b).join('');
+
+    const readSlot = async () => {
+        const r = await run('getprop ro.boot.slot_suffix');
+        return r.ok ? r.text : '';
+    };
+
+    const readMiscBlock = async () => {
         const r = await run(
-            `dd if=${MISC_PATH} bs=1 skip=${BC_OFFSET} count=32 2>/dev/null | od -An -tx1 -v | tr -d ' \\n'`
+            `dd if=${MISC_PATH} bs=1 skip=2048 count=32 2>/dev/null | od -An -tx1 -v | tr -d ' \\n'`
         );
         return r.ok ? r.text.replace(/[\r\n ]/g, '') : '';
-    };
-
-    const getAndroidSlot = async () => {
-        const r = await run('getprop ro.boot.slot_suffix');
-        const s = r.text.trim().replace(/_/g, '');
-        if (s === 'a' || s === 'b') return s;
-        // fallback: parse from misc's slot_suffix bytes
-        const misc = await readMisc();
-        if (misc.length >= 4) {
-            const suffix = misc.substring(0, 4);
-            if (suffix === '5f61') return 'a';
-            if (suffix === '5f62') return 'b';
-        }
-        return null;
-    };
-
-    // CRC-32 (IEEE 802.3, same as gzip) over a byte array
-    const crc32 = (bytes) => {
-        let c = 0xFFFFFFFF;
-        for (let i = 0; i < bytes.length; i++) {
-            c ^= bytes[i];
-            for (let k = 0; k < 8; k++) {
-                c = (c & 1) ? ((c >>> 1) ^ 0xEDB88320) : (c >>> 1);
-            }
-        }
-        return (c ^ 0xFFFFFFFF) >>> 0;
-    };
-
-    // Build a 32-byte bootloader_control block arming the Linux slot
-    const buildBlock = (liveHex, linuxSlot) => {
-        const bytes = [];
-        for (let i = 0; i < 64; i += 2) {
-            bytes.push(parseInt(liveHex.substring(i, i + 2), 16));
-        }
-        // slot_suffix at bytes 0-1: "_a" or "_b"
-        bytes[0] = 0x5f;
-        bytes[1] = linuxSlot === 'a' ? 0x61 : 0x62;
-        // metadata: byte 12 = slot a, byte 14 = slot b
-        const targetByte = linuxSlot === 'a' ? 12 : 14;
-        const otherByte  = linuxSlot === 'a' ? 14 : 12;
-        bytes[targetByte] = ARMED_META;
-        bytes[otherByte]  = IDLE_META;
-        // CRC32 over first 28 bytes, stored little-endian at bytes 28-31
-        const crc = crc32(bytes.slice(0, 28));
-        bytes[28] = crc & 0xff;
-        bytes[29] = (crc >> 8) & 0xff;
-        bytes[30] = (crc >> 16) & 0xff;
-        bytes[31] = (crc >> 24) & 0xff;
-        return bytes.map(b => b.toString(16).padStart(2, '0')).join('');
     };
 
     const btns = document.createElement('button');
     btns.textContent = '系统切换器';
     btns.onclick = () => {
         const { el, close } = createFixedToast('mu300_os_switch', `
-            <div style="pointer-events:all;width:80vw;max-width:320px">
+            <div style="pointer-events:all;width:80vw;max-width:300px">
                 <div class="title" style="margin:0">系统切换器</div>
                 <div style="margin:6px 0;font-size:.65rem;color:var(--dark-text-sub-color,#999)">
                     切换到 Linux（OpenWrt）需要重启设备
                 </div>
                 <div style="margin:6px 0;font-size:.65rem">
-                    <span id="mu300_os_slot" style="font-family:monospace">检测中…</span>
+                    当前槽位：<span id="mu300_os_slot" style="font-family:monospace">检测中…</span>
                 </div>
-                <div style="margin:10px 0;display:flex;justify-content:space-around" class="mu300_os_content"></div>
+                <div style="margin:10px 0;display:flex;justify-content:space-around" class="mu300_os_content">
+                </div>
                 <div style="text-align:right">
-                    <button style="font-size:.64rem" id="mu300_os_close">${t('close_btn')}</button>
+                    <button style="font-size:.64rem" id="mu300_os_close" data-i18n="close_btn">${t('close_btn')}</button>
                 </div>
             </div>
         `);
@@ -109,60 +71,52 @@
         if (!closeBtn) { close(); return; }
         closeBtn.onclick = () => close();
 
-        const lockUI = (lock) => {
+        const lockUI = (lock, except) => {
             [switchBtn, rebootBtn].forEach((b) => {
+                if (b === except) return;
                 b.disabled = lock;
                 b.style.background = lock ? 'var(--dark-btn-disabled-color)' : '';
             });
         };
 
-        switchBtn.textContent = '切换到 Linux';
+        switchBtn.textContent = '切换到 OpenWrt';
         switchBtn.onclick = async () => {
-            lockUI(true);
-            createToast('正在检测槽位…');
-            const androidSlot = await getAndroidSlot();
-            if (!androidSlot) {
-                createToast('无法确定当前槽位，已取消', 'red');
+            lockUI(true, switchBtn);
+            switchBtn.disabled = true;
+            createToast('正在检查槽位…');
+            // 安全检查：Android 必须正运行于 slot a（本机布局 a=Android / b=Linux）
+            const slot = await readSlot();
+            if (slot !== '_a') {
+                createToast(`槽位布局异常（${slot || '未知'}），为防误写已取消；请反馈此值`, 'red');
                 lockUI(false);
                 return;
             }
-            const linuxSlot = androidSlot === 'a' ? 'b' : 'a';
-            createToast(`Android 在 slot ${androidSlot}，Linux 在 slot ${linuxSlot}，正在构建引导块…`);
-
-            const live = await readMisc();
-            if (live.length !== 64) {
-                createToast('读取 misc 失败，未做任何更改', 'red');
-                lockUI(false);
-                return;
-            }
-
-            const newBlock = buildBlock(live, linuxSlot);
-            const printfArg = newBlock.match(/../g).map(b => '\\x' + b).join('');
+            createToast('正在写入引导块…');
             const r = await run(
-                `printf '${printfArg}' | dd of=${MISC_PATH} bs=1 seek=${BC_OFFSET} conv=notrunc && sync`
+                `printf '${hexToPrintf(BC_BLOCK_HEX)}' | dd of=${MISC_PATH} bs=1 seek=2048 conv=notrunc && sync`
             );
             if (!r.ok) {
                 createToast('引导块写入失败，未重启', 'red');
                 lockUI(false);
                 return;
             }
-
             createToast('正在校验…');
-            const back = await readMisc();
-            if (back !== newBlock) {
+            const back = await readMiscBlock();
+            if (back !== BC_BLOCK_HEX) {
                 createToast('校验不一致，已放弃（设备未重启）', 'red');
                 lockUI(false);
                 return;
             }
-            createToast(`校验通过，即将重启进入 Linux（slot ${linuxSlot}）…`, 'green');
+            createToast('校验通过，即将重启进入 OpenWrt…', 'green');
             setTimeout(async () => {
                 await run('reboot', 3000);
+                createToast('重启中…', 'green');
             }, 1500);
         };
 
         rebootBtn.textContent = '仅重启';
         rebootBtn.onclick = async () => {
-            lockUI(true);
+            lockUI(true, rebootBtn);
             createToast('重启中…');
             await run('reboot', 3000);
         };
@@ -170,12 +124,11 @@
         content.appendChild(switchBtn);
         content.appendChild(rebootBtn);
 
+        // 打开面板即检测当前槽位并显示（非 _a 时禁用切换按钮）
         (async () => {
-            const s = await getAndroidSlot();
-            slotEl.textContent = s
-                ? `Android: slot ${s} · Linux: slot ${s === 'a' ? 'b' : 'a'}`
-                : '槽位检测失败';
-            if (!s) {
+            const slot = await readSlot();
+            slotEl.textContent = slot || '读取失败';
+            if (slot !== '_a') {
                 switchBtn.disabled = true;
                 switchBtn.style.background = 'var(--dark-btn-disabled-color)';
                 slotEl.style.color = 'var(--red-color,#E25555)';

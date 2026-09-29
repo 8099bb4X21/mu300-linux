@@ -8,13 +8,9 @@ filesystems instead of downloading them, or if you maintain the project. See [`.
 ```
 LK (slot b, tries=2) ─► custom 5.4 kernel + vendor_boot DTB
    └─► initramfs /init (boot/init)
-         ├─ load 85 modules in a fixed order (boot/module-order.txt)
+         ├─ load 86 modules in a fixed order (boot/module-order.txt)
          ├─ misc: restore slot a, unless the rootfs says default-boot=linux
-<<<<<<< HEAD
          ├─ bind USB gadget: NCM (usb0 up immediately) + ACM console
-=======
-         ├─ bind USB gadget: NCM, else ECM (usb0 up immediately) + ACM console; MU300_USBNET="rndis ncm" adds RNDIS first
->>>>>>> 4403f377c5fdf2ac052e90d3267083324ec8afbe
          ├─ losetup -o 27762098176 /dev/mmcblk0 → ext4 "mu300root" (free space after userdata)
          └─ switch_root → systemd
                ├─ mu300-vendor   : Android modem_control in a chroot (disarms PM watchdog, boots modem)

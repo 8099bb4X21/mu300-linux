@@ -8,8 +8,6 @@
 # Android, so take a full backup with tools/backup-device.sh first.
 #   ./install.sh                 install Ubuntu, OpenWrt or both from the prebuilt release images
 #   ./install.sh --build         build kernel outputs/root filesystems locally instead (see README "Build and run")
-# It first brings this copy of the project up to date with GitHub (MU300_NO_SELF_UPDATE=1 skips that), and asks for
-# the language (MU300_LANG=en|tr|zh skips that).
 #
 # Prebuilt: needs adb, python3, lz4, curl. Downloads the images of the newest release (or $MU300_RELEASE) and checks
 # their sha256.
@@ -36,15 +34,11 @@ for a in "$@"; do
         *) echo "unknown option $a (see --help)" >&2; exit 2 ;;
     esac
 done
-. "$TOP/tools/i18n.sh"
-choose_language
+
 say() { printf '\n==> %s\n' "$*"; }
-die() { printf '\n%s %s\n' "$(t 'ERROR:' 2>/dev/null || echo ERROR:)" "$*" >&2; exit 1; }
-ask() { # ask VAR "question" default   (the question already translated; yes/no in any language count)
-    printf '%s [%s]: ' "$2" "$(t "$3")"; read -r _a; [ -n "$_a" ] || _a=$3; _a=$(normalize_answer "$_a"); eval "$1=\$_a"; }
-# first of all, make this the newest installer (it restarts itself when it changed)
-. "$TOP/tools/self-update.sh"
-self_update "$0" "$@"
+die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+ask() { # ask VAR "question" default
+    printf '%s [%s]: ' "$2" "$3"; read -r _a; [ -n "$_a" ] || _a=$3; eval "$1=\$_a"; }
 # fetch URL OUT: GitHub's release CDN throttles a single connection hard in some regions (measured 0.2 MB/s
 # against a 180 Mbit/s line), so pull the file as parallel ranges and fall back to one stream when that fails.
 fetch() {
@@ -70,7 +64,7 @@ fetch() {
         [ "$(wc -c < "$_o" | tr -d ' ')" = "$_len" ] && return
     fi
     rm -f "$_o".part*
-    echo "  $(t 'parallel download failed, retrying as a single stream')"
+    echo "  parallel download failed, retrying as a single stream"
     curl -fL --retry 3 --progress-bar -o "$_o" "$_u"
 }
 
@@ -96,14 +90,13 @@ su_do() { adb shell "su -c '$1'" </dev/null | tr -d '\r'; }
 # su does; the maintainer's does not, which is why this survived so long.
 dev_pull() {  # dev_pull DEVICE_PATH LOCAL_PATH   (DEVICE_PATH may be a block device)
     su_do "cat $1 > /data/local/tmp/mu300-pull.bin" >/dev/null
-    # (|| true: under set -e a failed pull ended the installer here, without the message below)
-    adb pull /data/local/tmp/mu300-pull.bin "$2" >/dev/null 2>&1 || true
+    adb pull /data/local/tmp/mu300-pull.bin "$2" >/dev/null 2>&1
     su_do 'rm -f /data/local/tmp/mu300-pull.bin' >/dev/null
-    [ -s "$2" ] || die "$(t 'could not read {1} from the device' "$1")"
+    [ -s "$2" ] || die "could not read $1 from the device"
 }
 
 # ---------------------------------------------------------------- preflight
-say "$(t 'Checking host tools and device')"
+say "Checking host tools and device"
 need="adb"
 [ $CHECK_ONLY = 1 ] || { [ $MODE = build ] && need="adb docker python3" || need="adb python3 curl"; }
 for c in $need; do command -v $c >/dev/null || die "$c not found"; done
@@ -113,22 +106,15 @@ if [ $CHECK_ONLY = 0 ]; then
     command -v lz4 >/dev/null || python3 -c 'import lz4.block' >/dev/null 2>&1 || die "lz4 not found (the lz4 command, or: pip install lz4)"
 fi
 if [ $CHECK_ONLY = 0 ] && [ $MODE = build ]; then
-    [ -f "$KOUT/Image" ] && ls "$KOUT"/modules/*.ko >/dev/null 2>&1 || die "$(t 'kernel outputs missing in {1} (run kernel/build-all.sh)' "$KOUT")"
+    [ -f "$KOUT/Image" ] && ls "$KOUT"/modules/*.ko >/dev/null 2>&1 || die "kernel outputs missing in $KOUT (run kernel/build-all.sh)"
 fi
 . "$TOP/tools/linux-mode.sh"
 require_android
-[ "$(su_do 'id -u')" = 0 ] || die "$(t 'su does not work on the device')"
+[ "$(su_do 'id -u')" = 0 ] || die "su does not work on the device"
 model="$(su_do 'getprop ro.product.model') / $(su_do 'getprop ro.product.device')"
-echo "$(t 'device: {1}' "$model")"
-# The U30 Air is the F50's board with a battery: the same kernel and images, a few modules of its own (init
-# loads them; the boot image says which device it is for)
-case "$model" in
-    *U30Air*|*U30_Air*|*"U30 Air"*) DEVICE=u30air ;;
-    *MU300*|*F50*|*mu300*) DEVICE=f50 ;;
-    *) ask go "$(t 'This does not look like a ZTE F50/MU300 or U30 Air. Continue anyway? (yes/no)')" no; [ "$go" = yes ] || exit 1
-       DEVICE=f50 ;;
-esac
-[ "$(su_do 'getprop ro.boot.slot_suffix')" = _a ] || die "$(t 'Android must be running from slot a')"
+echo "device: $model"
+case "$model" in *MU300*|*F50*|*mu300*) ;; *) ask go "This does not look like a ZTE F50/MU300. Continue anyway? (yes/no)" no; [ "$go" = yes ] || exit 1 ;; esac
+[ "$(su_do 'getprop ro.boot.slot_suffix')" = _a ] || die "Android must be running from slot a"
 
 
 # ---------------------------------------------------------------- making room on a small eMMC (EXPERIMENTAL)
@@ -140,14 +126,14 @@ esac
 # It is still the most dangerous thing this installer can do. It rewrites the partition table and it erases
 # everything in Android. Reported and first done by hand in issue #2; treat it as experimental.
 offer_repartition() {
-    say "$(t 'Not enough free space - this looks like the 32 GB variant')"
+    say "Not enough free space - this looks like the 32 GB variant"
     mkdir -p "$WORK/gpt"
     su_do "dd if=/dev/block/mmcblk0 bs=512 count=34 2>/dev/null > /data/local/tmp/gpt.head" >/dev/null
     su_do "dd if=/dev/block/mmcblk0 bs=512 skip=$((disk - 33)) count=33 2>/dev/null > /data/local/tmp/gpt.tail" >/dev/null
-    adb pull /data/local/tmp/gpt.head "$WORK/gpt/gpt.head" >/dev/null 2>&1 || true
-    adb pull /data/local/tmp/gpt.tail "$WORK/gpt/gpt.tail" >/dev/null 2>&1 || true
+    adb pull /data/local/tmp/gpt.head "$WORK/gpt/gpt.head" >/dev/null 2>&1
+    adb pull /data/local/tmp/gpt.tail "$WORK/gpt/gpt.tail" >/dev/null 2>&1
     su_do 'rm -f /data/local/tmp/gpt.head /data/local/tmp/gpt.tail' >/dev/null
-    [ -s "$WORK/gpt/gpt.head" ] && [ -s "$WORK/gpt/gpt.tail" ] || die "$(t 'could not read the partition table')"
+    [ -s "$WORK/gpt/gpt.head" ] && [ -s "$WORK/gpt/gpt.tail" ] || die "could not read the partition table"
 
     # resize-last-partition.py validates both GPT copies and every CRC before it says anything
     info=$(python3 "$TOP/tools/resize-last-partition.py" "$WORK/gpt/gpt.head,$WORK/gpt/gpt.tail" \
@@ -155,59 +141,59 @@ offer_repartition() {
     LAST_FIRST=$(echo "$info" | sed -n 's/^LAST_FIRST=//p')
     LAST_END=$(echo "$info" | sed -n 's/^LAST_END=//p')
     USABLE_END=$(echo "$info" | sed -n 's/^USABLE_END=//p')
-    [ -n "$LAST_FIRST" ] && [ -n "$USABLE_END" ] || die "$(t 'could not read the userdata entry from the partition table')"
+    [ -n "$LAST_FIRST" ] && [ -n "$USABLE_END" ] || die "could not read the userdata entry from the partition table"
 
     total=$((USABLE_END - LAST_FIRST + 1))         # sectors that userdata and Linux have to share
     MIN_ANDROID=$((4 * 1024 * 1024 * 1024 / 512))  # below this Android has nowhere to put apps or updates
     MIN_LINUX=$((800 * 1024 * 1024 / 512))         # OpenWrt alone, with room for one update
     max_linux=$((total - MIN_ANDROID))
-    [ $max_linux -ge $MIN_LINUX ] || die "$(t 'there is not enough room to split: {1} in total,' "$(gib $((total * 512)))")
-$(t 'and Android needs at least {1} of it. Nothing is changed.' "$(gib $((MIN_ANDROID * 512)))")"
+    [ $max_linux -ge $MIN_LINUX ] || die "there is not enough room to split: $(gib $((total * 512))) in total,
+and Android needs at least $(gib $((MIN_ANDROID * 512))) of it. Nothing is changed."
 
     echo
     echo "  eMMC:                 $(gib $((disk * 512)))"
-    echo "  $(t 'userdata now:         {1} (sectors {2}..{3})' "$(gib $((LAST_END - LAST_FIRST + 1)))" "$LAST_FIRST" "$LAST_END")"
-    echo "  $(t 'free behind it:       {1}' "$(gib $(( (USABLE_END - LAST_END) * 512 )))")"
-    echo "  $(t 'to share:             {1}' "$(gib $((total * 512)))")"
+    echo "  userdata now:         $(gib $((LAST_END - LAST_FIRST + 1))) (sectors $LAST_FIRST..$LAST_END)"
+    echo "  free behind it:       $(gib $(( (USABLE_END - LAST_END) * 512 )))"
+    echo "  to share:             $(gib $((total * 512)))"
     echo
-    echo "  $(t 'Linux needs at least  {1} (OpenWrt) / 1.6 GiB (Ubuntu) / 2.4 GiB (both)' "$(gib $((MIN_LINUX * 512)))")"
-    echo "  $(t 'Android keeps at least {1}' "$(gib $((MIN_ANDROID * 512)))")"
+    echo "  Linux needs at least  $(gib $((MIN_LINUX * 512))) (OpenWrt) / 1.6 GiB (Ubuntu) / 2.4 GiB (both)"
+    echo "  Android keeps at least $(gib $((MIN_ANDROID * 512)))"
     echo
-    echo "  $(t 'THIS IS EXPERIMENTAL. It rewrites the partition table and ERASES everything in Android -')"
-    echo "  $(t 'apps, photos, accounts, settings. Take a full backup first:  sh tools/backup-device.sh')"
-    echo "  $(t 'Only userdata changes size; it is the last partition, so nothing else moves.')"
+    echo "  THIS IS EXPERIMENTAL. It rewrites the partition table and ERASES everything in Android -"
+    echo "  apps, photos, accounts, settings. Take a full backup first:  sh tools/backup-device.sh"
+    echo "  Only userdata changes size; it is the last partition, so nothing else moves."
     echo
     if [ $CHECK_ONLY = 1 ]; then
-        echo "  $(t '--check writes nothing. Run the installer without it to make room.')"
+        echo "  --check writes nothing. Run the installer without it to make room."
         exit 0
     fi
-    ask go "$(t 'Make room by shrinking userdata? (yes/no)')" no
-    [ "$go" = yes ] || die "$(t 'nothing was changed.')"
+    ask go "Make room by shrinking userdata? (yes/no)" no
+    [ "$go" = yes ] || die "nothing was changed."
 
     while :; do
-        ask lin "$(t 'How many GiB for Linux? (the rest stays with Android)')" 4
-        case "$lin" in ''|*[!0-9.]*) echo "  $(t 'give a number, like 4 or 2.5')"; continue ;; esac
+        ask lin "How many GiB for Linux? (the rest stays with Android)" 4
+        case "$lin" in ''|*[!0-9.]*) echo "  give a number, like 4 or 2.5"; continue ;; esac
         lin_s=$(awk -v g="$lin" 'BEGIN { printf "%d", (g * 1073741824) / 512 }')
         lin_s=$(( (lin_s / 4096) * 4096 ))   # keep the boundary on a 2 MiB alignment
         if [ "$lin_s" -lt $MIN_LINUX ]; then
-            echo "  $(t 'too small: Linux needs at least {1}' "$(gib $((MIN_LINUX * 512)))")"
+            echo "  too small: Linux needs at least $(gib $((MIN_LINUX * 512)))"
         elif [ "$lin_s" -gt $max_linux ]; then
-            echo "  $(t 'too large: Android would be left with less than {1}' "$(gib $((MIN_ANDROID * 512)))")"
+            echo "  too large: Android would be left with less than $(gib $((MIN_ANDROID * 512)))"
         else
             break
         fi
     done
     new_end=$((USABLE_END - lin_s))
     echo
-    echo "  $(t 'userdata (Android):   {1}' "$(gib $(( (new_end - LAST_FIRST + 1) * 512 )))")"
-    echo "  $(t 'Linux region:         {1}' "$(gib $((lin_s * 512)))")"
+    echo "  userdata (Android):   $(gib $(( (new_end - LAST_FIRST + 1) * 512 )))"
+    echo "  Linux region:         $(gib $((lin_s * 512)))"
     echo
-    ask sure "$(t "Type ERASE to rewrite the partition table and wipe Android's data")" ""
-    [ "$sure" = ERASE ] || die "$(t 'nothing was changed.')"
+    ask sure "Type ERASE to rewrite the partition table and wipe Android's data" ""
+    [ "$sure" = ERASE ] || die "nothing was changed."
 
-    say "$(t 'Rewriting the partition table')"
+    say "Rewriting the partition table"
     python3 "$TOP/tools/resize-last-partition.py" "$WORK/gpt/gpt.head,$WORK/gpt/gpt.tail" \
-        --disk-sectors "$disk" --name userdata --end-sector "$new_end" --out "$WORK/gpt/new" || die "$(t 'the resize was refused; nothing is changed')"
+        --disk-sectors "$disk" --name userdata --end-sector "$new_end" --out "$WORK/gpt/new" || die "the resize was refused; nothing is changed"
     adb push "$WORK/gpt/new.head" /data/local/tmp/new.head >/dev/null 2>&1
     adb push "$WORK/gpt/new.tail" /data/local/tmp/new.tail >/dev/null 2>&1
     # the backup copy first: if power is lost between the two, the primary is still the old table and the
@@ -216,36 +202,36 @@ $(t 'and Android needs at least {1} of it. Nothing is changed.' "$(gib $((MIN_AN
     su_do "dd if=/data/local/tmp/new.head of=/dev/block/mmcblk0 bs=512 conv=fsync 2>/dev/null" >/dev/null
     su_do 'sync; rm -f /data/local/tmp/new.head /data/local/tmp/new.tail' >/dev/null
 
-    say "$(t 'Verifying')"
+    say "Verifying"
     su_do "dd if=/dev/block/mmcblk0 bs=512 count=34 2>/dev/null > /data/local/tmp/gpt.head" >/dev/null
     su_do "dd if=/dev/block/mmcblk0 bs=512 skip=$((disk - 33)) count=33 2>/dev/null > /data/local/tmp/gpt.tail" >/dev/null
-    adb pull /data/local/tmp/gpt.head "$WORK/gpt/after.head" >/dev/null 2>&1 || true
-    adb pull /data/local/tmp/gpt.tail "$WORK/gpt/after.tail" >/dev/null 2>&1 || true
+    adb pull /data/local/tmp/gpt.head "$WORK/gpt/after.head" >/dev/null 2>&1
+    adb pull /data/local/tmp/gpt.tail "$WORK/gpt/after.tail" >/dev/null 2>&1
     su_do 'rm -f /data/local/tmp/gpt.head /data/local/tmp/gpt.tail' >/dev/null
     check=$(python3 "$TOP/tools/resize-last-partition.py" "$WORK/gpt/after.head,$WORK/gpt/after.tail" \
-              --disk-sectors "$disk" --name userdata --show) || die "$(t 'the table on the device does not read back as valid GPT.')
-$(t "The backup copy at the end of the disk was written first, so Android's own repair may still fix this. Do not power off.")"
+              --disk-sectors "$disk" --name userdata --show) || die "the table on the device does not read back as valid GPT.
+The backup copy at the end of the disk was written first, so Android's own repair may still fix this. Do not power off."
     got=$(echo "$check" | sed -n 's/^LAST_END=//p')
-    [ "$got" = "$new_end" ] || die "$(t 'the table did not take (userdata still ends at {1}). Nothing else was changed.' "$got")"
-    echo "  $(t 'userdata now ends at sector {1}' "$got")"
+    [ "$got" = "$new_end" ] || die "the table did not take (userdata still ends at $got). Nothing else was changed."
+    echo "  userdata now ends at sector $got"
 
     # Android cannot mount a filesystem that claims to be larger than its partition; clearing the superblocks
     # is what makes it format /data cleanly on the next boot instead of bootlooping on a repair attempt.
-    say "$(t "Clearing Android's data filesystem so it is recreated on the next boot")"
+    say "Clearing Android's data filesystem so it is recreated on the next boot"
     su_do "dd if=/dev/zero of=/dev/block/by-name/userdata bs=1M count=32 conv=fsync 2>/dev/null" >/dev/null
 
-    say "$(t 'Done - the device has to reboot before the new layout is visible')"
-    echo "  $(t 'Android will set up its data partition again on this boot, which takes a few minutes.')"
-    echo "  $(t 'When it is back, run this installer again and it will find the free space.')"
-    ask rb "$(t 'Reboot now? (yes/no)')" yes
+    say "Done - the device has to reboot before the new layout is visible"
+    echo "  Android will set up its data partition again on this boot, which takes a few minutes."
+    echo "  When it is back, run this installer again and it will find the free space."
+    ask rb "Reboot now? (yes/no)" yes
     [ "$rb" = yes ] && adb reboot
     exit 0
 }
 
 # ---------------------------------------------------------------- free eMMC region
-say "$(t 'Locating free eMMC space after the last partition')"
+say "Locating free eMMC space after the last partition"
 set -- $(su_do 'e=0; for p in /sys/block/mmcblk0/mmcblk0p*; do x=$(( $(cat $p/start) + $(cat $p/size) )); [ $x -gt $e ] && e=$x; done; echo $e $(cat /sys/block/mmcblk0/size)')
-[ $# -eq 2 ] || die "$(t 'could not read the partition table from the device (is su granted? try again)')"
+[ $# -eq 2 ] || die "could not read the partition table from the device (is su granted? try again)"
 last_end=$1; disk=$2
 start=$(( (last_end / 4096 + 1) * 4096 ))
 end=$(( ((disk - 34) / 4096 - 1) * 4096 ))
@@ -312,119 +298,86 @@ if [ $SD_MODE = 0 ] && [ $existing = no ]; then
     step=$(( SIZE / 1048576 / 16 ))
     probe=""; i=0
     while [ $i -lt 16 ]; do probe="$probe $(( OFF / 1048576 + i * step ))"; i=$((i + 1)); done
-    DIRTY=$(su_do "n=0; for s in $probe; do c=\$(dd if=/dev/block/mmcblk0 bs=1048576 skip=\$s count=1 2>/dev/null | tr -d \"\\000\\377\" | wc -c); [ \$c -gt 0 ] && n=\$((n + 1)); done; echo \$n")
-    echo "$(t 'data check: {1} of 16 samples contain data' "$DIRTY")"
-    # what is there, for a report: the first bytes of the region
-    [ "$DIRTY" -gt 0 ] && echo "  $(t 'start of the region: {1}' "$(su_do "dd if=/dev/block/mmcblk0 bs=1048576 skip=$(( OFF / 1048576 )) count=1 2>/dev/null | od -An -tx1 -N32" | tr -s ' \n' ' ')")"
+    DIRTY=$(su_do "n=0; for s in $probe; do c=\$(dd if=/dev/block/mmcblk0 bs=1048576 skip=\$s count=1 2>/dev/null | tr -d \"\\000\" | wc -c); [ \$c -gt 0 ] && n=\$((n + 1)); done; echo \$n")
+    echo "data check: $DIRTY of 16 samples contain non-zero data"
 fi
 if [ $existing = yes ]; then
     verdict="OK: a MU300 Linux installation is already present (it can be kept or replaced)"
 elif [ $SD_MODE = 1 ]; then
     verdict="OK: the TF card is free; creating the filesystem erases whatever is on it"
 elif [ "$DIRTY" -gt 0 ]; then
-    verdict=$(t 'WARNING: the unpartitioned space is not empty; it may be used by this firmware. Installing overwrites it')
+    verdict="WARNING: the unpartitioned space is not empty; it may be used by this firmware. Installing overwrites it"
 elif [ $SIZE -ge $((20 * 1024 * 1024 * 1024)) ]; then
-    verdict=$(t 'OK: free and empty, same layout as the tested device (~32 GiB after userdata on the 64 GB eMMC)')
+    verdict="OK: free and empty, same layout as the tested device (~32 GiB after userdata on the 64 GB eMMC)"
 elif [ $SIZE -ge $NEED_BOTH ]; then
-    verdict=$(t 'OK: free and empty, smaller than on the tested device but enough for both systems')
+    verdict="OK: free and empty, smaller than on the tested device but enough for both systems"
 elif [ $SIZE -ge $NEED_UBUNTU ]; then
-    verdict=$(t 'OK: free and empty, but room for one system only (Ubuntu or OpenWrt, not both)')
+    verdict="OK: free and empty, but room for one system only (Ubuntu or OpenWrt, not both)"
 else
-    verdict=$(t 'OK: free and empty, but small: OpenWrt fits, Ubuntu does not')
+    verdict="OK: free and empty, but small: OpenWrt fits, Ubuntu does not"
 fi
-echo "$(t 'result: {1}' "$verdict")"
+echo "result: $verdict"
 if [ $CHECK_ONLY = 1 ]; then
-    echo; echo "$(t 'Nothing was written. Android version: {1}' "$(su_do 'getprop ro.build.display.id')")"
+    echo; echo "Nothing was written. Android version: $(su_do 'getprop ro.build.display.id')"
     exit 0
 fi
 if [ "$DIRTY" -gt 0 ]; then
-    ask ow "$(t 'Type overwrite to use this region anyway')" no
-    [ "$ow" = overwrite ] || die "$(t 'cancelled')"
+    ask ow "Type overwrite to use this region anyway" no
+    [ "$ow" = overwrite ] || die "cancelled"
 fi
 
 # ---------------------------------------------------------------- choices
-say "$(t 'What should be installed?')"
-echo "  $(t '1) Ubuntu LTS: 24.04 or 26.04, asked next (full distribution, apt, ~500 MiB RAM in use)')"
-echo "  $(t '2) OpenWrt {1} (router, LuCI web UI, ~140 MiB RAM in use)' "$OWRT_VER")"
-echo "  $(t '3) both (switch later with: mu300-os ubuntu|openwrt)')"
-[ $SIZE -lt $NEED_BOTH ] && echo "  $(t '(this device has {1}: {2})' "$(gib $SIZE)" "$([ $SIZE -ge $NEED_UBUNTU ] && t 'one system fits, not both' || t 'only OpenWrt fits')")"
-ask choice "$(t 'Choice')" 3
-case $choice in 1) OSES=ubuntu ;; 2) OSES=openwrt ;; 3) OSES="ubuntu openwrt" ;; *) die "$(t 'invalid choice')" ;; esac
+say "What should be installed?"
+echo "  1) Ubuntu 24.04 LTS (full distribution, apt, ~500 MiB RAM in use)"
+echo "  2) OpenWrt $OWRT_VER (router, LuCI web UI, ~140 MiB RAM in use)"
+echo "  3) both (switch later with: mu300-os ubuntu|openwrt)"
+[ $SIZE -lt $NEED_BOTH ] && echo "  (this device has $(gib $SIZE): $([ $SIZE -ge $NEED_UBUNTU ] && echo 'one system fits, not both' || echo 'only OpenWrt fits'))"
+ask choice "Choice" 3
+case $choice in 1) OSES=ubuntu ;; 2) OSES=openwrt ;; 3) OSES="ubuntu openwrt" ;; *) die "invalid choice" ;; esac
 need=$NEED_OPENWRT; [ "$OSES" = ubuntu ] && need=$NEED_UBUNTU; [ "$OSES" = "ubuntu openwrt" ] && need=$NEED_BOTH
-[ $SIZE -ge $need ] || die "$(t 'that choice needs about {1} MiB and this device has {2} MiB of free space' "$((need / 1048576))" "$((SIZE / 1048576))")"
+[ $SIZE -ge $need ] || die "that choice needs about $((need / 1048576)) MiB and this device has $((SIZE / 1048576)) MiB of free space"
 BOOT_OS=${OSES%% *}
-[ "$choice" = 3 ] && { ask BOOT_OS "$(t 'Which one should boot (ubuntu/openwrt)')" ubuntu; case $BOOT_OS in ubuntu|openwrt) ;; *) die "$(t 'invalid system')" ;; esac; }
-UBUNTU=24.04
-case " $OSES " in *" ubuntu "*) if [ $MODE = prebuilt ]; then
-    say "$(t 'Which Ubuntu?')"
-    echo "  $(t '1) 24.04 LTS  the longest tested, supported until 2029')"
-    echo "  $(t '2) 26.04 LTS  BETA: the newest (systemd 259, newer packages), supported until 2031; tested less')"
-    ask uv "$(t 'Ubuntu')" 1
-    case $uv in 1|24.04) UBUNTU=24.04 ;; 2|26.04) UBUNTU=26.04 ;; *) die "$(t 'invalid choice')" ;; esac
-fi ;; esac
-# the release file of a system: Ubuntu 26.04 has its own, 24.04 keeps the name it always had
-rootfs_file() { if [ "$1" = ubuntu ] && [ "$UBUNTU" = 26.04 ]; then echo mu300-ubuntu-26.04-rootfs.tar.gz; else echo "mu300-$1-rootfs.tar.gz"; fi; }
-ask dl "$(t 'Boot Linux by default instead of Android (falls back to Android if Linux fails)? (yes/no)')" yes
+[ "$choice" = 3 ] && { ask BOOT_OS "Which one should boot (ubuntu/openwrt)" ubuntu; case $BOOT_OS in ubuntu|openwrt) ;; *) die "invalid system" ;; esac; }
+ask dl "Boot Linux by default instead of Android (falls back to Android if Linux fails)? (yes/no)" yes
 DEFAULT_LINUX=0; [ "$dl" = yes ] && DEFAULT_LINUX=1
 BOOT_ATTEMPTS=5
 if [ $DEFAULT_LINUX = 1 ]; then
-    echo
-    echo "  $(t 'How many failed Linux boots in a row before the device goes back to Android by itself?')"
-    echo
-    echo "  $(t 'A boot counts as failed when it never finishes starting up - the power goes, the battery runs out, or')"
-    echo "  $(t 'Linux hangs - before about a minute after power-on. One boot that does finish resets the count.')"
-    echo
-    echo "  $(t '* Higher is more forgiving: a flaky cable or a couple of power cuts while it is starting will not throw you')"
-    echo "  $(t '  back into Android.')"
-    echo "  $(t '* Lower gets you to Android sooner if Linux is really broken.')"
-    echo "  $(t '* It is also your way back to Android with no computer at hand: cut the power while it is starting this')"
-    echo "  $(t '  many times in a row.')"
-    echo
-    echo "  $(t "1 is how this project used to behave (a single interrupted boot returns to Android). 1-6; the device's")"
-    echo "  $(t 'boot counter has no room for more. It can be changed later with: mu300-next-boot attempts N')"
-    ask BOOT_ATTEMPTS "$(t 'Failed boots before Android (1-6)')" 5
-    case $BOOT_ATTEMPTS in [1-6]) ;; *) die "$(t 'enter a number from 1 to 6')" ;; esac
+    cat <<'TXT'
+
+  How many failed Linux boots in a row before the device goes back to Android by itself?
+
+  A boot counts as failed when it never finishes starting up - the power goes, the battery runs out, or
+  Linux hangs - before about a minute after power-on. One boot that does finish resets the count.
+
+  * Higher is more forgiving: a flaky cable or a couple of power cuts while it is starting will not throw you
+    back into Android.
+  * Lower gets you to Android sooner if Linux is really broken.
+  * It is also your way back to Android with no computer at hand: cut the power while it is starting this
+    many times in a row.
+
+  1 is how this project used to behave (a single interrupted boot returns to Android). 1-6; the device's
+  boot counter has no room for more. It can be changed later with: mu300-next-boot attempts N
+TXT
+    ask BOOT_ATTEMPTS "Failed boots before Android (1-6)" 5
+    case $BOOT_ATTEMPTS in [1-6]) ;; *) die "enter a number from 1 to 6" ;; esac
 fi
-ask hs "$(t "Copy Android's hotspot name and password to Linux? (yes/no)")" yes  # kept as-is when updating
+ask hs "Copy Android's hotspot name and password to Linux? (yes/no)" yes  # kept as-is when updating
 IMPORT_HOTSPOT=0; [ "$hs" = yes ] && IMPORT_HOTSPOT=1
-ask gpu "$(t 'Include the Mali GPU (OpenCL) userspace (~90 MiB)? (yes/no)')" yes
-KERNEL=5.4
-if [ $MODE = prebuilt ]; then
-    say "$(t 'Which kernel?')"
-    echo "  $(t "1) 5.4   Unisoc's vendor kernel (Android 12 base): the longest tested, everything this project supports")"
-    echo "  $(t '2) 6.18  mainline Linux, current long-term (LTS) release: newer drivers and security fixes, the same')"
-    echo "  $(t '         functions (hotspot, mobile data, SMS, Bluetooth, VPN, GPU); no USB-C video output yet')"
-    echo "  $(t '3) 7.2   the newest stable mainline Linux (7.2 for now): the newest drivers, the same functions')"
-    echo "  $(t '         as 6.18; tested less than 6.18')"
-    echo "  $(t 'This can be changed later on the device: sudo mu300-update kernel 5.4|6.18|7.2')"
-    while :; do
-        ask kchoice "$(t 'Kernel')" 1
-        case $kchoice in
-            1|5.4) if [ "${UBUNTU:-}" = 26.04 ]; then
-                       echo "  $(t 'Ubuntu 26.04 needs a mainline kernel (6.18 or 7.2): its programs use system calls that 5.4 does not have (tar, for one, cannot unpack folders there).')"
-                       continue
-                   fi
-                   KERNEL=5.4; break ;;
-            2|6.18) KERNEL=6.18; break ;;
-            3|7.2) KERNEL=7.2; break ;;
-            *) echo "  $(t 'enter 1, 2 or 3')" ;;
-        esac
-    done
-fi
+ask gpu "Include the Mali GPU (OpenCL) userspace (~90 MiB)? (yes/no)" yes
 FORMAT=0; WIPE_LEGACY=0; UPDATE=0
 if [ $existing = no ]; then
     FORMAT=1
 else
     echo
-    echo "  $(t 'A MU300 Linux installation is already on this device.')"
-    echo "    $(t 'update  reinstall the systems and keep settings and data (/etc/mu300, users and home directories,')"
-    echo "    $(t '        SSH host keys, OpenWrt UCI config; the hotspot settings are kept too)')"
-    echo "    $(t 'wipe    erase the Linux filesystem and install from scratch')"
-    ask mode "$(t 'update or wipe')" update
+    echo "  A MU300 Linux installation is already on this device."
+    echo "    update  reinstall the systems and keep settings and data (/etc/mu300, users and home directories,"
+    echo "            SSH host keys, OpenWrt UCI config; the hotspot settings are kept too)"
+    echo "    wipe    erase the Linux filesystem and install from scratch"
+    ask mode "update or wipe" update
     case $mode in
         update) UPDATE=1 ;;
         wipe) FORMAT=1 ;;
-        *) die "$(t 'invalid choice')" ;;
+        *) die "invalid choice" ;;
     esac
     # a new /ubuntu replaces an Ubuntu installed directly in the filesystem root (first-generation layout)
     case " $OSES " in *" ubuntu "*) [ $FORMAT = 0 ] && WIPE_LEGACY=1 ;; esac
@@ -438,16 +391,13 @@ fi
 
 # ---------------------------------------------------------------- pull vendor data from the device
 mkdir -p "$WORK/dumps" "$WORK/firmware"
-say "$(t 'Pulling device data into {1} (stays on this computer)' "$WORK")"
+say "Pulling device data into $WORK (stays on this computer)"
 dev_pull /dev/block/by-name/boot_a "$WORK/dumps/boot_a.img"
 su_do 'dd if=/dev/block/by-name/misc bs=4096 count=1 2>/dev/null > /data/local/tmp/mu300-pull.bin' >/dev/null
-adb pull /data/local/tmp/mu300-pull.bin "$WORK/dumps/misc-head.bin" >/dev/null 2>&1 || true
+adb pull /data/local/tmp/mu300-pull.bin "$WORK/dumps/misc-head.bin" >/dev/null 2>&1
 su_do 'rm -f /data/local/tmp/mu300-pull.bin' >/dev/null
-[ -s "$WORK/dumps/misc-head.bin" ] || die "$(t 'could not read the misc header from the device')"
-# what a complete subset must hold, not only the directory: an interrupted run left a partial one behind that the
-# old check then accepted for good (the same guard as install.ps1, issue #6)
-[ -e "$WORK/android-subset/vendor/bin/modem_control" ] && [ -e "$WORK/android-subset/linkerconfig/ld.config.txt" ] ||
-    sh "$TOP/android-vendor/extract-subset.sh" "$WORK/android-subset"
+[ -s "$WORK/dumps/misc-head.bin" ] || die "could not read the misc header from the device"
+[ -d "$WORK/android-subset" ] || sh "$TOP/android-vendor/extract-subset.sh" "$WORK/android-subset"
 for f in wcnmodem.bin gnssmodem.bin wifi_board_config.ini wifi_board_config_ab.ini bt_configure_pskey.ini bt_configure_rf.ini; do
     for d in /odm/firmware /vendor/firmware /vendor/etc; do
         if [ "$(su_do "[ -f $d/$f ] && echo y")" = y ]; then dev_pull "$d/$f" "$WORK/firmware/$f"; break; fi
@@ -459,8 +409,8 @@ missing=
 for f in wcnmodem.bin gnssmodem.bin wifi_board_config.ini wifi_board_config_ab.ini bt_configure_pskey.ini bt_configure_rf.ini; do
     [ -s "$WORK/firmware/$f" ] || missing="$missing $f"
 done
-[ -z "$missing" ] || die "$(t 'these firmware files could not be read from the device:{1}' "$missing")
-$(t 'Wi-Fi and Bluetooth need them; without them the system installs and boots but has no hotspot.')"
+[ -z "$missing" ] || die "these firmware files could not be read from the device:$missing
+Wi-Fi and Bluetooth need them; without them the system installs and boots but has no hotspot."
 if [ "$gpu" = yes ] && [ ! -d "$WORK/android-gpu-subset" ]; then
     sh "$TOP/android-vendor/extract-gpu-subset.sh" "$WORK/android-gpu-subset"
 fi
@@ -483,48 +433,36 @@ REL=$WORK/release/$RELEASE
 mkdir -p "$REL"
 # MU300_RELEASE_URL: another location with the same files (e.g. a local test server)
 base=${MU300_RELEASE_URL:-https://github.com/$REPO/releases/download/$RELEASE}
-say "$(t 'Downloading release {1}' "$RELEASE")"
-curl -fsSL -o "$REL/SHA256SUMS" "$base/SHA256SUMS" || die "$(t 'cannot download {1}' "$base/SHA256SUMS")"
+say "Downloading release $RELEASE"
+curl -fsSL -o "$REL/SHA256SUMS" "$base/SHA256SUMS" || die "cannot download $base/SHA256SUMS"
 files=mu300-kernel.tar.gz
-[ "$KERNEL" = 5.4 ] || files="$files mu300-kernel-$KERNEL.tar.gz"
-for os in $OSES; do files="$files $(rootfs_file $os)"; done
+for os in $OSES; do files="$files mu300-$os-rootfs.tar.gz"; done
 for f in $files; do
     want=$(awk -v f="$f" '$2 == f || $2 == "*" f {print $1}' "$REL/SHA256SUMS")
-    [ -n "$want" ] || die "$(t '{1} is not part of release {2}' "$f" "$RELEASE")$([ "$f" = "mu300-kernel-$KERNEL.tar.gz" ] && [ "$KERNEL" != 5.4 ] && echo " $(t '(choose kernel 5.4, or a newer release)')")"
+    [ -n "$want" ] || die "$f is not part of release $RELEASE"
     have=$( (shasum -a 256 "$REL/$f" 2>/dev/null || sha256sum "$REL/$f" 2>/dev/null) | cut -d' ' -f1)
     if [ "$have" != "$want" ]; then
         echo "  $f"
-        fetch "$base/$f" "$REL/$f.part" || die "$(t 'download of {1} failed' "$f")"
+        fetch "$base/$f" "$REL/$f.part" || die "download of $f failed"
         have=$( (shasum -a 256 "$REL/$f.part" 2>/dev/null || sha256sum "$REL/$f.part") | cut -d' ' -f1)
-        [ "$have" = "$want" ] || die "$(t 'checksum mismatch for {1}' "$f")"
+        [ "$have" = "$want" ] || die "checksum mismatch for $f"
         mv "$REL/$f.part" "$REL/$f"
     fi
 done
 rm -rf "$REL/kernel" && mkdir -p "$REL/kernel" && tar -xzf "$REL/mu300-kernel.tar.gz" -C "$REL/kernel"
 KOUT=$REL/kernel
-[ $DEVICE = f50 ] || [ -d "$KOUT/modules-$DEVICE" ] || die "$(t 'release {1} does not support this device yet; use a newer one' "$RELEASE")"
 BUSYBOX=$KOUT/busybox; LOGDW=$KOUT/logdw
-# a mainline kernel (6.18, 7.2): its bundle, unpacked
-KMAIN=
-if [ "$KERNEL" != 5.4 ]; then
-    KMAIN=$REL/kernel-$KERNEL
-    rm -rf "$KMAIN" && mkdir -p "$KMAIN" && tar -xzf "$REL/mu300-kernel-$KERNEL.tar.gz" -C "$KMAIN"
-    [ -s "$KMAIN/Image" ] && [ -s "$KMAIN/ramdisk-generic.lz4" ] && [ -s "$KMAIN/kernel.release" ] || die "$(t '{1} is incomplete' "mu300-kernel-$KERNEL.tar.gz")"
-    # a bundle names the devices it runs on; older mainline kernels do not bring up the U30 Air's USB (FINDINGS 33c)
-    [ $DEVICE = f50 ] || grep -qw $DEVICE "$KMAIN/devices" 2>/dev/null || die "$(t 'release {1} does not support this device yet; use a newer one' "$RELEASE")"
-fi
-say "$(t 'Adding the vendor files from your device to the images')"
+say "Adding the vendor files from your device to the images"
 for os in $OSES; do
     python3 "$TOP/tools/vendor-overlay.py" --os $os --firmware "$WORK/firmware" --android-subset "$WORK/android-subset" \
       $([ -d "$WORK/android-gpu-subset" ] && [ "$gpu" = yes ] && echo --gpu-subset "$WORK/android-gpu-subset") \
-      $([ -n "$KMAIN" ] && echo --kernel-bundle "$KMAIN") \
       --out "$WORK/mu300-vendor-$os.tar.gz"
 done
 # empty password = no password: PWHASH stays empty and android-install skips the shadow edit
 PWHASH=$([ -n "$pw1" ] && printf '%s\n' "$pw1" | python3 "$TOP/tools/sha512crypt.py" || true)
 else
 # ---------------------------------------------------------------- build
-say "$(t 'Building helper binaries')"
+say "Building helper binaries"
 mkdir -p "$WORK/out" "$WORK/tools/logdw" "$WORK/tools/bt-init" "$WORK/tools/gpu"
 rm -rf "$WORK/out/modules" && cp -R "$KOUT/modules" "$WORK/out/modules"
 cp "$KOUT/modules.builtin" "$KOUT/modules.builtin.modinfo" "$WORK/out/" 2>/dev/null || true
@@ -532,12 +470,7 @@ docker build -q -t mu300-ubuntu:24.04 "$TOP/rootfs" >/dev/null
 docker run --rm mu300-ubuntu:24.04 cat /bin/busybox > "$WORK/busybox"; chmod +x "$WORK/busybox"
 docker run --rm -v "$TOP/tools":/src:ro -v "$WORK/tools":/o mu300-kbuild sh -c '
   gcc -O2 -static -o /o/logdw/logdw /src/logdw/logdw.c &&
-  gcc -O2 -static -o /o/bt-init/mu300-bt-init /src/bt-init/mu300-bt-init.c &&
-  mkdir -p /o/keys && gcc -O2 -static -o /o/keys/mu300-keys /src/keys/mu300-keys.c'
-# the VPN engines, as tools/make-release.sh puts them into the published images (without them mu300-vpn only
-# fails with "xray: not found")
-[ -s "$WORK/sing-box" ] || sh "$TOP/tools/fetch-sing-box.sh" "$WORK/sing-box"
-[ -s "$WORK/xray" ] && [ -s "$WORK/hev-socks5-tunnel" ] || sh "$TOP/tools/fetch-xray.sh" "$WORK"
+  gcc -O2 -static -o /o/bt-init/mu300-bt-init /src/bt-init/mu300-bt-init.c'
 if [ -d "$WORK/android-gpu-subset" ]; then
     L=$(mktemp -d "$WORK/cllibs.XXXX")
     cp "$WORK/android-gpu-subset/vendor/lib64/libOpenCL.so" "$WORK/android-subset/apex/com.android.runtime/lib64/bionic/libc.so" \
@@ -550,7 +483,7 @@ fi
 # MU300_REUSE_BUILD=1 keeps rootfs tarballs from an earlier run of this script
 reuse() { [ "${MU300_REUSE_BUILD:-0}" = 1 ] && [ -s "$WORK/mu300-$1.tar.gz" ] && echo "reusing $WORK/mu300-$1.tar.gz"; }
 case " $OSES " in *" ubuntu "*) reuse ubuntu || {
-    say "$(t 'Building the Ubuntu root filesystem')"
+    say "Building the Ubuntu root filesystem"
     B=$(mktemp -d "$WORK/ubuntu-build.XXXX")
     tar -C "$TOP/rootfs" --exclude ./base.tar --exclude './*.tar.gz' -cf - . | tar -xf - -C "$B"
     cid=$(docker create mu300-ubuntu:24.04 /bin/true); docker export "$cid" > "$B/base.tar"; docker rm "$cid" >/dev/null
@@ -559,12 +492,11 @@ case " $OSES " in *" ubuntu "*) reuse ubuntu || {
     # shellcheck disable=SC2086
     docker run --rm -v "$B":/w -v "$WORK/out/modules":/kmods:ro -v "$WORK/out":/kout:ro -v "$WORK/firmware":/firmware:ro \
       -v "$WORK/android-subset":/android-subset:ro -v "$WORK/tools/logdw/logdw":/logdw:ro \
-      -v "$WORK/tools/bt-init/mu300-bt-init":/bt-init:ro -v "$WORK/tools/keys/mu300-keys":/keys:ro -v "$WORK/sing-box":/sing-box:ro -v "$WORK/xray":/xray:ro \
-      -v "$WORK/hev-socks5-tunnel":/hev-socks5-tunnel:ro $gpuargs mu300-ubuntu:24.04 bash /w/assemble.sh >/dev/null
+      -v "$WORK/tools/bt-init/mu300-bt-init":/bt-init:ro $gpuargs mu300-ubuntu:24.04 bash /w/assemble.sh >/dev/null
     mv "$B/mu300-ubuntu-24.04-rootfs.tar.gz" "$WORK/mu300-ubuntu.tar.gz"; rm -rf "$B"; } ;;
 esac
 case " $OSES " in *" openwrt "*) reuse openwrt || {
-    say "$(t 'Building the OpenWrt root filesystem')"
+    say "Building the OpenWrt root filesystem"
     MU300_INPUTS="$WORK" sh "$TOP/openwrt/build-rootfs.sh" mu300-openwrt-rootfs.tar.gz >/dev/null
     mv "$TOP/openwrt/mu300-openwrt-rootfs.tar.gz" "$WORK/mu300-openwrt.tar.gz"; } ;;
 esac
@@ -581,9 +513,7 @@ else
     sed "s/^ROOT_OFFSET=[0-9]*/ROOT_OFFSET=$OFF/" "$TOP/boot/init" > "$WORK/init"
 fi
 python3 "$TOP/boot/build-boot-image.py" --stock-boot "$WORK/dumps/boot_a.img" --misc-head "$WORK/dumps/misc-head.bin" \
-  --kernel "${KMAIN:-$KOUT}/Image" ${KMAIN:+--append-ramdisk "$KMAIN/ramdisk-generic.lz4"} \
-  --modules "$KOUT/modules" --init "$WORK/init" --busybox "$BUSYBOX" --device "$DEVICE" \
-  $([ -d "$KOUT/modules-u30air" ] && echo --device-modules "u30air=$KOUT/modules-u30air") \
+  --kernel "$KOUT/Image" --modules "$KOUT/modules" --init "$WORK/init" --busybox "$BUSYBOX" \
   --logdw "$LOGDW" --ueventd-perms "$TOP/android-vendor/ueventd-perms.sh" \
   --android-subset "$WORK/android-subset" --out "$WORK/boot-linux-slotb.img" >/dev/null
 
@@ -604,11 +534,11 @@ fi
 ask confirm "Type INSTALL to continue" no
 [ "$confirm" = INSTALL ] || die "cancelled"
 
-say "$(t 'Copying to the device')"
+say "Copying to the device"
 adb push "$TOP/tools/android-mount-mu300root.sh" "$TOP/tools/android-install.sh" $T/ >/dev/null
 for os in $OSES; do
     if [ $MODE = prebuilt ]; then
-        adb push "$REL/$(rootfs_file $os)" $T/mu300-$os.tar.gz >/dev/null
+        adb push "$REL/mu300-$os-rootfs.tar.gz" $T/mu300-$os.tar.gz >/dev/null
         adb push "$WORK/mu300-vendor-$os.tar.gz" $T/mu300-vendor-$os.tar.gz >/dev/null
     else
         adb push "$WORK/mu300-$os.tar.gz" $T/mu300-$os.tar.gz >/dev/null
@@ -619,24 +549,23 @@ printf 'OFF=%s\nSIZE=%s\nOFF_S=%s\nSIZE_S=%s\nSD_MODE=%s\nSD_DEV=%s\nFORMAT=%s\n
   "$OFF" "$SIZE" "$((OFF / 512))" "$((SIZE / 512))" "$SD_MODE" "$sd_dev" "$FORMAT" "$OSES" "$WIPE_LEGACY" "$UPDATE" "$BOOT_OS" "$DEFAULT_LINUX" "$BOOT_ATTEMPTS" "$IMPORT_HOTSPOT" "$PWHASH" > "$env"
 adb push "$env" $T/mu300-install.env >/dev/null; rm -f "$env"
 su_do "sh $T/android-install.sh" | tee "$WORK/device-install.log"
-grep -q MU300-INSTALL-OK "$WORK/device-install.log" || die "$(t 'installation on the device failed; boot_b and misc were not changed')"
+grep -q MU300-INSTALL-OK "$WORK/device-install.log" || die "installation on the device failed; boot_b and misc were not changed"
 
-say "$(t 'Writing boot_b and arming slot b')"
+say "Writing boot_b and arming slot b"
 EXP=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['sha256'])" "$WORK/boot-linux-slotb.json")
 adb push "$WORK/boot-linux-slotb.img" $T/mu300-boot.img >/dev/null
 adb push "$WORK/boot-linux-slotb.misc-slot-b-trial.bin" $T/mu300-bc-b.bin >/dev/null
-[ "$(su_do "sha256sum $T/mu300-boot.img" | cut -d' ' -f1)" = "$EXP" ] || die "$(t 'pushed boot image hash mismatch')"
+[ "$(su_do "sha256sum $T/mu300-boot.img" | cut -d' ' -f1)" = "$EXP" ] || die "pushed boot image hash mismatch"
 su_do "dd if=$T/mu300-boot.img of=/dev/block/by-name/boot_b bs=4M && sync"
-[ "$(su_do 'sha256sum /dev/block/by-name/boot_b' | cut -d' ' -f1)" = "$EXP" ] || die "$(t 'boot_b verify failed (slot a still active, Android keeps booting)')"
+[ "$(su_do 'sha256sum /dev/block/by-name/boot_b' | cut -d' ' -f1)" = "$EXP" ] || die "boot_b verify failed (slot a still active, Android keeps booting)"
 su_do "dd if=$T/mu300-bc-b.bin of=/dev/block/by-name/misc bs=1 seek=2048 conv=notrunc && sync && rm $T/mu300-boot.img $T/mu300-bc-b.bin"
 
 # on-device switch for later: one command in Android instead of plugging into a computer (needs Magisk)
-say "$(t 'Installing the on-device switch (Magisk module)')"
-sh "$TOP/tools/install-magisk-module.sh" || echo "  $(t '(skipped; the installer keeps working either way)')"
+say "Installing the on-device switch (Magisk module)"
+sh "$TOP/tools/install-magisk-module.sh" || echo "  (skipped; ./install.sh keeps working either way)"
 
-say "$(t 'Done. Rebooting into {1}' "$BOOT_OS")"
-IP=192.168.77.1; [ $DEVICE = u30air ] && IP=192.168.78.1
-echo "  $(t 'USB network: {1}   SSH: {2}' $IP "$([ "$BOOT_OS" = ubuntu ] && echo ubuntu@$IP || echo root@$IP, LuCI http://$IP)")"
-echo "  $(t 'switch systems: mu300-os ubuntu|openwrt   back to Android: mu300-next-boot android')"
-echo "  $(t 'back to Linux from Android (with Magisk): su -c mu300-linux')"
+say "Done. Rebooting into $BOOT_OS"
+echo "  USB network: 192.168.77.1   SSH: $([ "$BOOT_OS" = ubuntu ] && echo ubuntu@192.168.77.1 || echo root@192.168.77.1, LuCI http://192.168.77.1)"
+echo "  switch systems: mu300-os ubuntu|openwrt   back to Android: mu300-next-boot android"
+echo "  back to Linux from Android (with Magisk): su -c mu300-linux"
 adb reboot </dev/null

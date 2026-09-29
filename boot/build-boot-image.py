@@ -16,7 +16,6 @@ Example:
     --ueventd-perms android-vendor/ueventd-perms.sh --out boot-linux-slotb.img
 """
 import argparse
-import re
 import hashlib
 import json
 import os
@@ -24,7 +23,6 @@ import stat
 import struct
 import subprocess
 import sys
-import tarfile
 import zlib
 from pathlib import Path
 
@@ -34,9 +32,6 @@ BOOT_CMDLINE = b'loglevel=5'
 MISC_BC_OFFSET = 0x800
 # persistent init log lives at 48 MiB inside boot_b (8 MiB); the image must end before it
 PERSIST_LOG_OFFSET = 48 << 20
-# written by android-vendor/extract_subset.py on a host whose file system cannot hold every name from the
-# device (Windows: the property area's u:object_r:<context>:s0); while it exists it holds the whole subset
-WINDOWS_TAR = 'windows-source.tar.gz'
 
 
 def cpio_record(name, data, mode, ino, rdev=(0, 0)):
@@ -69,22 +64,6 @@ def lz4_legacy(data):
     return bytes(out)
 
 
-def cpio_archive(dirs, files):
-    cpio = bytearray()
-    ino = 1
-    for d in sorted(dirs, key=lambda x: (x.count('/'), x)):
-        cpio += cpio_record(d, b'', stat.S_IFDIR | 0o755, ino)
-        ino += 1
-    for name, (data, mode) in files.items():
-        cpio += cpio_record(name, data, mode, ino)
-        ino += 1
-    # the kernel opens /dev/console before running /init
-    cpio += cpio_record('dev/console', b'', stat.S_IFCHR | 0o600, ino, (5, 1))
-    ino += 1
-    cpio += cpio_record('TRAILER!!!', b'', 0, ino)
-    return bytes(cpio)
-
-
 def bootloader_control(misc_head):
     """Return (slot_a_block, slot_b_trial_block) derived from the live misc bootloader_control."""
     bc = misc_head[MISC_BC_OFFSET:MISC_BC_OFFSET + 32]
@@ -111,23 +90,11 @@ def bootloader_control(misc_head):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--stock-boot', type=Path, help='stock boot_a.img dump (64 MiB, header v4)')
-    ap.add_argument('--misc-head', type=Path, help='first 4 KiB of the misc partition')
-    ap.add_argument('--kernel', type=Path, help='arm64 Image built from kernel/')
-    ap.add_argument('--generic-ramdisk', action='store_true',
-                    help='write only the device-independent ramdisk segment (init, busybox, modules) to --out, for '
-                         'mu300-update to put behind the ramdisk of the boot image already on the device')
+    ap.add_argument('--stock-boot', required=True, type=Path, help='stock boot_a.img dump (64 MiB, header v4)')
+    ap.add_argument('--misc-head', required=True, type=Path, help='first 4 KiB of the misc partition')
+    ap.add_argument('--kernel', required=True, type=Path, help='arm64 Image built from kernel/')
     ap.add_argument('--modules', required=True, type=Path, help='flat directory with the built .ko files')
     ap.add_argument('--module-order', type=Path, default=HERE / 'module-order.txt')
-    ap.add_argument('--device-modules', action='append', default=[], metavar='NAME=DIR',
-                    help='modules built for another device of this family (u30air=out/u30air): they go to '
-                         'linux-modules/NAME/ with boot/module-order-NAME.txt, and init loads them in place of the '
-                         'ones of the same name when it runs on that device')
-    ap.add_argument('--device', help='the device this image is for (f50, u30air): written to /etc/mu300-device, '
-                                     'which init trusts over its own guess from the device tree')
-    ap.add_argument('--trial-guard', type=int, metavar='SECONDS',
-                    help='for experiments only: reboot SECONDS after switch_root unless /run/stay exists (with a '
-                         'one-shot trial, that is back to Android when the kernel boots without USB)')
     ap.add_argument('--init', type=Path, default=HERE / 'init')
     ap.add_argument('--busybox', required=True, type=Path, help='static arm64 busybox')
     ap.add_argument('--logdw', required=True, type=Path, help='tools/logdw build (static arm64)')
@@ -136,19 +103,21 @@ def main():
     ap.add_argument('--firmware', type=Path, help='wifi firmware dir (wcnmodem.bin, wifi_board_config*.ini...) copied to lib/firmware for early wifi bring-up')
     ap.add_argument('--out', required=True, type=Path)
     a = ap.parse_args()
-    if not a.generic_ramdisk and not (a.stock_boot and a.misc_head and a.kernel):
-        ap.error('--stock-boot, --misc-head and --kernel are required unless --generic-ramdisk is given')
 
-    def text(path):  # scripts and lists for the device's shell, LF whatever the checkout did (issue #7)
-        return path.read_bytes().replace(b'\r\n', b'\n')
+    base = a.stock_boot.read_bytes()
+    if base[:8] != b'ANDROID!' or struct.unpack_from('<I', base, 40)[0] != 4:
+        sys.exit('stock boot is not an Android boot image header v4')
+    slot_a_bc, slot_b_bc = bootloader_control(a.misc_head.read_bytes())
 
     files = {
-        'init': (text(a.init), stat.S_IFREG | 0o755),
+        'init': (a.init.read_bytes(), stat.S_IFREG | 0o755),
         'bin/busybox': (a.busybox.read_bytes(), stat.S_IFREG | 0o755),
         'bin/sh': (b'busybox', stat.S_IFLNK | 0o777),
         'bin/logdw': (a.logdw.read_bytes(), stat.S_IFREG | 0o755),
-        'etc/ueventd-perms.sh': (text(a.ueventd_perms), stat.S_IFREG | 0o755),
-        'etc/module-order': (text(a.module_order), stat.S_IFREG | 0o644),
+        'etc/ueventd-perms.sh': (a.ueventd_perms.read_bytes(), stat.S_IFREG | 0o755),
+        'etc/misc-bc-slot-a.bin': (slot_a_bc, stat.S_IFREG | 0o644),
+        'etc/misc-bc-slot-b-trial.bin': (slot_b_bc, stat.S_IFREG | 0o644),
+        'etc/module-order': (a.module_order.read_bytes(), stat.S_IFREG | 0o644),
     }
     dirs = {'bin', 'sbin', 'etc', 'proc', 'sys', 'dev', 'run', 'tmp', 'root', 'config', 'linux-modules', 'lib/firmware'}
     if a.firmware and a.firmware.is_dir():
@@ -161,56 +130,6 @@ def main():
         if not ko.exists():
             sys.exit(f'missing module {ko}')
         files['linux-modules/' + name] = (ko.read_bytes(), stat.S_IFREG | 0o644)
-    for spec in a.device_modules:
-        dev, _, ddir = spec.partition('=')
-        order = HERE / f'module-order-{dev}.txt'
-        files[f'etc/module-order-{dev}'] = (text(order), stat.S_IFREG | 0o644)
-        dirs.add('linux-modules/' + dev)
-        # the kernel these were built for: a mainline kernel's generic segment replaces the modules and the order
-        # of the base set, but not these, and init must not load them into a kernel they were not built for
-        vermagic = re.search(rb'vermagic=(\S+)', next(Path(ddir).glob('*.ko')).read_bytes()).group(1)
-        files[f'linux-modules/{dev}/kernel.release'] = (vermagic + b'\n', stat.S_IFREG | 0o644)
-        for name in order.read_text().split():
-            ko = Path(ddir) / name
-            if ko.exists():
-                files[f'linux-modules/{dev}/{name}'] = (ko.read_bytes(), stat.S_IFREG | 0o644)
-            elif 'linux-modules/' + name not in files:
-                if not (a.modules / name).exists():
-                    sys.exit(f'missing module {name} for {dev} (neither {ko} nor in --modules)')
-                files['linux-modules/' + name] = ((a.modules / name).read_bytes(), stat.S_IFREG | 0o644)
-    if a.trial_guard and a.generic_ramdisk:
-        ap.error('--trial-guard does not go into a generic ramdisk')
-    if a.device:
-        # only in the device segment: a generic segment is the same for every device
-        if a.generic_ramdisk:
-            ap.error('--device does not go into a generic ramdisk')
-        files['etc/mu300-device'] = (a.device.encode() + b'\n', stat.S_IFREG | 0o644)
-    if a.generic_ramdisk:
-        # The kernel unpacks concatenated ramdisk segments in turn and a later file replaces an earlier one of the
-        # same name, so this segment behind the device's own ramdisk updates everything that is not the device's.
-        # That includes a trial guard an experiment left in the device segment: mu300-update keeps that segment,
-        # and a guard in it restarted an installed system every ten minutes whenever it booted as a trial (from
-        # Android with mu300-linux). An empty file here disarms it; an experiment's guard goes behind this.
-        files['etc/mu300-trial-guard'] = (b'', stat.S_IFREG | 0o644)
-        ram = lz4_legacy(cpio_archive(dirs, files))
-        a.out.write_bytes(ram)
-        manifest = {
-            'ramdisk': a.out.name,
-            'sha256': hashlib.sha256(ram).hexdigest(),
-            'size': len(ram),
-            'modules': len(a.module_order.read_text().split()),
-            'init_sha256': hashlib.sha256(files['init'][0]).hexdigest(),
-        }
-        a.out.with_suffix('.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        print(json.dumps(manifest, indent=2))
-        return
-
-    base = a.stock_boot.read_bytes()
-    if base[:8] != b'ANDROID!' or struct.unpack_from('<I', base, 40)[0] != 4:
-        sys.exit('stock boot is not an Android boot image header v4')
-    slot_a_bc, slot_b_bc = bootloader_control(a.misc_head.read_bytes())
-    files['etc/misc-bc-slot-a.bin'] = (slot_a_bc, stat.S_IFREG | 0o644)
-    files['etc/misc-bc-slot-b-trial.bin'] = (slot_b_bc, stat.S_IFREG | 0o644)
     if a.android_subset:
         dirs.add('android')
         for f in sorted(a.android_subset.rglob('*')):
@@ -232,26 +151,22 @@ def main():
                 mode = 0o755 if 'bin' in parts[:-1] else 0o644
                 files[rel] = (f.read_bytes(), stat.S_IFREG | mode)
 
+    cpio = bytearray()
+    ino = 1
+    for d in sorted(dirs, key=lambda x: (x.count('/'), x)):
+        cpio += cpio_record(d, b'', stat.S_IFDIR | 0o755, ino)
+        ino += 1
+    for name, (data, mode) in files.items():
+        cpio += cpio_record(name, data, mode, ino)
+        ino += 1
+    # the kernel opens /dev/console before running /init
+    cpio += cpio_record('dev/console', b'', stat.S_IFCHR | 0o600, ino, (5, 1))
+    ino += 1
+    cpio += cpio_record('TRAILER!!!', b'', 0, ino)
     # must match vendor_boot's LZ4 legacy framing: a gzip segment makes this 5.4 kernel fall
     # back to the /dev/ram0 image path and panic "Unable to mount root fs on unknown-block(1,0)"
-    ram = lz4_legacy(cpio_archive(dirs, files))
+    ram = lz4_legacy(bytes(cpio))
     assert ram[:4] == bytes.fromhex('02214c18')
-    if a.append_ramdisk:
-        extra = a.append_ramdisk.read_bytes()
-        if extra[:4] != bytes.fromhex('02214c18'):
-            sys.exit(f'{a.append_ramdisk} is not an LZ4 legacy ramdisk segment')
-        ram += extra
-        # The appended segment carries an init of its own, and a later segment's file replaces an earlier one of
-        # the same name. When that bundle is older than this checkout - a release is usually older than the copy
-        # of the project that installs from it - its init is older too, and one from before v2026.09.29 knows
-        # only the default ROOT_OFFSET: a device whose Linux region is elsewhere then mounted an empty offset and
-        # booted into standalone mode (issue #5). Our init is the one built for this device (the installer writes
-        # its offset in) and searches for the region as well, so it goes behind as a third segment, unpacked last.
-        ram += lz4_legacy(cpio_archive(set(), {'init': files['init']}))
-    if a.trial_guard:
-        # last of all, behind the generic segment and its empty guard
-        ram += lz4_legacy(cpio_archive(set(), {'etc/mu300-trial-guard': (b'%d\n' % a.trial_guard,
-                                                                         stat.S_IFREG | 0o644)}))
 
     kern = a.kernel.read_bytes()
     hdr = bytearray(base[:PAGE])

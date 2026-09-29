@@ -21,20 +21,15 @@
 
 #define MAX_FW_TX_DSCR	(1024)
 
-/* complock is also taken from the PCIe tx-complete interrupt (sc2355_pcie_tx_cmd_pop_list ->
- * sc2355_free_cmd_buf), so it must be taken with interrupts off everywhere: with only bottom halves off, that
- * interrupt on the same CPU spins on the lock forever (and _bh in hard-irq context warns on newer kernels) */
 static void tx_dequeue_cmd_buf(struct sprd_msg *msg, struct sprd_msg_list *list)
 {
-	unsigned long flags;
-
 	spin_lock_bh(&list->busylock);
 	list_del(&msg->list);
 	spin_unlock_bh(&list->busylock);
 
-	spin_lock_irqsave(&list->complock, flags);
+	spin_lock_bh(&list->complock);
 	list_add_tail(&msg->list, &list->cmd_to_free);
-	spin_unlock_irqrestore(&list->complock, flags);
+	spin_unlock_bh(&list->complock);
 }
 
 static inline void tx_enqueue_data_msg(struct sprd_msg *msg, struct sprd_hif *hif)
@@ -939,7 +934,7 @@ static int tx_mc_pkt(struct sk_buff *skb, struct net_device *ndev)
 	}
 
 	if (tx_is_multicast_mac_addr(hif->skb_da) && vif->mode == SPRD_MODE_AP) {
-		pr_debug
+		pr_info
 		    ("%s,AP mode, multicast bssid: %02x:%02x:%02x:%02x:%02x:%02x\n",
 		     __func__, hif->skb_da[0], hif->skb_da[1], hif->skb_da[2],
 		     hif->skb_da[3], hif->skb_da[4], hif->skb_da[5]);
@@ -1104,11 +1099,9 @@ static int tx_filter_ip_pkt(struct sk_buff *skb, struct net_device *ndev)
 
 void sc2355_free_cmd_buf(struct sprd_msg *msg, struct sprd_msg_list *list)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&list->complock, flags);
+	spin_lock_bh(&list->complock);
 	list_del(&msg->list);
-	spin_unlock_irqrestore(&list->complock, flags);
+	spin_unlock_bh(&list->complock);
 	sprd_free_msg(msg, list);
 }
 
@@ -1847,7 +1840,7 @@ int sc2355_reset_self(struct sprd_priv *priv)
 	}
 
 	hif->drv_resetting = 1;
-	pr_debug("enter %s\n", __func__);
+	pr_info("enter %s\n", __func__);
 
 	list_for_each_entry_safe(vif, tmp, &priv->vif_list, vif_node) {
 		pr_info("%s handle vif : name %s, mode %d, sm_state %d\n", __func__,
@@ -1976,13 +1969,7 @@ void sc2355_tx_drop_tcp_msg(struct sprd_chip *chip, struct sprd_msg *msg)
 
 void sc2355_tx_down(struct tx_mgmt *tx_mgmt)
 {
-	/* the idle tx thread waits here: TASK_IDLE, not an uninterruptible wait, which counted it on the load
-	 * average all the time */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-	wait_for_completion_state(&tx_mgmt->tx_completed, TASK_IDLE);
-#else
 	wait_for_completion(&tx_mgmt->tx_completed);
-#endif
 }
 
 void sc2355_tx_up(struct tx_mgmt *tx_mgmt)
@@ -2058,11 +2045,8 @@ int sc2355_tx_init(struct sprd_hif *hif)
 		goto err_txlist;
 	}
 
-	/* publish only once it is complete: the PCIe completion handlers run from the MSI and read it
-	 * with smp_load_acquire()
-	 */
+	hif->tx_mgmt = (void *)tx_mgmt;
 	tx_mgmt->hif = hif;
-	smp_store_release(&hif->tx_mgmt, (void *)tx_mgmt);
 
 	sprd_qos_reset_wmmac_parameters(tx_mgmt->hif->priv);
 	sprd_qos_reset_wmmac_ts_info(hif->priv);
@@ -2112,13 +2096,6 @@ void sc2355_tx_deinit(struct sprd_hif *hif)
 		kthread_stop(tx_mgmt->tx_thread);
 		tx_mgmt->tx_thread = NULL;
 	}
-
-	/* The completion handlers run from the MSI and may be walking these lists right now: unpublish the
-	 * context and wait for every handler already inside (interrupt context is an RCU read side) before
-	 * anything below frees it. They used to find it freed first and NULL only afterwards.
-	 */
-	WRITE_ONCE(hif->tx_mgmt, NULL);
-	synchronize_rcu();
 
 	/*need to check if there is some data and cmdpending
 	 *or sending by HIF, and wait until tx complete and freed
