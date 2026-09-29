@@ -16,6 +16,8 @@
 #   PWHASH             SHA-512 crypt hash for the "ubuntu" (Ubuntu) and "root" (OpenWrt) accounts
 #   IMPORT_HOTSPOT=0|1 copy Android's hotspot SSID/passphrase into each system
 set -e
+# Magisk's shell has a minimal PATH; mke2fs/losetup/blockdev live in the Android system dirs
+export PATH="/system/bin:/system/xbin:/vendor/bin:$PATH"
 T=${MU300_INSTALL_TMP:-/data/local/tmp}
 P=${MU300_PAYLOAD_DIR:-$T}
 . $P/mu300-install.env
@@ -46,7 +48,14 @@ if [ "${SD_MODE:-0}" = 1 ]; then
     if [ "$FORMAT" = 1 ]; then
         if [ "$magic" = 53ef ] && [ "$label" != mu300sd ]; then say "refusing to format: foreign ext4 ($label) on the card"; exit 1; fi
         say "creating ext4 mu300sd on $R"
-        mke2fs -t ext4 -L mu300sd -F "$R" >/dev/null
+        # Android's /system/bin/mke2fs is a stripped build that rejects e2fsprogs
+        # flags (-t/-F). make_ext4fs is the native AOSP formatter; fall back to
+        # mke2fs with only the flags this build accepts (-b/-L, no -t no -F).
+        if command -v make_ext4fs >/dev/null 2>&1; then
+            make_ext4fs -L mu300sd "$R" || { say "make_ext4fs failed (rc=$?)"; exit 1; }
+        else
+            mke2fs -b 4096 -L mu300sd "$R" || { say "mke2fs failed (rc=$?): $(mke2fs 2>&1 | tail -3)"; exit 1; }
+        fi
     elif [ "$magic" != 53ef ] || [ "$label" != mu300sd ]; then
         say "no mu300sd filesystem on $R (run with FORMAT=1)"; exit 1
     fi
@@ -82,7 +91,11 @@ if [ "$FORMAT" = 1 ]; then
     if [ "$magic" = 53ef ] && [ "$label" != mu300root ]; then say "refusing to format: foreign ext4 ($label) in the region"; exit 1; fi
     attach
     say "creating ext4 mu300root on $L ($((SIZE_S / 2048)) MiB)"
-    mke2fs -t ext4 -L mu300root -F "$L" >/dev/null
+    if command -v make_ext4fs >/dev/null 2>&1; then
+        make_ext4fs -L mu300root "$L" >/dev/null
+    else
+        mke2fs -b 4096 -L mu300root "$L" >/dev/null
+    fi
     losetup -d "$L"
 elif [ "$magic" != 53ef ] || [ "$label" != mu300root ]; then
     say "no mu300root filesystem in the region (run with FORMAT=1)"; exit 1
@@ -167,13 +180,33 @@ for os in $OSES; do
     fi
     rm -rf $M/$os && mv $M/$os.new $M/$os
     R=$M/$os
+    # LuCI Chinese + Aurora theme: bundled APKs install on the system's first boot
+    if [ "$os" = openwrt ] && [ -d "$P/pkgs" ] && ls "$P"/pkgs/*.apk >/dev/null 2>&1; then
+        mkdir -p $R/root/mu300-pkgs
+        cp "$P"/pkgs/*.apk $R/root/mu300-pkgs/
+        mkdir -p $R/etc/uci-defaults
+        cat > $R/etc/uci-defaults/97-mu300-ui <<'EOL'
+#!/bin/sh
+apk add --allow-untrusted /root/mu300-pkgs/*.apk >/tmp/mu300-ui.log 2>&1
+base=$(uci -q show luci | sed -n "s/^luci\.themes\.[^=]*='\(\/luci-static\/aurora[^']*'\).*/\1/p" | head -1)
+[ -n "$base" ] || base='/luci-static/aurora'
+uci -q batch <<UCI
+set luci.main.lang='zh_cn'
+set luci.main.mediaurlbase='$base'
+UCI
+uci -q commit luci
+exit 0
+EOL
+        chmod 755 $R/etc/uci-defaults/97-mu300-ui
+        say "LuCI zh-CN + Aurora theme will install on first boot"
+    fi
     # the stock fstab mounts / by LABEL=mu300root (the internal free-eMMC region); on the TF card the root
     # is mmcblk1p1, and an unpatched fstab makes systemd-remount-fs fail on every boot
     [ "${SD_MODE:-0}" = 1 ] && [ -f $R/etc/fstab ] && sed -i "s|LABEL=mu300root|/dev/mmcblk1p1|" $R/etc/fstab
     mkdir -p $R/etc/mu300
     if [ -n "$ssid" ] && ! { [ "${UPDATE:-0}" = 1 ] && [ -s $R/etc/mu300/hotspot.conf ]; }; then
         umask 077
-        printf 'SSID=%s\nPSK=%s\nBAND=5\nCHANNEL=auto\nCOUNTRY=TR\n' "$ssid" "$psk" > $R/etc/mu300/hotspot.conf
+        printf 'SSID=%s\nPSK=%s\nBAND=5\nCHANNEL=36\nCOUNTRY=CN\n' "$ssid" "$psk" > $R/etc/mu300/hotspot.conf
         chmod 600 $R/etc/mu300/hotspot.conf
         umask 022
     fi
