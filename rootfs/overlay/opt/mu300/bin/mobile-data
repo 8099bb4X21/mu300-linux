@@ -282,6 +282,15 @@ radio_on_locked() {
             radio_say "AT 通道没有回应，停止本轮，不向死通道发送 SFUN：$(echo "${out:-无回答}" | tr -s '\n' ' ')"
             return 1 ;;
     esac
+    # The optional standalone LuCI plugin may have saved mode/band/cell locks.
+    # This is the one safe early window: nr1 has completed SMMSWAP, the CP
+    # answers, and RF is still off. A failed readback leaves the plugin's late
+    # worker armed; never make radio startup depend on the plugin.
+    if [ -x /usr/libexec/unisoc-modem/lock ] &&
+       [ ! -e /run/unisoc-modem-lock-replay-done ]; then
+        /usr/libexec/unisoc-modem/lock replay early ||
+            radio_say "early lock replay unverified; late fallback remains armed"
+    fi
     radio_say "AT 通道已就绪，射频为 0；发送 SFUN=4"
     at 'AT+SFUN=4' "${MU300_SFUN_TIMEOUT:-20}" >/dev/null || true
     i=0
@@ -324,6 +333,9 @@ radio_on() {
     radio_on_locked
     rc=$?
     [ "$(cat "$lock/pid" 2>/dev/null)" = $$ ] && rm -rf "$lock"
+    # Keep the generic worker away from nr1 until the handshake/radio sequence
+    # has actually completed. A failed round is retried by netifd/watch.
+    [ "$rc" = 0 ] && rm -f /run/unisoc-modem-early-hook-pending
     return $rc
 }
 

@@ -30,6 +30,9 @@ wait_and_exec() {
 }
 
 start_service() {
+	# Optional plugin handshake: reserve nr1's first-command window for the
+	# platform radio-on path. The generic worker waits for this marker to clear.
+	[ ! -x /usr/libexec/unisoc-modem/lock ] || : > /run/unisoc-modem-early-hook-pending
 	[ -x /opt/mu300/bin/bootmark ] && /opt/mu300/bin/bootmark S19-atd-init
 	procd_open_instance atd
 	procd_set_param command /bin/sh -c "$(wait_and_exec /dev/stty_nr1 /opt/mu300/bin/mu300-atd)"
