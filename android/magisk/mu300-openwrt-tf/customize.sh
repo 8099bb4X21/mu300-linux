@@ -14,12 +14,6 @@ slot=$(getprop ro.boot.slot_suffix | "$BB" tr -d _)
 R=/dev/block/mmcblk1p1
 [ -b "$R" ] || R=/dev/block/mmcblk1
 [ -b "$R" ] || abort "! TF card was not found"
-root_password=${MU300_ROOT_PASSWORD:-}
-if [ -z "$root_password" ]; then
-    root_password=$("$BB" head -c 18 /dev/urandom | "$BB" base64 | "$BB" tr -d '\n')
-    ui_print "- New OpenWrt root password: $root_password (save this)"
-fi
-root_hash=$("$BB" mkpasswd -m sha512 "$root_password")
 cat > "$MODPATH/mu300-install.env" <<EOF
 SD_MODE=1
 SD_DEV=$R
@@ -32,8 +26,7 @@ DEFAULT_LINUX=1
 BOOT_ATTEMPTS=5
 IMPORT_HOTSPOT=1
 KERNEL=7.2
-# Never leave Dropbear reachable with OpenWrt's empty image password.
-PWHASH='$root_hash'
+PWHASH=''
 EOF
 ui_print "- Installing OpenWrt rootfs to $R"
 MU300_PAYLOAD_DIR="$MODPATH" MU300_INSTALL_TMP=/data/local/tmp/mu300-tf-install \

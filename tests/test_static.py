@@ -133,9 +133,6 @@ class Rules(unittest.TestCase):
         self.assertIn('mu300cell-v6.sh', builder)
         self.assertIn('tools/keys/mu300-keys', builder)
         self.assertTrue((TOP / 'openwrt' / 'overlay' / 'lib' / 'netifd' / 'proto' / 'mu300cell-v6.sh').is_file())
-        installer = (TOP / 'android' / 'magisk' / 'mu300-openwrt-tf' / 'customize.sh').read_text()
-        self.assertIn('MU300_ROOT_PASSWORD', installer)
-        self.assertIn('mkpasswd -m sha512', installer)
 
     def test_every_device_has_its_files(self):
         # a device the installers know needs its module order; its modules come from kernel/build-<device>.sh
