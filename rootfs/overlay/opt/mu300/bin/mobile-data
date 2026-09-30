@@ -262,13 +262,6 @@ radio_on_locked() {
                 ;;
         esac
     fi
-    # Persistent modem settings must be staged after nr1's mandatory
-    # first-command handshake but before CFUN=1. Running here also shares
-    # radio_on's existing mutex with netifd's parallel attempt.
-    if [ ! -e /run/mu300-dash-replay-done ] && [ -x /opt/mu300/bin/mu300-dash-lock ]; then
-        /opt/mu300/bin/mu300-dash-lock replay early ||
-            radio_say "开机锁定配置回放失败，继续开启射频"
-    fi
     out=$(at 'AT+CFUN?' 4 2>&1 || true)
     case "$out" in
         *"+CFUN: 1"*) return 0 ;;

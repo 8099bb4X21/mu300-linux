@@ -5,7 +5,7 @@
 
 /* 网络锁定 -- 模式 / 频段 / 小区 / EN-DC，全部经 ubus mu300dash lock_set -> 后端
  * mu300-dash-lock（编码按 ufi_tools 权威实现），应用后 SFUN 重启协议栈并落盘，
- * 开机由 mobile-data 在无线电上线前回放，避免与拨号并发切换 SFUN。
+ * 开机由插件自己的 procd 服务在 AT 适配器就绪后回放，不依赖平台拨号脚本。
  *
  * 当前驻网 hero 每 2 秒执行一次独立的实时 AT 快照，不读取蜂窝缓存；运营商与
  * 邻区等低频元数据只在打开页面时从 status 取一次。
@@ -84,7 +84,7 @@ return view.extend({
   <table class="mud-table"><thead><tr><th>制式/频段</th><th>PCI</th><th>频点</th><th>RSRP</th><th>RSRQ</th><th>SINR</th><th></th></tr></thead>
   <tbody id="mud-neigh"><tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">--</td></tr></tbody></table>
   </div>
-  <div class="mud-note">应用后协议栈重启（SFUN），蜂窝会短暂断开；设置会持久保存，并在启用“开机自动应用”时于射频开启前回放。频段全不选再点应用 = 恢复自动。</div>
+  <div class="mud-note">应用后协议栈重启（SFUN），蜂窝会短暂断开；设置会持久保存，并在启用“开机自动应用”时由插件于 AT 就绪后回放。接入平台的射频前钩子时可无重启回放。频段全不选再点应用 = 恢复自动。</div>
 </div>`;
 		this.wire(root);
 		return root;

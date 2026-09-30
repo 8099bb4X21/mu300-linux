@@ -70,13 +70,20 @@ class Rules(unittest.TestCase):
             'root/usr/libexec/rpcd/mu300dash',
             'root/usr/share/luci/menu.d/luci-app-mu300.json',
             'root/usr/share/rpcd/acl.d/luci-app-mu300.json',
-            'root/opt/mu300/bin/mu300-dash-info',
-            'root/opt/mu300/bin/mu300-dash-cell',
+            'root/usr/libexec/unisoc-modem/dashboard-info',
+            'root/usr/libexec/unisoc-modem/cell',
+            'root/usr/libexec/unisoc-modem/action',
+            'root/usr/libexec/unisoc-modem/lock',
+            'root/usr/libexec/unisoc-modem/at',
+            'root/usr/libexec/unisoc-modem/boot-replay',
+            'root/etc/init.d/unisoc-modem-ui',
+            'root/etc/config/unisoc_modem',
             'htdocs/luci-static/resources/mu300/common.js',
             'htdocs/luci-static/resources/view/mu300/home.js',
             'htdocs/luci-static/resources/view/mu300/at.js',
             'htdocs/luci-static/resources/view/mu300/sms.js',
             'htdocs/luci-static/resources/view/mu300/locks.js',
+            'htdocs/luci-static/resources/view/mu300/settings.js',
         )
         for rel in required:
             with self.subTest(path=rel):

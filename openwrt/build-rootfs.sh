@@ -159,7 +159,7 @@ mkdir -p $R/etc/mu300
 cp /in/vpn.conf.example $R/etc/mu300/vpn.conf.example
 printf "%s\n" "${MU300_VERSION:-dev}" > $R/etc/mu300/image-version
 # enable the services (rc.common "enable" needs ubus, which is not running in the build container)
-for s in mu300-vendor mu300-hw mu300-usb-ready mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-ndp mu300-smsd mu300-atwatch; do
+for s in mu300-vendor mu300-hw mu300-usb-ready mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-ndp mu300-smsd mu300-atwatch unisoc-modem-ui; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
@@ -172,10 +172,11 @@ for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-a
 chown -R 0:0 $R/opt/mu300
 find $R/opt/mu300/bin -type f -exec chmod 0755 {} \;
 [ ! -d $R/opt/mu300/lib ] || find $R/opt/mu300/lib -type f -exec chmod 0644 {} \;
-for p in $R/etc/init.d/mu300-* $R/etc/hotplug.d/iface/10-mu300-usb \
+for p in $R/etc/init.d/mu300-* $R/etc/init.d/unisoc-modem-ui $R/etc/hotplug.d/iface/10-mu300-usb \
          $R/etc/profile.d/mu300.sh $R/etc/uci-defaults/90-mu300 \
          $R/lib/netifd/proto/mu300cell*.sh $R/lib/preinit/05_mu300_early_recorder \
-         $R/sbin/sysupgrade $R/usr/libexec/rpcd/mu300dash; do
+         $R/sbin/sysupgrade $R/usr/libexec/rpcd/mu300dash \
+         $R/usr/libexec/unisoc-modem/*; do
     chown 0:0 $p; chmod 0755 $p
 done
 for p in $R/usr/share/luci/menu.d/luci-app-mu300.json \
@@ -201,15 +202,18 @@ for f in opt/mu300/bin/busybox opt/mu300/bin/logdw opt/mu300/bin/mu300-bt-init o
          opt/mu300/bin/sing-box opt/mu300/bin/xray opt/mu300/bin/hev-socks5-tunnel \
          lib/modules/$KREL/wcn_bsp.ko lib/modules/$KREL/sprd_wlan_combo.ko \
          lib/modules/$KREL/sprdbt_tty.ko lib/modules/$KREL/mali_kbase.ko \
-         opt/mu300/bin/mu300-dash-info opt/mu300/bin/mu300-dash-cell \
-         opt/mu300/bin/mu300-dash-act opt/mu300/bin/mu300-dash-lock \
+         etc/config/unisoc_modem etc/init.d/unisoc-modem-ui \
+         usr/libexec/unisoc-modem/at usr/libexec/unisoc-modem/boot-replay \
+         usr/libexec/unisoc-modem/dashboard-info usr/libexec/unisoc-modem/cell \
+         usr/libexec/unisoc-modem/action usr/libexec/unisoc-modem/lock \
          usr/libexec/rpcd/mu300dash usr/share/luci/menu.d/luci-app-mu300.json \
          usr/share/rpcd/acl.d/luci-app-mu300.json \
          www/luci-static/resources/mu300/common.js \
          www/luci-static/resources/view/mu300/home.js \
          www/luci-static/resources/view/mu300/at.js \
          www/luci-static/resources/view/mu300/sms.js \
-         www/luci-static/resources/view/mu300/locks.js; do
+         www/luci-static/resources/view/mu300/locks.js \
+         www/luci-static/resources/view/mu300/settings.js; do
     [ -s "$R/$f" ] || { echo "assembled rootfs is missing $f" >&2; exit 1; }
 done
 # Leave a machine-readable inventory in every image. It gives post-install
@@ -217,7 +221,8 @@ done
 # that never contained it.
 (
     cd "$R"
-    find opt/mu300/bin lib/modules/$KREL www/luci-static/resources/mu300 \
+    find opt/mu300/bin lib/modules/$KREL usr/libexec/unisoc-modem usr/libexec/rpcd \
+         usr/share/luci/menu.d usr/share/rpcd/acl.d www/luci-static/resources/mu300 \
          www/luci-static/resources/view/mu300 -type f | sort | xargs sha256sum
 ) > "$R/etc/mu300/build-manifest.sha256"
 cd $R && tar -czf /out/$OUT .

@@ -4,11 +4,17 @@
   "read": {
    "ubus": {
     "mu300dash": [ "*" ]
+   },
+   "uci": {
+    "unisoc_modem": [ "*" ]
    }
   },
   "write": {
    "ubus": {
     "mu300dash": [ "*" ]
+   },
+   "uci": {
+    "unisoc_modem": [ "*" ]
    }
   }
  }

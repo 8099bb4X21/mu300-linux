@@ -17,26 +17,28 @@
 # AT+SFUN=2 then AT+SFUN=4 brings it back. AT+CFUN=0 is the plain radio-off state
 # this modem boots into, so it is safe to use for "airplane on".
 
-export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
+export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/libexec/unisoc-modem:/usr/sbin:/sbin"
 
-AT=${MU300_AT:-mu300-at}
+AT=${MU300_AT:-/usr/libexec/unisoc-modem/at}
+DATA_IFACE=$(uci -q get unisoc_modem.main.data_interface 2>/dev/null)
+DATA_IFACE=${DATA_IFACE:-wan}
 ok()   { printf '{"ok":1,"op":"%s"}\n' "$1"; }
 fail() { printf '{"ok":0,"op":"%s","error":%s}\n' "$1" "$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n' | sed 's/.*/"&"/')"; }
 
 radio_on() {
     # data interface first: the mu300cell proto retries AT forever while the radio
     # is off, so bring wan down, raise the radio, then bring wan back
-    ifdown wan 2>/dev/null
+    ifdown "$DATA_IFACE" 2>/dev/null
     "$AT" -t 20 'AT+SFUN=4' >/dev/null 2>&1
-    "$AT" -t 4 'AT+CFUN?' 2>/dev/null | grep -q '+CFUN: 1' && { ifup wan; return 0; }
+    "$AT" -t 4 'AT+CFUN?' 2>/dev/null | grep -q '+CFUN: 1' && { ifup "$DATA_IFACE"; return 0; }
     "$AT" -t 5 'AT+SFUN=2' >/dev/null 2>&1
     "$AT" -t 30 'AT+SFUN=4' >/dev/null 2>&1
     "$AT" -t 4 'AT+CFUN?' 2>/dev/null | grep -q '+CFUN: 1'
-    ifup wan
+    ifup "$DATA_IFACE"
 }
 
 radio_off() {
-    ifdown wan 2>/dev/null
+    ifdown "$DATA_IFACE" 2>/dev/null
     "$AT" -t 6 'AT+CFUN=0' >/dev/null 2>&1
 }
 
@@ -49,11 +51,11 @@ case "${1:-}:${2:-}" in
         ok "radio off"
         ;;
     data:up)
-        ifup wan 2>/dev/null
+        ifup "$DATA_IFACE" 2>/dev/null
         ok "data up"
         ;;
     data:down)
-        ifdown wan 2>/dev/null
+        ifdown "$DATA_IFACE" 2>/dev/null
         ok "data down"
         ;;
     wifi:on|wifi:off)
@@ -66,12 +68,21 @@ case "${1:-}:${2:-}" in
         ok "wifi $2"
         ;;
     modem-reset:)
-        /opt/mu300/bin/mobile-data sim-reset >/dev/null 2>&1
+        if [ -x /opt/mu300/bin/mobile-data ]; then
+            /opt/mu300/bin/mobile-data sim-reset >/dev/null 2>&1
+        else
+            "$AT" -t 10 'AT+SFUN=5' >/dev/null 2>&1
+            "$AT" -t 30 'AT+SFUN=4' >/dev/null 2>&1
+        fi
         ok "modem-reset"
         ;;
     vpn:start|vpn:stop)
-        /etc/init.d/mu300-vpn "$2" >/dev/null 2>&1
-        ok "vpn $2"
+        if [ -x /etc/init.d/mu300-vpn ]; then
+            /etc/init.d/mu300-vpn "$2" >/dev/null 2>&1
+            ok "vpn $2"
+        else
+            fail "vpn $2" "VPN integration is not provided by this platform"
+        fi
         ;;
     reboot:)
         sleep 3   # the reply has to make it out first
@@ -81,7 +92,9 @@ case "${1:-}:${2:-}" in
         # arm inline (fast, failures surface to the page); reboot DETACHED so
         # the reply reaches the browser before the box goes down - a reboot
         # inside the rpcd call kills the ubus reply pipe first
-        if out=$(/opt/mu300/bin/mu300-next-boot android 2>&1); then
+        if [ ! -x /opt/mu300/bin/mu300-next-boot ]; then
+            fail "os android" "dual-boot integration is not provided by this platform"
+        elif out=$(/opt/mu300/bin/mu300-next-boot android 2>&1); then
             ok "os android"
             setsid sh -c 'sleep 3; reboot' >/dev/null 2>&1 &
         else

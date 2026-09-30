@@ -407,7 +407,7 @@ return view.extend({
 		M.set('qci', qos && qos.qci != null ? qos.qci : '--');
 		M.set('ambr', qos && qos.dl != null ? qos.dl + ' / ' + qos.ul + ' Mbps' : '--');
 
-		var net = (i.net && i.net.sipa_eth0) || null;
+		var net = (i.net && (i.net.mobile || i.net.sipa_eth0)) || null;
 		if (net && this.lastNet && i.ts && this.lastNet.ts) {
 			var dt = i.ts - this.lastNet.ts;
 			if (dt > 0) {
@@ -531,7 +531,9 @@ return view.extend({
 		}
 		M.set('model', i.model || '--');
 		M.set('fwos', i.fw || '--');
-		M.set('modem', (i.modem && i.modem.alive ? '在线' : '无应答') + (i.modem && i.modem.atd ? '' : ' · mu300-atd 未运行'));
+		M.set('modem', (i.modem && i.modem.alive ? '在线' : '无应答') + (i.modem && i.modem.atd ? '' : ' · AT 适配器不可用'));
+		var androidBtn = M.v('btn-android');
+		if (androidBtn) androidBtn.style.display = i.capabilities && i.capabilities.dualboot ? '' : 'none';
 
 		var b;
 		b = M.v('btn-data'); b.className = 'mud-btn' + (w.up ? ' on' : ''); b.textContent = '数据连接';

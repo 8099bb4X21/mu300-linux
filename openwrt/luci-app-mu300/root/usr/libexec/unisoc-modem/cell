@@ -1,6 +1,6 @@
 #!/bin/sh
 # mu300-dash-cell -- the dashboard's cellular collector: modem/cell/SIM readings into ONE
-# cached JSON (/tmp/mu300-dash/cell.json), written by whoever refreshes it.
+# cached JSON in the package runtime directory, written by whoever refreshes it.
 #
 # The web page NEVER runs this directly and never waits for it: the rpcd backend
 # (/usr/libexec/rpcd/mu300dash) serves the cache and kicks a background refresh
@@ -9,9 +9,8 @@
 # starves the AT channel, the dial watchdog then sees a dead modem and the box
 # ends up rebooting itself (docs/FINDINGS.md, V50 archive "45g").
 #
-# Everything goes through mu300-at, which serializes all AT clients on the device
-# (the sms daemon and the mobile-data watchdog use the same lock), so a refresh
-# politely yields to a dial in progress instead of fighting it.
+# Everything goes through the configured AT adapter, which is responsible for
+# serializing access with the platform dialer and SMS implementation.
 #
 # Commands per round (about 10, roughly one second on this modem):
 #   AT+CFUN?            radio on/off - the honest state for the toggle
@@ -29,7 +28,7 @@
 # AT terminal too).
 #
 # SIM/module identity (IMEI/IMSI/ICCID/model/firmware) changes only when the SIM
-# or the firmware changes, so it lives in /etc/mu300/dash/sim.json and is re-read
+# or the firmware changes, so it lives in the configured state directory and is re-read
 # at most every 6 hours - not on every round, and never inside a page request.
 
 # Two rounds share this script:
@@ -41,14 +40,17 @@
 #                            rides the 5 s full cache. A fast round yields to a full
 #                            round in flight (the full round writes sig.json too).
 
-export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
+export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/libexec/unisoc-modem:/usr/sbin:/sbin"
 
 MODE=${1:-full}
-DIR=${MU300_DASH_DIR:-/tmp/mu300-dash}
+DIR=${MU300_DASH_DIR:-/tmp/unisoc-modem}
 CELL=$DIR/cell.json
 SIGF=$DIR/sig.json
-IDENT_DIR=${MU300_DASH_IDENT_DIR:-/etc/mu300/dash}
+STATE_DIR=$(uci -q get unisoc_modem.main.state_dir 2>/dev/null)
+IDENT_DIR=${MU300_DASH_IDENT_DIR:-${STATE_DIR%/lock-state.d}}
+[ -n "$IDENT_DIR" ] || IDENT_DIR=/etc/unisoc-modem
 IDENT=$IDENT_DIR/sim.json
+AT=${MU300_AT:-/usr/libexec/unisoc-modem/at}
 IDENT_MAXAGE=21600   # seconds; a SIM change goes through a reboot, 6 h is plenty
 
 mkdir -p "$DIR" "$IDENT_DIR" 2>/dev/null
@@ -65,11 +67,12 @@ at() {
         [ -n "$d" ] && [ -p "$d/cmd" ] || continue
         case " $seen " in *" $d "*) continue ;; esac
         seen="$seen $d"
-        out=$(MU300_AT_LOCK_WAIT=0 MU300_AT_DIR=$d mu300-at -t "$timeout" "$cmd" 2>/dev/null) || continue
+        out=$(MU300_AT_LOCK_WAIT=0 MU300_AT_DIR=$d "$AT" -t "$timeout" "$cmd" 2>/dev/null) || continue
         printf '%s\n' "$out" | tr -d '\r'
         return 0
     done
-    return 1
+    out=$("$AT" -t "$timeout" "$cmd" 2>/dev/null) || return 1
+    printf '%s\n' "$out" | tr -d '\r'
 }
 now() { date +%s; }
 n_or_null() { case "$1" in ''|*[!0-9]*) echo null ;; *) echo "$1" ;; esac; }
@@ -78,7 +81,7 @@ qs() { [ -n "$1" ] && printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -
 # --------------------------------------------------------------- one collector
 # the same "one owner, spare waits/takes over" pattern mu300-atd uses, so two
 # kicks (page reload while a refresh runs) cannot interleave AT replies
-alive() { [ -n "$1" ] && [ -d "/proc/$1" ] && tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q mu300-dash-cell; }
+alive() { [ -n "$1" ] && [ -d "/proc/$1" ] && tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q '/unisoc-modem/cell'; }
 take_lock() {  # take_lock DIRVAR - drop overlap, take over a dead holder
     local lock=$1 owner
     while ! mkdir "$lock" 2>/dev/null; do
@@ -101,7 +104,7 @@ take_lock "$LOCK"
 # Claim one of two physical dashboard channels without waiting. This caps
 # work even when browsers overlap polls: a third collector is discarded and
 # the next 2 s refresh retries. Stale slots are reclaimed by PID ownership.
-POOL=${MU300_DASH_POOL_DIR:-/run/mu300-dash-at-pool}
+POOL=${MU300_DASH_POOL_DIR:-/run/unisoc-modem-at-pool}
 mkdir -p "$POOL" 2>/dev/null
 SLOT=
 for n in 6 7; do
@@ -347,8 +350,7 @@ fi
 
 # "no answer at all" is a modem/daemon problem, not "no signal".
 if [ -z "$CFUN$CEREG$CESQ$SP_LTE$SP_NR$COPS" ]; then
-    if [ -p /run/mu300-at/cmd ]; then ERR="modem did not answer (radio off or CP restarting)"
-    else ERR="mu300-atd is not running"; fi
+    ERR="AT backend did not answer (radio off, modem restarting, or adapter unavailable)"
     printf '{"ts":%d,"error":%s}\n' "$(now)" "$(qs "$ERR")" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
     [ "$MODE" = full ] && cp "$SIGF" "$CELL"
     exit 0

@@ -25,22 +25,27 @@
 # Applying anything restarts the protocol stack (AT+SFUN=5, then AT+SFUN=4) - the
 # same sequence the official web UI and mobile-data's sim-reset use - so the new
 # setting takes effect. Cellular drops for half a minute; the data watchdog or the
-# explicit `ifup wan` below brings the connection back.
+# configured netifd data interface brings the connection back.
 #
-# The last applied state is saved under /etc/mu300/dash/lock-state.d. At boot it
-# is replayed before radio-on/PDP, so applying locks does not tear down an already
-# connected data session. The user can disable replay without losing the values.
+# The last applied state is saved in the configured state_dir. The package's
+# own procd service replays it when the selected AT adapter becomes ready; no
+# platform dial script needs a private integration hook.
 
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
 
-AT=${MU300_AT:-mu300-at}
-STATE=/etc/mu300/dash/lock-state.json
-LOG=/tmp/mu300-dash/lock.log
+cfg() { uci -q get "unisoc_modem.main.$1" 2>/dev/null || true; }
+AT=${MU300_AT:-/usr/libexec/unisoc-modem/at}
+STATE_DIR=$(cfg state_dir); STATE_DIR=${STATE_DIR:-/etc/unisoc-modem/lock-state.d}
+DATA_IFACE=$(cfg data_interface); DATA_IFACE=${DATA_IFACE:-wan}
+RUNDIR=${MU300_DASH_DIR:-/tmp/unisoc-modem}
+APPLY_DIR=${UNISOC_APPLY_DIR:-/run/unisoc-modem-lock-apply}
+REPLAY_MARKER=${UNISOC_REPLAY_MARKER:-/run/unisoc-modem-lock-replay-done}
+LOG=$RUNDIR/lock.log
 # The lock state only changes when somebody applies one - a real read costs seven
 # AT round trips (about a second each on this firmware), so normal reads are
 # served from this cache and refreshed in the background. "get fresh" re-reads.
-LOCKCACHE=/tmp/mu300-dash/lock.json
-mkdir -p /etc/mu300/dash /tmp/mu300-dash 2>/dev/null
+LOCKCACHE=$RUNDIR/lock.json
+mkdir -p "$STATE_DIR" "$RUNDIR" 2>/dev/null
 
 at() { "$AT" -t "${2:-6}" "$1" 2>/dev/null | tr -d '\r'; }
 # Never WRITE bands the module does not support - the n79 lock (from the old
@@ -228,14 +233,14 @@ sfun_restart() {
         sleep 1
         at 'AT+SFUN=4' 30 >/dev/null
     fi
-    [ "$phase" = early ] || ifup wan 2>/dev/null
+    [ "$phase" = early ] || ifup "$DATA_IFACE" 2>/dev/null
     say "stack restarted ($(( $(date +%s) - ${_t0:-$(date +%s)} ))s), radio $(at 'AT+CFUN?' 4 2>/dev/null | grep -q '+CFUN: 1' && echo on || echo 'checking')"
 }
 
 # one apply at a time: overlapping SFUN dances (band lock + cell unlock + mode in
 # quick succession) leave the radio off. A second apply waits for the running one.
 apply_lock() {
-    local d=/run/mu300-dash-apply pid n=0
+    local d=$APPLY_DIR pid n=0
     while ! mkdir "$d" 2>/dev/null; do
         pid=$(cat "$d/pid" 2>/dev/null)
         if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
@@ -250,13 +255,13 @@ apply_lock() {
 
 save_state() {  # save_state KEY VALUE - one small file per key, so applies never
                  # overwrite each other, and replay reads exactly what was applied
-    mkdir -p /etc/mu300/dash/lock-state.d 2>/dev/null
-    printf '%s' "$2" > /etc/mu300/dash/lock-state.d/"$1"
+    mkdir -p "$STATE_DIR" 2>/dev/null
+    printf '%s' "$2" > "$STATE_DIR/$1"
 }
 
 auto_apply_enabled() {
-    [ ! -f /etc/mu300/dash/lock-state.d/auto_apply ] ||
-        [ "$(cat /etc/mu300/dash/lock-state.d/auto_apply 2>/dev/null)" != off ]
+    [ ! -f "$STATE_DIR/auto_apply" ] ||
+        [ "$(cat "$STATE_DIR/auto_apply" 2>/dev/null)" != off ]
 }
 
 # Cell locks may contain one or more entries from both RATs. Keep one entry per
@@ -264,7 +269,7 @@ auto_apply_enabled() {
 # list. Seed once from the live cache when upgrading an installation that had
 # locks before cell persistence existed.
 cell_state_seed() {
-    local f=/etc/mu300/dash/lock-state.d/cell
+    local f=$STATE_DIR/cell
     [ -e "$f" ] && return
     : > "$f"
     [ -s "$LOCKCACHE" ] || return
@@ -273,13 +278,13 @@ cell_state_seed() {
 }
 
 cell_state_add() {
-    local f=/etc/mu300/dash/lock-state.d/cell
+    local f=$STATE_DIR/cell
     cell_state_seed
     grep -Fxq "$1" "$f" 2>/dev/null || printf '%s\n' "$1" >> "$f"
 }
 
 cell_state_remove() {
-    local rat=$1 f=/etc/mu300/dash/lock-state.d/cell t
+    local rat=$1 f=$STATE_DIR/cell t
     cell_state_seed
     [ -z "$rat" ] && { : > "$f"; return; }
     t="$f.$$"
@@ -305,7 +310,7 @@ do_apply() {  # do_apply KIND VALUE
         return 0
     fi
     apply_lock
-    trap 'rm -rf /run/mu300-dash-apply 2>/dev/null' EXIT INT TERM
+    trap 'rm -rf "$APPLY_DIR" 2>/dev/null' EXIT INT TERM
     kind=$1; val=$2
     case $kind in
         mode)
@@ -370,7 +375,7 @@ do_apply() {  # do_apply KIND VALUE
                     cell_state_remove lte
                     ;;
                 auto)  # lock whatever the current serving cell is
-                    c=$(cat /tmp/mu300-dash/cell.json 2>/dev/null) || c=
+                    c=$(cat "$RUNDIR/cell.json" 2>/dev/null) || c=
                     fr=$(printf '%s' "$c" | jsonfilter -e '@.nr.arfcn' 2>/dev/null)
                     pc=$(printf '%s' "$c" | jsonfilter -e '@.nr.pci' 2>/dev/null)
                     if [ -n "$fr" ] && [ "$fr" != null ] && [ "$fr" -gt 0 ] 2>/dev/null; then
@@ -420,7 +425,7 @@ do_apply() {  # do_apply KIND VALUE
 
 # ----------------------------------------------------------------- replay
 do_replay() {
-    local phase=${1:-late} marker=/run/mu300-dash-replay-done
+    local phase=${1:-late} marker=$REPLAY_MARKER
     [ -e "$marker" ] && return 0
     if ! auto_apply_enabled; then
         say "boot replay disabled"
@@ -428,12 +433,12 @@ do_replay() {
         return 0
     fi
     apply_lock
-    trap 'rm -rf /run/mu300-dash-apply 2>/dev/null' EXIT INT TERM
+    trap 'rm -rf "$APPLY_DIR" 2>/dev/null' EXIT INT TERM
     # Another caller may have completed replay while this one waited for the lock.
     [ -e "$marker" ] && return 0
     # boot hook: the AT settings do not all survive a modem power cycle, so re-send
     # what the dashboard last applied, then one stack restart at the end
-    d=/etc/mu300/dash/lock-state.d
+    d=$STATE_DIR
     have=0
     for kind in endc mode lte nr cell; do [ -f "$d/$kind" ] && have=1; done
     if [ "$have" = 0 ]; then : > "$marker"; return 0; fi

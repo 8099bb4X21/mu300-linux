@@ -19,8 +19,12 @@ endef
 
 define Package/luci-app-mu300/description
  A single LuCI application for the MU300 dashboard, cellular locks, raw AT
- terminal and SMS. It talks to the base system only through mu300-at and
- mu300-sms; installing or removing the UI does not own the modem lifecycle.
+ terminal and SMS. Platform adapters isolate the UI from the modem daemon,
+ serial port, SMS store and network-interface layout of the host firmware.
+endef
+
+define Package/luci-app-mu300/conffiles
+/etc/config/unisoc_modem
 endef
 
 define Build/Compile
@@ -35,6 +39,13 @@ endef
 define Package/luci-app-mu300/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
+	state=$$(uci -q get unisoc_modem.main.state_dir 2>/dev/null)
+	state=$${state:-/etc/unisoc-modem/lock-state.d}
+	old=/etc/mu300/dash/lock-state.d
+	if [ -d "$$old" ] && [ ! -d "$$state" ]; then
+		mkdir -p "$$state"
+		cp -a "$$old"/. "$$state"/
+	fi
 	rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null
 	/etc/init.d/rpcd restart 2>/dev/null || true
 }
