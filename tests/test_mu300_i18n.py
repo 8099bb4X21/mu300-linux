@@ -4,6 +4,8 @@ import subprocess
 import unittest
 import json
 import re
+import tempfile
+from pathlib import Path
 
 from helpers import TOP
 
@@ -19,9 +21,29 @@ class DashboardI18n(unittest.TestCase):
         makefile = (PACKAGE / 'Makefile').read_text()
         self.assertIn('$(CP) ./htdocs/. $(1)/www/', makefile)
         self.assertIn('$(CP) ./root/. $(1)/', makefile)
+        self.assertIn('$(CP) ./lmo/. $(1)/usr/lib/lua/luci/i18n/', makefile)
+        self.assertNotIn('uci set luci.languages.zh_cn', makefile)
         self.assertIn('/etc/init.d/unisoc-modem-ui enable', makefile)
         for name in ('home', 'at', 'locks', 'sms', 'settings'):
             self.assertTrue((PACKAGE / f'htdocs/luci-static/resources/view/mu300/{name}.js').is_file())
+
+    def test_global_menu_catalogs_are_complete(self):
+        menu = json.loads((PACKAGE / 'root/usr/share/luci/menu.d/luci-app-mu300.json').read_text(encoding='utf-8'))
+        titles = {item['title'] for item in menu.values()}
+        for lang in ('en', 'tr'):
+            po = (PACKAGE / f'po/{lang}/mu300.po').read_text(encoding='utf-8')
+            translated = dict(re.findall(r'msgid "([^"]+)"\s+msgstr "([^"]+)"', po))
+            self.assertEqual(set(translated), titles)
+            self.assertTrue(all(translated.values()))
+            self.assertTrue((PACKAGE / f'lmo/mu300.{lang}.lmo').is_file())
+
+    @unittest.skipUnless(shutil.which('po2lmo'), 'po2lmo is needed to verify bundled catalogs')
+    def test_global_menu_catalogs_match_po_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for lang in ('en', 'tr'):
+                output = f'{tmp}/mu300.{lang}.lmo'
+                subprocess.run(['po2lmo', str(PACKAGE / f'po/{lang}/mu300.po'), output], check=True)
+                self.assertEqual(Path(output).read_bytes(), (PACKAGE / f'lmo/mu300.{lang}.lmo').read_bytes())
 
     def run_js(self, body):
         harness = r'''

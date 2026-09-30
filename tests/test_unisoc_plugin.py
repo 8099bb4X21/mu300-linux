@@ -1,4 +1,5 @@
 """Portable adapter boundary of luci-app-mu300."""
+import threading
 from helpers import ShellTest, TOP
 
 
@@ -71,6 +72,40 @@ esac''')
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((self.tmp / 'replay.args').read_text().strip(), 'replay late')
 
+    def test_platform_early_window_suppresses_probe_and_late_replay(self):
+        state = self.tmp / 'state'
+        state.mkdir()
+        (state / 'mode').write_text('4g')
+        marker = self.tmp / 'replayed'
+        pending = self.tmp / 'pending'
+        at = self.tmp / 'at'
+        at.write_text('#!/bin/sh\ntouch "$STUBLOG/at-probed"\necho OK\n')
+        at.chmod(0o755)
+        lock = self.tmp / 'lock'
+        lock.write_text('#!/bin/sh\ntouch "$STUBLOG/late-called"\n')
+        lock.chmod(0o755)
+        self.stub('uci', f'''case "$3" in
+unisoc_modem.main.state_dir) echo "{state}" ;;
+unisoc_modem.main.replay_timeout) echo 10 ;;
+esac''')
+        for shell in self.each_shell():
+            marker.unlink(missing_ok=True)
+            pending.touch()
+            def finish_early():
+                pending.unlink(missing_ok=True)
+                marker.touch()
+            timer = threading.Timer(0.1, finish_early)
+            timer.start()
+            try:
+                result = self.script(shell, REPLAY, UNISOC_AT_BIN=at, UNISOC_LOCK_BIN=lock,
+                                     UNISOC_EARLY_PENDING=pending, UNISOC_REPLAY_MARKER=marker)
+            finally:
+                timer.join()
+            self.assertEqual(result.returncode, 0,
+                             f'{result.stderr}; pending={pending.exists()} marker={marker.exists()}')
+            self.assertFalse((self.tmp / 'at-probed').exists())
+            self.assertFalse((self.tmp / 'late-called').exists())
+
     def test_early_replay_restores_every_saved_lock_without_sfun(self):
         state = self.tmp / 'state'
         state.mkdir()
@@ -83,7 +118,16 @@ esac''')
         at = self.tmp / 'at'
         at.write_text('''#!/bin/sh
 printf "%s\\n" "$*" >> "$STUBLOG/at.commands"
-case "$*" in *AT+SPTESTMODE\\?*) printf "+SPTESTMODE: 134,134,0\\nOK\\n" ;; esac
+case "$*" in
+  *'AT+SPTESTMODE?'*) printf '+SPTESTMODE: 131,134,0\\nOK\\n' ;;
+  *'AT+SP5GRAN?'*) printf '+SP5GRAN: 0\\nOK\\n' ;;
+  *'AT+SPENDC?'*) printf '+ENDC: 1\\nOK\\n' ;;
+  *'AT+SPLBAND=0'*) printf '+SPLBAND: 0,0,0,21,0\\nOK\\n' ;;
+  *'AT+SPLBAND=3'*) printf '+SPLBAND: 0,0,272\\nOK\\n' ;;
+  *'AT+SPFORCEFRQ=12,3'*) printf '+SPFORCEFRQ: 12,3,1650,211\\nOK\\n' ;;
+  *'AT+SPFORCEFRQ=16,3'*) printf '+SPFORCEFRQ: 16,3,627264,393\\nOK\\n' ;;
+  *) printf 'OK\\n' ;;
+esac
 ''')
         at.chmod(0o755)
         self.stub('uci', f'''case "$3" in
@@ -109,6 +153,23 @@ esac''')
             self.assertIn('AT+SPFORCEFRQ=16,6,627264,393', commands)
             self.assertNotIn('AT+SFUN=', commands)
             self.assertTrue(marker.exists())
+
+    def test_early_replay_readback_failure_keeps_late_fallback(self):
+        state = self.tmp / 'state'
+        state.mkdir()
+        (state / 'mode').write_text('4g')
+        at = self.tmp / 'at'
+        at.write_text('#!/bin/sh\ncase "$*" in *"AT+SPTESTMODE?"*) echo "+SPTESTMODE: 134,134,0" ;; esac\n')
+        at.chmod(0o755)
+        self.stub('uci', f'''case "$3" in
+unisoc_modem.main.state_dir) echo "{state}" ;;
+esac''')
+        marker = self.tmp / 'replayed'
+        for shell in self.each_shell():
+            result = self.script(shell, LOCK, 'replay', 'early', MU300_AT=at,
+                                 UNISOC_APPLY_DIR=self.tmp / 'apply', UNISOC_REPLAY_MARKER=marker)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(marker.exists())
 
 
 if __name__ == '__main__':

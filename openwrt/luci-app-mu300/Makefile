@@ -34,6 +34,8 @@ define Package/luci-app-mu300/install
 	$(INSTALL_DIR) $(1)/www
 	$(CP) ./htdocs/. $(1)/www/
 	$(CP) ./root/. $(1)/
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n
+	$(CP) ./lmo/. $(1)/usr/lib/lua/luci/i18n/
 endef
 
 define Package/luci-app-mu300/postinst
@@ -47,6 +49,8 @@ define Package/luci-app-mu300/postinst
 		cp -a "$$old"/. "$$state"/
 	fi
 	rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null
+	uci -q get luci.languages.tr >/dev/null || uci set luci.languages.tr='Türkçe'
+	uci commit luci
 	/etc/init.d/rpcd restart 2>/dev/null || true
 	/etc/init.d/unisoc-modem-ui enable 2>/dev/null || true
 	/etc/init.d/unisoc-modem-ui start 2>/dev/null || true
