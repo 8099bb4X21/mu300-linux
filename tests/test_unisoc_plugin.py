@@ -90,8 +90,7 @@ case "$*" in *AT+SPTESTMODE\\?*) printf "+SPTESTMODE: 134,134,0\\nOK\\n" ;; esac
 unisoc_modem.main.state_dir) echo "{state}" ;;
 unisoc_modem.main.data_interface) echo cellular ;;
 esac''')
-        # Ubuntu's default mawk lacks lshift(); OpenWrt BusyBox awk has it.
-        self.stub('awk', 'exec busybox awk "$@"')
+        # Band masks use POSIX awk arithmetic, so the host awk must work too.
         apply_dir = self.tmp / 'apply'
         marker = self.tmp / 'replayed'
         for shell in self.each_shell():
@@ -104,7 +103,7 @@ esac''')
             self.assertIn('AT+SP5GRAN=0', commands)
             self.assertIn('AT+SPTESTMODE=131,134,0', commands)
             self.assertIn('AT+SPENDC=1', commands)
-            self.assertIn('AT+SPLBAND=1,0,0,0,21,0', commands)
+            self.assertIn('AT+SPLBAND=1,0,0,0,21,0', commands, result.stderr)
             self.assertIn('AT+SPLBAND=2,0,0,272,0', commands)
             self.assertIn('AT+SPFORCEFRQ=12,6,1650,211', commands)
             self.assertIn('AT+SPFORCEFRQ=16,6,627264,393', commands)
