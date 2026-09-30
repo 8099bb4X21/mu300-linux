@@ -110,7 +110,7 @@ class Rules(unittest.TestCase):
         builder = (TOP / 'tools' / 'build-openwrt-tf-magisk.sh').read_text()
         customize = (TOP / 'android' / 'magisk' / 'mu300-openwrt-tf' / 'customize.sh').read_text()
         port = (TOP / 'upstream' / 'port' / 'install.py').read_text()
-        self.assertIn('/dev/mmcblk1p1', init)
+        self.assertIn('/dev/mmcblk[1-9]p1', init)
         self.assertIn('mu300sd', init)
         self.assertIn('root_mounted', init)  # TF miss must retain the internal-root fallback
         self.assertIn('MU300_MAINLINE_OUT', builder)
