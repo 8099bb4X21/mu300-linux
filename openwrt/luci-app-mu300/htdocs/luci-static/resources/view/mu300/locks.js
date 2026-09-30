@@ -86,6 +86,7 @@ return view.extend({
   </div>
   <div class="mud-note">应用后协议栈重启（SFUN），蜂窝会短暂断开；设置会持久保存，并在启用“开机自动应用”时由插件于 AT 就绪后回放。接入平台的射频前钩子时可无重启回放。频段全不选再点应用 = 恢复自动。</div>
 </div>`;
+		M.localize(root);
 		this.wire(root);
 		return root;
 	},
@@ -132,7 +133,7 @@ return view.extend({
 		};
 
 		this.Q('lock-modes').innerHTML = MODES.map(function(m) {
-			return '<button class="mud-btn" data-mode="' + m[0] + '">' + m[1] + '</button>';
+			return '<button class="mud-btn" data-mode="' + m[0] + '">' + M.esc(M.translate(m[1])) + '</button>';
 		}).join('');
 		root.querySelectorAll('#mud-lock-modes .mud-btn').forEach(function(b) {
 			b.onclick = function() {
@@ -295,7 +296,7 @@ return view.extend({
 		var e = this.Q('srv'); if (!e) return;
 		this.lastCell = c;
 		if (!c || c.error) {
-			this.Q('srv-rat').textContent = c && c.error ? c.error : '暂无驻网数据';
+			this.Q('srv-rat').textContent = c && c.error ? c.error : M.translate('暂无驻网数据');
 			e.innerHTML = '';
 			return;
 		}
@@ -315,7 +316,7 @@ return view.extend({
 		if (c.nr && c.nr.band) rows.push([ 'NR 服务小区', 'n' + c.nr.band + ' · PCI ' + c.nr.pci + ' · ARFCN ' + c.nr.arfcn + (c.nr.bw_mhz ? ' · ' + c.nr.bw_mhz + ' MHz' : '') ]);
 		if (c.lte && c.lte.band) rows.push([ 'LTE 锚点', 'B' + c.lte.band + ' · PCI ' + c.lte.pci + ' · EARFCN ' + c.lte.earfcn ]);
 		e.innerHTML = rows.map(function(x) {
-			return '<div class="mud-srvline"><span class="k">' + x[0] + '</span><span class="v">' + M.esc(x[1]) + '</span></div>';
+			return '<div class="mud-srvline"><span class="k">' + M.esc(M.translate(x[0])) + '</span><span class="v">' + M.esc(x[1]) + '</span></div>';
 		}).join('');
 		var nb = this.Q('neigh');
 		if (nb) nb.innerHTML = M.neighborRows(c, (this.lastLock || {}).cells || []);
@@ -400,7 +401,7 @@ return view.extend({
 		var eb = this.Q('lock-endc');
 		if (eb) { eb.className = 'mud-btn' + (l.endc === '1' ? ' on' : ''); eb.textContent = l.endc === '1' ? 'EN-DC' : 'EN-DC'; }
 		var ab = this.Q('lock-auto-apply'), autoApply = l.auto_apply !== 0;
-		if (ab) { ab.className = 'mud-btn' + (autoApply ? ' on' : ''); ab.textContent = autoApply ? '开机自动应用 ✓' : '开机自动应用'; }
+		if (ab) { ab.className = 'mud-btn' + (autoApply ? ' on' : ''); ab.textContent = M.translate(autoApply ? '开机自动应用 ✓' : '开机自动应用'); }
 
 		/* 支持频段优先取模组能力（SPLBAND=4 / =0 解码），读不到才用静态表 */
 		var caps = l.caps || {};
@@ -409,12 +410,12 @@ return view.extend({
 		if (lc) {
 			var cells = l.cells || [];
 			lc.innerHTML = cells.length
-				? '<div class="mud-note" style="margin:0 0 4px">已锁定小区</div><table class="mud-table"><tbody>' +
+				? '<div class="mud-note" style="margin:0 0 4px">' + M.esc(M.translate('已锁定小区')) + '</div><table class="mud-table"><tbody>' +
 					cells.map(function(k) {
 						var parts = k.split(':'), rat = parts[0], fp = (parts[1] || '').split(',');
 						return '<tr><td>' + (rat == 'nr' ? 'NR' : 'LTE') + '</td><td>' + M.esc(fp[0] || '?') + '</td>' +
 							'<td>' + M.esc(fp[1] || '?') + '</td>' +
-							'<td><button class="mud-lockbtn" data-unlock="' + rat + '">解锁 ' + (rat == 'nr' ? 'NR' : 'LTE') + '</button></td></tr>';
+							'<td><button class="mud-lockbtn" data-unlock="' + rat + '">' + M.esc(M.translate('解锁 ')) + (rat == 'nr' ? 'NR' : 'LTE') + '</button></td></tr>';
 					}).join('') + '</tbody></table>'
 				: '';
 		}
@@ -429,9 +430,9 @@ return view.extend({
 			var locked = (l[rat] && l[rat].locked) || '';
 			var arr = locked ? locked.split(',').map(Number) : [];
 			var isAuto = arr.length === 0 || arr.length >= self.lockCand[rat].length;
-			setR('lock-' + rat + 'line', isAuto
+			setR('lock-' + rat + 'line', M.translate(isAuto
 				? '自动（支持 ' + self.lockCand[rat].length + ' 个）'
-				: '已锁 ' + arr.length + ' 个：' + (rat === 'nr' ? 'n' : 'B') + arr.join(' ' + (rat === 'nr' ? 'n' : 'B')));
+				: '已锁 ' + arr.length + ' 个：' + (rat === 'nr' ? 'n' : 'B') + arr.join(' ' + (rat === 'nr' ? 'n' : 'B'))));
 			var box = self.Q('lock-' + rat);
 			if (box) Array.prototype.forEach.call(box.children, function(ch) {
 				var b = ch.getAttribute('data-b');

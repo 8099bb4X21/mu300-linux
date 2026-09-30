@@ -50,6 +50,7 @@ return view.extend({
     </div>
   </div>
 </div>`;
+		M.localize(root);
 		this.wire(root);
 		this.loadHist();
 		return root;
@@ -81,7 +82,7 @@ return view.extend({
 				r = r || {};
 				var ms = Date.now() - t0;
 				if (r.ok) {
-					(r.reply || '(无输出)').split('\n').forEach(function(l) {
+					(r.reply || M.translate('(无输出)')).split('\n').forEach(function(l) {
 						if (/^OK$/.test(l)) line('ln-ok', l);
 						else if (/ERROR|^NO CARRIER/.test(l)) line('ln-err', l);
 						else if (l) line('ln-data', l);
@@ -89,9 +90,9 @@ return view.extend({
 					line('ln-meta', '—— ' + ms + ' ms');
 					self.loadHist();
 				} else {
-					line('ln-err', '错误：' + (r.error || '失败') + (r.busy ? '（AT 通道正忙，命令未发出）' : ''));
+					line('ln-err', M.translate('错误：') + (r.error || M.translate('失败')) + (r.busy ? M.translate('（AT 通道正忙，命令未发出）') : ''));
 				}
-			}, function() { line('ln-err', '调用失败'); });
+			}, function() { line('ln-err', M.translate('调用失败')); });
 			self.Q('at-cmd').value = '';
 		};
 
@@ -129,7 +130,7 @@ return view.extend({
 					var cmd = l.replace(/^[0-9-]+ [0-9:]+ /, '');
 					return '<div style="padding:2px 4px;border-radius:6px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" data-cmd="' + M.esc(cmd) + '" title="' + M.esc(cmd) + '">' + M.esc(cmd) + '</div>';
 				}).join('')
-				: '<div class="mud-note">（空）</div>';
+				: '<div class="mud-note">' + M.translate('（空）') + '</div>';
 		});
 	}
 });

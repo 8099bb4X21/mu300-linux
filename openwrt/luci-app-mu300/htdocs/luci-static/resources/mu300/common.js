@@ -159,6 +159,142 @@ var DASH_I18N = {
 	'余 ': ['Free ', 'Boş '],
 	'簇': ['Cluster ', 'Küme '],
 	'否': ['No', 'Hayır'],
+	'状态看板': ['Dashboard', 'Durum paneli'],
+	'蜂窝': ['Cellular', 'Hücresel'],
+	'网络锁定': ['Network locks', 'Ağ kilitleri'],
+	'短信': ['SMS', 'SMS'],
+	'AT 终端': ['AT terminal', 'AT terminali'],
+	'适配设置': ['Adapter settings', 'Bağdaştırıcı ayarları'],
+	'当前驻网': ['Serving network', 'Bağlı olunan ağ'],
+	'网络模式 · EN-DC': ['Network mode · EN-DC', 'Ağ modu · EN-DC'],
+	'自动（5G/4G）': ['Automatic (5G/4G)', 'Otomatik (5G/4G)'],
+	'仅 4G': ['4G only', 'Yalnızca 4G'],
+	'仅 5G SA': ['5G SA only', 'Yalnızca 5G SA'],
+	'仅 5G NSA': ['5G NSA only', 'Yalnızca 5G NSA'],
+	'自动': ['Automatic', 'Otomatik'],
+	'刷新锁定状态': ['Refresh lock status', 'Kilit durumunu yenile'],
+	'开机自动应用': ['Apply at startup', 'Başlangıçta uygula'],
+	'开机自动应用已': ['Apply at startup is ', 'Başlangıçta uygulama '],
+	'关闭后只停止下次开机回放，已保存的网络模式、EN-DC、频段和小区配置不会被删除。': ['Turning this off only stops replay at the next boot; saved network mode, EN-DC, band and cell settings remain.', 'Kapatılması yalnızca sonraki açılışta yeniden uygulamayı durdurur; kayıtlı ağ modu, EN-DC, bant ve hücre ayarları korunur.'],
+	'频段锁定': ['Band locking', 'Bant kilitleme'],
+	'NR 频段': ['NR bands', 'NR bantları'],
+	'LTE 频段': ['LTE bands', 'LTE bantları'],
+	'应用 NR 频段': ['Apply NR bands', 'NR bantlarını uygula'],
+	'应用 LTE 频段': ['Apply LTE bands', 'LTE bantlarını uygula'],
+	'邻区与小区锁定': ['Neighbor cells and cell locking', 'Komşu hücreler ve hücre kilidi'],
+	'锁定当前服务小区': ['Lock current serving cell', 'Geçerli hizmet hücresini kilitle'],
+	'解除小区锁定': ['Unlock cell', 'Hücre kilidini kaldır'],
+	'已锁定小区': ['Locked cells', 'Kilitli hücreler'],
+	'解锁': ['Unlock', 'Kilidi kaldır'],
+	' 小区锁定': [' cell lock', ' hücre kilidi'],
+	' 的小区锁定': [' cell lock', ' hücre kilidi'],
+	'应用后协议栈重启（SFUN），蜂窝会短暂断开；设置会持久保存，并在启用“开机自动应用”时由插件于 AT 就绪后回放。接入平台的射频前钩子时可无重启回放。频段全不选再点应用 = 恢复自动。': ['Applying restarts the radio stack (SFUN) and briefly interrupts cellular service. Settings are saved and replayed by the plugin after AT is ready when Apply at startup is enabled. A platform pre-radio hook can replay without a restart. Apply with no bands selected to restore automatic mode.', 'Uygulama radyo yığınını (SFUN) yeniden başlatır ve hücresel bağlantıyı kısa süre keser. Ayarlar kaydedilir ve Başlangıçta uygula etkinse AT hazır olduğunda eklenti tarafından yeniden uygulanır. Platformun radyo öncesi kancasıyla yeniden başlatmadan uygulanabilir. Otomatik moda dönmek için hiçbir bant seçmeden uygulayın.'],
+	'正在后台应用': ['Applying in background', 'Arka planda uygulanıyor'],
+	'协议栈会重启（SFUN），约半分钟': ['The radio stack will restart (SFUN), taking about 30 seconds', 'Radyo yığını yeniden başlayacak (SFUN), yaklaşık 30 saniye sürecek'],
+	'协议栈会重启（SFUN），蜂窝断开约半分钟': ['The radio stack will restart (SFUN); cellular service will stop for about 30 seconds', 'Radyo yığını yeniden başlayacak (SFUN); hücresel bağlantı yaklaşık 30 saniye kesilecek'],
+	'SFUN 重启约半分钟': ['SFUN restart takes about 30 seconds', 'SFUN yeniden başlatması yaklaşık 30 saniye sürer'],
+	'SFUN 重启 + 重新驻网，约半分钟': ['SFUN restart and re-registration take about 30 seconds', 'SFUN yeniden başlatması ve ağa yeniden kayıt yaklaşık 30 saniye sürer'],
+	'约半分钟': ['about 30 seconds', 'yaklaşık 30 saniye'],
+	'自动回读状态': ['status will be read back automatically', 'durum otomatik olarak geri okunacak'],
+	'NR 频段锁定': ['NR band lock', 'NR bant kilidi'],
+	'LTE 频段锁定': ['LTE band lock', 'LTE bant kilidi'],
+	'选择': ['Select', 'Seç'],
+	'已后台执行': ['Started in background', 'Arka planda başlatıldı'],
+	'已排队：另一项锁定正在应用（SFUN 重启中），随后自动生效': ['Queued: another lock is being applied during SFUN restart; this will take effect afterward', 'Sıraya alındı: SFUN yeniden başlarken başka bir kilit uygulanıyor; ardından etkinleşecek'],
+	'正在确认 EN-DC 状态': ['Confirming EN-DC status', 'EN-DC durumu doğrulanıyor'],
+	'正在确认开机自动应用': ['Confirming startup setting', 'Başlangıç ayarı doğrulanıyor'],
+	'正在直读调制解调器（最多几秒）': ['Reading modem directly (a few seconds at most)', 'Modem doğrudan okunuyor (en fazla birkaç saniye)'],
+	'已刷新': ['Refreshed', 'Yenilendi'],
+	'刷新失败': ['Refresh failed', 'Yenileme başarısız'],
+	'暂无驻网数据': ['No serving-network data', 'Bağlı olunan ağ verisi yok'],
+	'NR 服务小区': ['NR serving cell', 'NR hizmet hücresi'],
+	'回读超时，请点「刷新锁定状态」': ['Readback timed out; select “Refresh lock status”', 'Geri okuma zaman aşımına uğradı; “Kilit durumunu yenile”yi seçin'],
+	'状态已回读': ['Status confirmed', 'Durum doğrulandı'],
+	'已生效（EN-DC 不需要重启协议栈）': ['Applied (EN-DC does not require a radio-stack restart)', 'Uygulandı (EN-DC için radyo yığını yeniden başlatılmaz)'],
+	'状态回读超时，点「刷新锁定状态」确认': ['Status readback timed out; use “Refresh lock status” to confirm', 'Durum geri okuması zaman aşımına uğradı; doğrulamak için “Kilit durumunu yenile”yi kullanın'],
+	'已锁': ['Locked', 'Kilitli'],
+	'支持': ['supported', 'destekleniyor'],
+	' 个会话': [' conversations', ' görüşme'],
+	' 个': [' bands', ' bant'],
+	'网络模式': ['Network mode', 'Ağ modu'],
+	'关闭 EN-DC': ['Disable EN-DC', 'EN-DC’yi kapat'],
+	'开启 EN-DC': ['Enable EN-DC', 'EN-DC’yi aç'],
+	'关闭开机自动应用': ['Disable apply at startup', 'Başlangıçta uygulamayı kapat'],
+	'开启开机自动应用': ['Enable apply at startup', 'Başlangıçta uygulamayı aç'],
+	'关闭': ['Disabled', 'Kapalı'],
+	'开启': ['Enabled', 'Açık'],
+	'已开启': [' enabled', ' etkin'],
+	'已关闭': [' disabled', ' devre dışı'],
+	'应用': ['Apply', 'Uygula'],
+	'恢复自动': ['Restore automatic', 'Otomatiğe dön'],
+	'解除': ['Unlock', 'Kilidi kaldır'],
+	'正在解除': ['Unlocking', 'Kilit kaldırılıyor'],
+	'解锁失败': ['Unlock failed', 'Kilit kaldırılamadı'],
+	'已后台解除': ['Unlock started in background', 'Kilit kaldırma arka planda başlatıldı'],
+	'重新驻网': ['re-registering', 'yeniden ağa kaydoluyor'],
+	'回读状态': ['read back status', 'durumu geri oku'],
+	'基础': ['Basic', 'Temel'],
+	'注册/信号': ['Registration/signal', 'Kayıt/sinyal'],
+	'承载': ['Bearer', 'Taşıyıcı'],
+	'工程模式': ['Engineering mode', 'Mühendislik modu'],
+	'AT 命令（↑↓ 翻历史，Enter 发送）': ['AT command (↑↓ history, Enter to send)', 'AT komutu (↑↓ geçmiş, göndermek için Enter)'],
+	'发送': ['Send', 'Gönder'],
+	'清屏': ['Clear screen', 'Ekranı temizle'],
+	'就绪': ['Ready', 'Hazır'],
+	'会话历史（点击复用）': ['Session history (click to reuse)', 'Oturum geçmişi (yeniden kullanmak için tıklayın)'],
+	'无输出': ['No output', 'Çıktı yok'],
+	'错误': ['Error', 'Hata'],
+	'AT 通道正忙，命令未发出': ['AT channel busy; command not sent', 'AT kanalı meşgul; komut gönderilmedi'],
+	'空': ['Empty', 'Boş'],
+	'收件人：号码，如 10086 或 +86...': ['Recipient: number, e.g. 10086 or +86...', 'Alıcı: numara, ör. 10086 veya +86...'],
+	'刷新': ['Refresh', 'Yenile'],
+	'从 SIM 同步': ['Sync from SIM', 'SIM’den eşitle'],
+	'清空本地池': ['Clear local pool', 'Yerel havuzu temizle'],
+	'加载中': ['Loading', 'Yükleniyor'],
+	'选择左侧会话，或直接在下方输入号码发送。': ['Select a conversation on the left, or enter a number below to send.', 'Soldan bir görüşme seçin veya göndermek için aşağıya bir numara girin.'],
+	'短信内容（Enter 发送，Shift+Enter 换行）': ['Message (Enter to send, Shift+Enter for newline)', 'Mesaj (göndermek için Enter, yeni satır için Shift+Enter)'],
+	'发送走 AT+CMGS（PDU 模式）；通道忙会提示重试。删除单条：在气泡上右键（手机长按）。': ['Sending uses AT+CMGS (PDU mode); retry if the channel is busy. To delete one message, right-click its bubble (long-press on mobile).', 'Gönderme AT+CMGS (PDU modu) kullanır; kanal meşgulse yeniden deneyin. Bir mesajı silmek için balona sağ tıklayın (mobilde uzun basın).'],
+	'正在后台从 SIM 同步（AT+CMGL）': ['Syncing from SIM in background (AT+CMGL)', 'SIM’den arka planda eşitleniyor (AT+CMGL)'],
+	'SIM 同步已开始，几秒后自动刷新': ['SIM sync started; refreshing shortly', 'SIM eşitlemesi başladı; birazdan yenilenecek'],
+	'清空本地短信池': ['Clear local SMS pool', 'Yerel SMS havuzunu temizle'],
+	'只删本地文件，SIM 上的不动': ['Only local files will be deleted; messages on the SIM remain.', 'Yalnızca yerel dosyalar silinir; SIM’deki mesajlar korunur.'],
+	'清空': ['Clear', 'Temizle'],
+	'删除这条短信': ['Delete this SMS', 'Bu SMS’i sil'],
+	'删除后不可恢复': ['Deletion cannot be undone', 'Silme işlemi geri alınamaz'],
+	'仅删本地': ['Local only', 'Yalnızca yerel'],
+	'本地 + SIM': ['Local + SIM', 'Yerel + SIM'],
+	'删除失败': ['Delete failed', 'Silme başarısız'],
+	'已删除': ['Deleted', 'Silindi'],
+	'已删除（仅本地）': ['Deleted (local only)', 'Silindi (yalnızca yerel)'],
+	'删除': ['Delete', 'Sil'],
+	'号码和内容都要填': ['Enter both a number and a message', 'Numara ve mesaj girin'],
+	'发送中': ['Sending', 'Gönderiliyor'],
+	'已发送，稍后自动刷新': ['Sent; refreshing shortly', 'Gönderildi; birazdan yenilenecek'],
+	'发送失败': ['Send failed', 'Gönderme başarısız'],
+	'AT 通道正忙，稍后重试': ['AT channel busy; retry shortly', 'AT kanalı meşgul; birazdan yeniden deneyin'],
+	'池子是空的：收到/发出的短信会出现在这里，或点「从 SIM 同步」。': ['The pool is empty. Incoming and sent messages appear here, or select “Sync from SIM”.', 'Havuz boş. Gelen ve gönderilen mesajlar burada görünür veya “SIM’den eşitle”yi seçin.'],
+	'我: ': ['Me: ', 'Ben: '],
+	'这里定义插件与当前紫光 OpenWrt 的边界。修改后无需改动看板、AT、锁定或短信页面。': ['Configure how this plugin connects to the current Unisoc OpenWrt platform. Changes do not require editing the dashboard, AT, locks or SMS pages.', 'Bu eklentinin mevcut Unisoc OpenWrt platformuna nasıl bağlandığını yapılandırın. Değişiklikler panel, AT, kilit veya SMS sayfalarını düzenlemeyi gerektirmez.'],
+	'平台适配': ['Platform adapter', 'Platform bağdaştırıcısı'],
+	'AT 后端': ['AT backend', 'AT arka ucu'],
+	'自动检测': ['Auto-detect', 'Otomatik algıla'],
+	'atinout + 串口': ['atinout + serial port', 'atinout + seri port'],
+	'自定义适配器': ['Custom adapter', 'Özel bağdaştırıcı'],
+	'AT 串口': ['AT serial port', 'AT seri portu'],
+	'自定义 AT 适配器': ['Custom AT adapter', 'Özel AT bağdaştırıcısı'],
+	'可执行文件依次接收超时秒数和完整 AT 命令。它必须与平台拨号程序共享串口锁。': ['The executable receives a timeout in seconds and the complete AT command, in that order. It must share the serial lock with the platform dialer.', 'Yürütülebilir dosya sırayla saniye cinsinden zaman aşımını ve tam AT komutunu alır. Seri port kilidini platform arama programıyla paylaşmalıdır.'],
+	'短信适配器': ['SMS adapter', 'SMS bağdaştırıcısı'],
+	'实现 list、show、send、delete、sync 子命令；留空时自动查找 mu300-sms。': ['Implement the list, show, send, delete and sync subcommands; leave blank to find mu300-sms automatically.', 'list, show, send, delete ve sync alt komutlarını uygulayın; mu300-sms otomatik bulunsun diye boş bırakın.'],
+	'短信池目录': ['SMS pool directory', 'SMS havuzu dizini'],
+	'蜂窝逻辑接口': ['Cellular logical interface', 'Hücresel mantıksal arabirim'],
+	'蜂窝 IPv6 接口': ['Cellular IPv6 interface', 'Hücresel IPv6 arabirimi'],
+	'蜂窝网卡': ['Cellular network device', 'Hücresel ağ aygıtı'],
+	'留空则从 netifd 自动获取': ['Leave blank to detect from netifd', 'netifd’den otomatik algılamak için boş bırakın'],
+	'LAN 网桥': ['LAN bridge', 'LAN köprüsü'],
+	'Wi-Fi 网卡': ['Wi-Fi device', 'Wi-Fi aygıtı'],
+	'USB 网卡': ['USB device', 'USB aygıtı'],
+	'等待 AT 就绪上限（秒）': ['Maximum wait for AT readiness (seconds)', 'AT hazır olma üst bekleme süresi (saniye)'],
+	'持久化状态目录': ['Persistent state directory', 'Kalıcı durum dizini'],
 	'，': [', ', ', '],
 	'。': ['.', '.'],
 	'；': ['; ', '; '],
@@ -170,6 +306,7 @@ var DASH_I18N = {
 	'」': ['”', '”']
 };
 var DASH_KEYS = Object.keys(DASH_I18N).sort(function(a, b) { return b.length - a.length; });
+var DASH_PATTERN = new RegExp(DASH_KEYS.map(function(k) { return k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }).join('|'), 'g');
 function uiLanguage() {
 	var lang = (L.env && L.env.lang) || document.documentElement.lang || navigator.language || 'en';
 	if (lang === 'auto') lang = document.documentElement.lang || navigator.language || 'en';
@@ -179,9 +316,8 @@ function uiLanguage() {
 function translate(text) {
 	var lang = uiLanguage();
 	if (lang === 'zh' || text == null) return String(text == null ? '' : text);
-	var out = String(text), column = lang === 'tr' ? 1 : 0;
-	DASH_KEYS.forEach(function(key) { if (out.indexOf(key) >= 0) out = out.split(key).join(DASH_I18N[key][column]); });
-	return out;
+	var column = lang === 'tr' ? 1 : 0;
+	return String(text).replace(DASH_PATTERN, function(key) { return DASH_I18N[key][column]; });
 }
 function localize(root) {
 	if (uiLanguage() === 'zh' || !root) return;
@@ -196,6 +332,14 @@ function localize(root) {
 		[ 'title', 'placeholder', 'aria-label' ].forEach(function(attr) {
 			if (el.hasAttribute && el.hasAttribute(attr)) el.setAttribute(attr, translate(el.getAttribute(attr)));
 		});
+	});
+}
+function localizeMenu() {
+	/* LuCI renders menu JSON before a view loads; limit translation to this
+	 * plugin's links so unrelated system navigation remains untouched. */
+	if (uiLanguage() === 'zh' || !document.querySelectorAll) return;
+	Array.prototype.forEach.call(document.querySelectorAll('a[href*="/admin/home"], a[href*="/admin/modem"]'), function(a) {
+		localize(a);
 	});
 }
 
@@ -453,6 +597,7 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 `;
 
 function injectCss() {
+	localizeMenu();
 	// Discard our own aliases before probing, otherwise the second LuCI page
 	// would mistake this bridge for Aurora and turn it off.
 	document.documentElement.classList.remove('mud-bootstrap-theme');
@@ -510,7 +655,7 @@ function neighborRows(c, lockedCell) {
 		return (b.rsrp || -999) - (a.rsrp || -999);
 	});
 	if (!nb.length)
-		return '<tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">暂无邻区数据</td></tr>';
+		return '<tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">' + esc(translate('暂无邻区数据')) + '</td></tr>';
 	var lk = Array.isArray(lockedCell) ? lockedCell.join('|') : (lockedCell || '');
 	return nb.map(function(n) {
 		var l = qLabel(n.rsrp, n.rsrq, n.sinr);
@@ -523,7 +668,7 @@ function neighborRows(c, lockedCell) {
 			'<td>' + (n.rsrq != null ? n.rsrq.toFixed(1) : '--') + '</td>' +
 			'<td>' + (n.sinr != null ? n.sinr.toFixed(1) : '--') + '</td>' +
 			'<td><button class="mud-lockbtn' + (isLocked ? ' locked' : '') + '" data-lock="' + key + '"' +
-			(isLocked ? ' disabled' : '') + '>' + (isLocked ? '已锁定' : '锁定') + '</button></td></tr>';
+			(isLocked ? ' disabled' : '') + '>' + esc(translate(isLocked ? '已锁定' : '锁定')) + '</button></td></tr>';
 	}).join('');
 }
 
@@ -711,10 +856,10 @@ function choiceBox(title, message, choices, opts) {
 		wrap.innerHTML = '<div class="mud-dlg" role="dialog" aria-modal="true">' +
 			'<h4></h4><div class="mud-dlg-msg"></div>' +
 			'<div class="mud-dlg-btns">' + btns + '</div></div>';
-		wrap.querySelector('h4').textContent = title || '选择';
-		wrap.querySelector('.mud-dlg-msg').textContent = message || '';
+		wrap.querySelector('h4').textContent = translate(title || '选择');
+		wrap.querySelector('.mud-dlg-msg').textContent = translate(message || '');
 		(choices || []).forEach(function(c, i) {
-			wrap.querySelector('[data-i="' + i + '"]').textContent = c.label || '?';
+			wrap.querySelector('[data-i="' + i + '"]').textContent = translate(c.label || '?');
 		});
 		var done = function(v) {
 			document.removeEventListener('keydown', onKey, true);
@@ -744,7 +889,7 @@ return baseclass.extend({
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	carrierName: carrierName, qLabel: qLabel, qCol: qCol, qScore: qScore,
 	esc: esc, fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, PLMN_CN: PLMN_CN,
-	uiLanguage: uiLanguage, translate: translate, localize: localize,
+	uiLanguage: uiLanguage, translate: translate, localize: localize, localizeMenu: localizeMenu,
 	injectCss: injectCss, v: v, set: set, spark: spark, neighborRows: neighborRows,
 	toast: toast, busy: busy, confirmBox: confirmBox, alertBox: alertBox, choiceBox: choiceBox,
 	notify: notify, watchSms: watchSms

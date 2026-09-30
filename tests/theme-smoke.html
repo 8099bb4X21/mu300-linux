@@ -8,6 +8,7 @@ html.aurora{--surface:#fef6e4;--text:#332200;--hairline:#dbbd99;--brand:#663399}
 <div class="mud"><div class="mud-card" id="card">Theme smoke test</div></div>
 <pre id="result">pending</pre>
 <script>
+window.L = {env: {lang: 'en'}};
 fetch('../openwrt/luci-app-mu300/htdocs/luci-static/resources/mu300/common.js').then(r => r.text()).then(src => {
   const M = new Function('rpc', 'baseclass', src)(
     {declare: () => () => {}}, {extend: obj => obj});
