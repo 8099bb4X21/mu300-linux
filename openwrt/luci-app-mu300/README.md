@@ -4,6 +4,10 @@ A self-contained LuCI application for Unisoc cellular devices. It provides the
 dashboard, live radio readings, persistent network/band/cell/EN-DC locks, a
 guarded AT terminal and an SMS UI.
 
+The dashboard follows LuCI's selected language (English, Turkish, or Simplified
+Chinese) without an extra language package. Its colors follow Aurora's existing
+tokens when present, or the official Bootstrap theme's light/dark tokens.
+
 The package does not start or own the modem. Platform-specific access is behind
 small command adapters, so the LuCI and RPC code does not need to change for a
 different Unisoc OpenWrt firmware.

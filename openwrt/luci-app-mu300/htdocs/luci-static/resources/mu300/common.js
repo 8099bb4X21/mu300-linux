@@ -26,6 +26,179 @@ var callSmsSend = rpc.declare({ object: 'mu300dash', method: 'sms_send', params:
 var callSmsDel  = rpc.declare({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
 var callSmsSync = rpc.declare({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
 
+/* Dashboard translations deliberately ship as a tiny runtime catalog: a
+ * standalone package works in any OpenWrt buildroot without po2lmo or extra
+ * language packages. Chinese remains the source/fallback language. */
+var DASH_I18N = {
+	'链路与流量': ['Link & traffic', 'Bağlantı ve trafik'],
+	'下行速率': ['Download rate', 'İndirme hızı'],
+	'上行速率': ['Upload rate', 'Yükleme hızı'],
+	'累计接收': ['Total received', 'Toplam alınan'],
+	'累计发送': ['Total sent', 'Toplam gönderilen'],
+	'会话时长': ['Session duration', 'Oturum süresi'],
+	'注册状态': ['Registration', 'Kayıt durumu'],
+	'调制方式 下/上': ['Modulation DL/UL', 'Modülasyon İndirme/Yükleme'],
+	'MCS 下/上': ['MCS DL/UL', 'MCS İndirme/Yükleme'],
+	'BLER 下/上': ['BLER DL/UL', 'BLER İndirme/Yükleme'],
+	'按当前 MCS 估算': ['Estimated from current MCS', 'Geçerli MCS değerinden tahmin'],
+	'频宽': ['Bandwidth', 'Bant genişliği'],
+	'AMBR 下/上': ['AMBR DL/UL', 'AMBR İndirme/Yükleme'],
+	'无线 · 局域网 · 设备 · SIM': ['Wi-Fi · LAN · Device · SIM', 'Wi-Fi · LAN · Cihaz · SIM'],
+	'CPU 占用': ['CPU usage', 'CPU kullanımı'],
+	'内存': ['Memory', 'Bellek'],
+	'存储': ['Storage', 'Depolama'],
+	'电源': ['Power', 'Güç'],
+	'信道': ['Channel', 'Kanal'],
+	'加密': ['Encryption', 'Şifreleme'],
+	'隐藏 SSID': ['Hidden SSID', 'Gizli SSID'],
+	'国家': ['Country', 'Ülke'],
+	'AP 状态': ['AP status', 'AP durumu'],
+	'USB 网络': ['USB network', 'USB ağı'],
+	'连接跟踪': ['Connection tracking', 'Bağlantı izleme'],
+	'LAN 地址': ['LAN address', 'LAN adresi'],
+	'无线客户端': ['Wi-Fi clients', 'Wi-Fi istemcileri'],
+	'DHCP 租约': ['DHCP leases', 'DHCP kiraları'],
+	'设备型号': ['Device model', 'Cihaz modeli'],
+	'系统': ['System', 'Sistem'],
+	'调制解调器': ['Modem', 'Modem'],
+	'运营商': ['Carrier', 'Operatör'],
+	'模组': ['Module', 'Modül'],
+	'固件': ['Firmware', 'Ürün yazılımı'],
+	'显示卡号信息': ['Show SIM identifiers', 'SIM kimliklerini göster'],
+	'隐藏卡号信息': ['Hide SIM identifiers', 'SIM kimliklerini gizle'],
+	'快捷控制': ['Quick controls', 'Hızlı denetimler'],
+	'数据连接': ['Data connection', 'Veri bağlantısı'],
+	'蜂窝射频': ['Cellular radio', 'Hücresel radyo'],
+	'Wi-Fi 热点': ['Wi-Fi hotspot', 'Wi-Fi erişim noktası'],
+	'重启调制解调器': ['Restart modem', 'Modemi yeniden başlat'],
+	'重启设备': ['Restart device', 'Cihazı yeniden başlat'],
+	'切换到 Android': ['Switch to Android', 'Android’e geç'],
+	'邻区': ['Neighbor cells', 'Komşu hücreler'],
+	'制式/频段': ['RAT/Band', 'Teknoloji/Bant'],
+	'频点': ['Frequency', 'Frekans'],
+	'暂无邻区数据': ['No neighbor-cell data', 'Komşu hücre verisi yok'],
+	'已锁定': ['Locked', 'Kilitli'],
+	'锁定小区': ['Lock cell', 'Hücreyi kilitle'],
+	'锁定': ['Lock', 'Kilitle'],
+	'已运行': ['Uptime', 'Çalışma süresi'],
+	'无线电已关': ['Radio off', 'Radyo kapalı'],
+	'未驻留小区': ['No serving cell', 'Bağlı olunan hücre yok'],
+	'无应答': ['No response', 'Yanıt yok'],
+	'信号': ['Signal', 'Sinyal'],
+	'优秀': ['Excellent', 'Mükemmel'],
+	'良好': ['Good', 'İyi'],
+	'一般': ['Fair', 'Orta'],
+	'较差': ['Poor', 'Zayıf'],
+	'未知': ['Unknown', 'Bilinmiyor'],
+	'未注册': ['Not registered', 'Kayıtlı değil'],
+	'已注册（漫游）': ['Registered (roaming)', 'Kayıtlı (dolaşım)'],
+	'已注册': ['Registered', 'Kayıtlı'],
+	'搜索中': ['Searching', 'Aranıyor'],
+	'注册被拒': ['Registration denied', 'Kayıt reddedildi'],
+	'仅紧急': ['Emergency only', 'Yalnızca acil arama'],
+	'状态': ['Status', 'Durum'],
+	'LTE 锚点': ['LTE anchor', 'LTE bağlantı noktası'],
+	'LTE 链路': ['LTE link', 'LTE bağlantısı'],
+	'锚点': ['Anchor', 'Bağlantı noktası'],
+	'已隐藏': ['Hidden', 'Gizli'],
+	'运行中': ['Running', 'Çalışıyor'],
+	'未运行': ['Not running', 'Çalışmıyor'],
+	'已连接': ['Connected', 'Bağlı'],
+	'未连接': ['Disconnected', 'Bağlı değil'],
+	'未读': ['unread', 'okunmamış'],
+	' 条未读': [' unread', ' okunmamış'],
+	'约半分钟': ['about 30 seconds', 'yaklaşık 30 saniye'],
+	'近期 DHCP 租约': ['Recent DHCP leases', 'Son DHCP kiraları'],
+	'主板': ['Board', 'Anakart'],
+	'无温度读数': ['No temperature readings', 'Sıcaklık verisi yok'],
+	'在线': ['Online', 'Çevrimiçi'],
+	'AT 适配器不可用': ['AT adapter unavailable', 'AT bağdaştırıcısı kullanılamıyor'],
+	'正在执行': ['Running', 'Çalıştırılıyor'],
+	'已后台执行': ['Started in background', 'Arka planda başlatıldı'],
+	'已执行': ['Done', 'Tamamlandı'],
+	'失败': ['Failed', 'Başarısız'],
+	'未知错误': ['Unknown error', 'Bilinmeyen hata'],
+	'调用失败': ['Request failed', 'İstek başarısız'],
+	'正在断开数据连接': ['Disconnecting data', 'Veri bağlantısı kesiliyor'],
+	'正在拨号': ['Connecting data', 'Veri bağlantısı kuruluyor'],
+	'关闭蜂窝射频': ['Turn off cellular radio', 'Hücresel radyoyu kapat'],
+	'打开蜂窝射频': ['Turn on cellular radio', 'Hücresel radyoyu aç'],
+	'蜂窝连接会中断': ['Cellular connectivity will be interrupted', 'Hücresel bağlantı kesilecek'],
+	'将执行 SFUN 上电序列（最多约 1 分钟）': ['The SFUN power-on sequence will run (up to about 1 minute)', 'SFUN açılış sırası çalışacak (yaklaşık 1 dakikaya kadar)'],
+	'蜂窝连接会中断 1-2 分钟': ['Cellular connectivity may stop for 1–2 minutes', 'Hücresel bağlantı 1–2 dakika kesilebilir'],
+	'重启整个设备': ['Restart the entire device', 'Tüm cihazı yeniden başlat'],
+	'所有连接会断开': ['All connections will be interrupted', 'Tüm bağlantılar kesilecek'],
+	'切换到 Android 系统': ['Switch to Android', 'Android sistemine geç'],
+	'下次启动将进入 Android 并立即重启，此管理页面与蜂窝共享都会断开': ['The next boot will enter Android and reboot now. This management page and cellular sharing will disconnect', 'Sonraki açılış Android’e geçecek ve cihaz şimdi yeniden başlayacak. Yönetim sayfası ve hücresel paylaşım kesilecek'],
+	'回到 OpenWrt：在 Android 上执行 mu300-next-boot linux 后重启': ['To return to OpenWrt, run mu300-next-boot linux in Android and reboot', 'OpenWrt’ye dönmek için Android’de mu300-next-boot linux çalıştırıp yeniden başlatın'],
+	'或什么都不做，连续 5 次开机未完成会自动回退': ['Or do nothing: five failed boots trigger automatic fallback', 'Ya da hiçbir şey yapmayın: beş başarısız açılışta otomatik geri dönülür'],
+	'切换并重启': ['Switch and reboot', 'Geç ve yeniden başlat'],
+	'正在武装 Android 引导并重启': ['Preparing Android boot and rebooting', 'Android açılışı hazırlanıyor ve yeniden başlatılıyor'],
+	'协议栈会重启（SFUN），蜂窝断开约半分钟': ['The radio stack will restart (SFUN); cellular service will stop for about 30 seconds', 'Radyo yığını yeniden başlayacak (SFUN); hücresel bağlantı yaklaşık 30 saniye kesilecek'],
+	'正在后台锁定': ['Locking in background', 'Arka planda kilitleniyor'],
+	'已后台锁定': ['Lock started in background', 'Kilit arka planda başlatıldı'],
+	'稍后自动刷新状态': ['status will refresh shortly', 'durum birazdan yenilenecek'],
+	'锁定失败': ['Lock failed', 'Kilitleme başarısız'],
+	'确认': ['Confirm', 'Onayla'],
+	'确定': ['OK', 'Tamam'],
+	'取消': ['Cancel', 'İptal'],
+	'新短信': ['New SMS', 'Yeni SMS'],
+	'未知号码': ['Unknown number', 'Bilinmeyen numara'],
+	'中国移动': ['China Mobile', 'China Mobile'],
+	'中国联通': ['China Unicom', 'China Unicom'],
+	'中国电信': ['China Telecom', 'China Telecom'],
+	'中国广电': ['China Broadnet', 'China Broadnet'],
+	'中国铁通': ['China Tietong', 'China Tietong'],
+	' 天 ': [' d ', ' gün '],
+	' 小时': [' h', ' sa'],
+	' 分': [' min', ' dk'],
+	' 条': [' entries', ' kayıt'],
+	' 台': [' clients', ' istemci'],
+	' 簇': [' cluster', ' küme'],
+	'共 ': ['Total ', 'Toplam '],
+	'余 ': ['Free ', 'Boş '],
+	'簇': ['Cluster ', 'Küme '],
+	'否': ['No', 'Hayır'],
+	'，': [', ', ', '],
+	'。': ['.', '.'],
+	'；': ['; ', '; '],
+	'：': [': ', ': '],
+	'（': ['(', '('],
+	'）': [')', ')'],
+	'？': ['?', '?'],
+	'「': ['“', '“'],
+	'」': ['”', '”']
+};
+var DASH_KEYS = Object.keys(DASH_I18N).sort(function(a, b) { return b.length - a.length; });
+function uiLanguage() {
+	var lang = (L.env && L.env.lang) || document.documentElement.lang || navigator.language || 'en';
+	if (lang === 'auto') lang = document.documentElement.lang || navigator.language || 'en';
+	lang = String(lang).toLowerCase().replace('_', '-');
+	return lang.indexOf('zh') === 0 ? 'zh' : lang.indexOf('tr') === 0 ? 'tr' : 'en';
+}
+function translate(text) {
+	var lang = uiLanguage();
+	if (lang === 'zh' || text == null) return String(text == null ? '' : text);
+	var out = String(text), column = lang === 'tr' ? 1 : 0;
+	DASH_KEYS.forEach(function(key) { if (out.indexOf(key) >= 0) out = out.split(key).join(DASH_I18N[key][column]); });
+	return out;
+}
+function localize(root) {
+	if (uiLanguage() === 'zh' || !root) return;
+	var walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), node;
+	while ((node = walk.nextNode())) {
+		if (node.parentElement && /^(SCRIPT|STYLE|TEXTAREA)$/.test(node.parentElement.tagName)) continue;
+		var translated = translate(node.nodeValue);
+		if (translated !== node.nodeValue) node.nodeValue = translated;
+	}
+	var elements = [root].concat(Array.prototype.slice.call(root.querySelectorAll('*')));
+	elements.forEach(function(el) {
+		[ 'title', 'placeholder', 'aria-label' ].forEach(function(attr) {
+			if (el.hasAttribute && el.hasAttribute(attr)) el.setAttribute(attr, translate(el.getAttribute(attr)));
+		});
+	});
+}
+
 /* 大陆运营商 PLMN -> 名称；COPS 给数字格式时用它还原 */
 var PLMN_CN = {
 	'46000': '中国移动', '46002': '中国移动', '46004': '中国移动', '46007': '中国移动', '46008': '中国移动',
@@ -115,6 +288,10 @@ function fmtUptime(s) {
 
 /* ------------------------------------------------------------------ 样式 */
 var CSS = `
+/* Bootstrap exposes a different token family. Only activate this bridge when
+ * Aurora's --surface token is absent, so existing Aurora styling wins intact.
+ * Bootstrap's data-darkmode switch updates these aliases without a reload. */
+html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken:var(--background-color-low);--brand-subtle:color-mix(in srgb,var(--primary-color-high) 10%,var(--background-color-high));--hairline:var(--border-color-low);--text:var(--text-color-high);--text-muted:var(--text-color-medium);--text-subtle:var(--text-color-low);--brand:var(--primary-color-high);--success:var(--success-color-high);--warning:var(--warn-color-high);--danger:var(--error-color-high);--info:var(--primary-color-high);--on-brand:var(--on-primary-color);--hover-faint:var(--background-color-medium)}
 .mud{color:var(--text,#222);font-size:.85rem;line-height:1.45}
 .mud *{box-sizing:border-box}
 .mud-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;margin-top:6px}
@@ -276,6 +453,14 @@ var CSS = `
 `;
 
 function injectCss() {
+	// Discard our own aliases before probing, otherwise the second LuCI page
+	// would mistake this bridge for Aurora and turn it off.
+	document.documentElement.classList.remove('mud-bootstrap-theme');
+	var theme = getComputedStyle(document.documentElement);
+	var hasAuroraTokens = theme.getPropertyValue('--surface').trim() ||
+		getComputedStyle(document.body).getPropertyValue('--surface').trim();
+	document.documentElement.classList.toggle('mud-bootstrap-theme',
+		!hasAuroraTokens && !!theme.getPropertyValue('--background-color-high').trim());
 	if (document.getElementById('mud-style')) return;
 	var st = document.createElement('style');
 	st.id = 'mud-style';
@@ -358,7 +543,7 @@ function toast(text, opts) {
 	var t = document.createElement('div');
 	t.className = 'mud-toast ' + (opts.type || 'info');
 	t.innerHTML = '<i class="mud-tico"></i><span></span>';
-	t.lastChild.textContent = text == null ? '' : String(text);
+	t.lastChild.textContent = translate(text);
 	document.getElementById('mud-toasts').appendChild(t);
 	var timer = null, dead = false;
 	var life = opts.timeout !== undefined ? opts.timeout : 3500;
@@ -377,7 +562,7 @@ function toast(text, opts) {
 	return {
 		update: function(text2, type2) {
 			if (dead) return;
-			t.lastChild.textContent = text2 == null ? '' : String(text2);
+			t.lastChild.textContent = translate(text2);
 			if (type2) t.className = 'mud-toast ' + type2;
 			arm();
 		},
@@ -415,11 +600,11 @@ function dialog(opts) {
 			(withCancel ? '<button type="button" class="mud-btn" data-r="0"></button>' : '') +
 			'<button type="button" class="mud-btn' + (opts.danger ? ' warn' : '') + '" data-r="1"></button>' +
 			'</div></div>';
-		wrap.querySelector('h4').textContent = opts.title || '确认';
-		wrap.querySelector('.mud-dlg-msg').textContent = opts.message || '';
+		wrap.querySelector('h4').textContent = translate(opts.title || '确认');
+		wrap.querySelector('.mud-dlg-msg').textContent = translate(opts.message || '');
 		var btns = wrap.querySelectorAll('.mud-dlg-btns .mud-btn');
-		btns[btns.length - 1].textContent = opts.okText || '确定';
-		if (withCancel) btns[0].textContent = opts.cancelText || '取消';
+		btns[btns.length - 1].textContent = translate(opts.okText || '确定');
+		if (withCancel) btns[0].textContent = translate(opts.cancelText || '取消');
 		var done = function(r) {
 			document.removeEventListener('keydown', onKey, true);
 			wrap.remove();
@@ -452,7 +637,7 @@ function notify(title, message, opts) {
 	var t = document.createElement('div');
 	t.className = 'mud-toast notify ' + (opts.type || 'info');
 	t.innerHTML = '<i class="mud-tico"></i><div class="mud-nb"><b></b><span></span></div>';
-	t.querySelector('b').textContent = title == null ? '' : String(title);
+	t.querySelector('b').textContent = translate(title);
 	t.querySelector('span').textContent = message == null ? '' : String(message);
 	document.getElementById('mud-toasts').appendChild(t);
 	var life = opts.timeout !== undefined ? opts.timeout : 6000;
@@ -559,6 +744,7 @@ return baseclass.extend({
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	carrierName: carrierName, qLabel: qLabel, qCol: qCol, qScore: qScore,
 	esc: esc, fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, PLMN_CN: PLMN_CN,
+	uiLanguage: uiLanguage, translate: translate, localize: localize,
 	injectCss: injectCss, v: v, set: set, spark: spark, neighborRows: neighborRows,
 	toast: toast, busy: busy, confirmBox: confirmBox, alertBox: alertBox, choiceBox: choiceBox,
 	notify: notify, watchSms: watchSms

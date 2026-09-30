@@ -55,9 +55,11 @@ return view.extend({
 		M.injectCss();
 		M.watchSms();
 		var root = document.createElement('div');
+		this._root = root;
 		this._bootEl = root;
 		root.className = 'mud mud-booting';
 		root.innerHTML = this.html();
+		M.localize(root);
 		this.wire(root);
 		var self = this;
 		/* 立即取一次完整状态；不要同时重复执行 sysinfo 与 status 两轮本地采集。 */
@@ -539,5 +541,6 @@ return view.extend({
 		b = M.v('btn-data'); b.className = 'mud-btn' + (w.up ? ' on' : ''); b.textContent = '数据连接';
 		b = M.v('btn-radio'); b.className = 'mud-btn' + (c && c.cfun === 1 ? ' on' : ''); b.textContent = '蜂窝射频';
 		b = M.v('btn-wifi'); b.className = 'mud-btn' + (wf.up ? ' on' : ''); b.textContent = 'Wi-Fi 热点';
+		M.localize(this._root);
 	}
 });
