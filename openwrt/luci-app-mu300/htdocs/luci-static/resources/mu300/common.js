@@ -106,6 +106,7 @@ var DASH_I18N = {
 	'已连接': ['Connected', 'Bağlı'],
 	'未连接': ['Disconnected', 'Bağlı değil'],
 	'未读': ['unread', 'okunmamış'],
+	' 条未读': [' unread', ' okunmamış'],
 	'约半分钟': ['about 30 seconds', 'yaklaşık 30 saniye'],
 	'近期 DHCP 租约': ['Recent DHCP leases', 'Son DHCP kiraları'],
 	'主板': ['Board', 'Anakart'],
