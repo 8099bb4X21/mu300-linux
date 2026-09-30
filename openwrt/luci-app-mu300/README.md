@@ -53,3 +53,9 @@ buildroot, select `LuCI -> Applications -> luci-app-mu300`, and build normally.
 No file outside this directory is copied into the package; platform-specific AT
 and SMS implementations are discovered only through the documented adapters at
 runtime.
+
+For a source-tree hot install (without an `.ipk`/`.apk`), copy **both** `root/`
+to `/` and `htdocs/` to `/www/`, then enable/start `unisoc-modem-ui` and
+restart `rpcd`. Copying only `root/` leaves the LuCI menu visible but makes
+`/luci-static/resources/view/mu300/*.js` return HTTP 404. Normal package
+installation performs both copies through this package's `install` recipe.

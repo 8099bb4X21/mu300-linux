@@ -92,6 +92,15 @@ class Rules(unittest.TestCase):
         legacy_views = OPENWRT / 'www/luci-static/resources/view/mu300'
         self.assertFalse(any(p.is_file() for p in legacy_views.rglob('*')))
 
+    def test_luci_package_installs_frontend_and_enables_replay(self):
+        makefile = (LUCI_MU300 / 'Makefile').read_text()
+        # A root/-only live install once left the menu present but every view
+        # returned HTTP 404. The built package must carry both trees.
+        self.assertIn('$(CP) ./htdocs/. $(1)/www/', makefile)
+        self.assertIn('$(CP) ./root/. $(1)/', makefile)
+        self.assertIn('/etc/init.d/unisoc-modem-ui enable', makefile)
+        self.assertIn('/etc/init.d/unisoc-modem-ui start', makefile)
+
     def test_powershell_device_commands_have_no_double_quotes(self):
         # Windows PowerShell 5.1 drops the double quotes inside an argument to a native program: `tr -d "\000"`
         # reached the device as tr -d \000 ("delete the character 0"), and every empty region was "not empty".
