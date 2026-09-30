@@ -23,6 +23,12 @@ mkdir -p "$TOP/work"
 for f in dumps/boot_a.img dumps/misc-head.bin busybox tools/logdw/logdw; do
     [ -s "$IN/$f" ] || { echo "missing $IN/$f" >&2; exit 1; }
 done
+for f in firmware android-subset tools/bt-init/mu300-bt-init tools/keys/mu300-keys; do
+    [ -e "$IN/$f" ] || { echo "required device input missing: $IN/$f" >&2; exit 1; }
+done
+file "$IN/tools/keys/mu300-keys" | grep -q 'ELF 64-bit.*ARM aarch64' || {
+    echo "mu300-keys must be an AArch64 executable" >&2; exit 1;
+}
 for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
     [ -s "$IN/out/modules/$f" ] || { echo "missing $IN/out/modules/$f" >&2; exit 1; }
 done
@@ -41,8 +47,8 @@ else
       MU300_VERSION="$VERSION-tf-7.2" \
       sh "$TOP/openwrt/build-rootfs.sh" "$(basename "$ROOTFS")"
 fi
-for f in ./usr/share/luci/menu.d/luci-app-mu300.json ./www/luci-static/resources/view/mu300/home.js ./usr/lib/lua/luci/i18n/mu300.en.lmo ./etc/init.d/unisoc-modem-ui; do
-    tar -tzf "$ROOTFS" "$f" >/dev/null || { echo "built rootfs missing plugin file: $f" >&2; exit 1; }
+for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd ./etc/init.d/mu300-post ./usr/share/luci/menu.d/luci-app-mu300.json ./www/luci-static/resources/view/mu300/home.js ./usr/lib/lua/luci/i18n/mu300.en.lmo ./usr/lib/lua/luci/i18n/mu300.tr.lmo ./etc/init.d/unisoc-modem-ui; do
+    tar -tzf "$ROOTFS" "$f" >/dev/null || { echo "built rootfs missing required file: $f" >&2; exit 1; }
 done
 
 echo "==> Linux 7.2 boot_b image"

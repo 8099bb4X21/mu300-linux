@@ -275,6 +275,27 @@ setup_usb_gadget() {
     # f_ecm (and f_ncm alike) reports the link state in its first CONNECT notification, and macOS' ECM driver does not
     # pick up a later "connected" notification (v10 left usb0 down until systemd ran -> host "inactive").
     ifconfig usb0 up
+    # Windows requests DHCP as soon as NCM enumerates, before OpenWrt starts
+    # dnsmasq. Serve the final LAN address immediately and keep the same host
+    # lease across switch_root. The post-rootfs rebind renews this same lease.
+    if [ -e /sys/class/net/usb0 ]; then
+        ifconfig usb0 "$NET.1" netmask 255.255.255.0 up
+        echo "$MAC:02" > /run/mu300-usb-host-mac
+        cat > /run/udhcpd-usb0.conf <<EOF
+start $NET.200
+end $NET.200
+interface usb0
+option subnet 255.255.255.0
+option router $NET.1
+option dns $NET.1
+option lease 3600
+lease_file /run/udhcpd-usb0.leases
+pidfile /run/udhcpd-usb0.pid
+EOF
+        touch /run/udhcpd-usb0.leases
+        udhcpd /run/udhcpd-usb0.conf 2>/dev/null &
+        log "stage=usb-dhcp-early ip=$NET.1 host=$NET.200"
+    fi
 }
 
 # The vendor modules first, the gadget last. The host starts asking for a DHCP lease the moment the gadget
@@ -436,6 +457,7 @@ if [ "$root_mounted" = 1 ] && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
             </dev/null >/dev/null 2>&1 &
     fi
     umount /config 2>/dev/null
+    killall udhcpd 2>/dev/null
     mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run
     mount --move /dev /newroot/dev
     mount --move /proc /newroot/proc

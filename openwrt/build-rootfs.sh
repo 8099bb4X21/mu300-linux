@@ -21,6 +21,11 @@ TOP=$(cd "$(dirname "$0")/.." && pwd)
 # build inputs (out/, firmware/, android-subset/, tools binaries, busybox) may live outside the checkout
 IN=${MU300_INPUTS:-$TOP}
 MAINLINE=${MU300_MAINLINE_OUT:-$IN/upstream/out}
+for f in mu300cell.sh mu300cell-v6.sh; do
+    [ -s "$TOP/openwrt/overlay/lib/netifd/proto/$f" ] || {
+        echo "required cellular protocol helper missing: $f" >&2; exit 1;
+    }
+done
 PLUGIN=${MU300_LUCI_PLUGIN_SRC:-}
 if [ -n "$PLUGIN" ]; then
     PLUGIN=$(cd "$PLUGIN" && pwd)

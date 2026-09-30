@@ -15,10 +15,11 @@ start_service() {
 	procd_set_param respawn 3600 5 0
 	procd_close_instance
 
-	# The initramfs NCM RX path can work while its TX endpoint is dead: the
-	# device sees DHCPDISCOVER but Windows never sees DHCPOFFER.  Let procd run
-	# one tracked 100 ms UDC rebind now that br-lan and dnsmasq are ready.  This
-	# is the boot handoff only; PDP/IPv4/IPv6 renewals never touch USB.
+	# The initramfs answers the host's first DHCP request immediately. On this
+	# DWC3 gadget, the NCM TX endpoint can still wedge during switch_root: RX
+	# counts grow and dnsmasq logs DHCPOFFER, but Windows receives nothing.
+	# One tracked 100 ms rebind after br-lan/dnsmasq are ready restores TX and
+	# makes Windows renew the same reserved lease without a physical replug.
 	procd_open_instance usb-ready
 	procd_set_param command /opt/mu300/bin/mu300-usb-reset --fast-run
 	procd_set_param oneshot 1
