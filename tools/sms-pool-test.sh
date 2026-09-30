@@ -10,6 +10,7 @@ set -u
 BIN=$(cd "$(dirname "$0")/.." && pwd)/rootfs/overlay/opt/mu300/bin
 TD=$(mktemp -d)
 export MU300_AT_DIR=$TD/at MU300_SMS_POOL=$TD/pool
+export MU300_SMS_STORE_CACHE=$TD/store
 export PATH="$BIN:$PATH"
 mkdir -p "$TD/at" "$TD/pool" "$TD/at/urc"
 rm -f "$TD/at/cmd"; mkfifo "$TD/at/cmd"
@@ -30,6 +31,7 @@ EOF
             /*) ans=${rest%% *}; cmd=${rest#* } ;;
             *) cmd=$rest; ans=$TD/at/direct.$$ ;;
         esac
+        cr=$(printf '\r'); ctrlz=$(printf '\032')
         case "$cmd" in
             'AT+CPIN?')            r=$'+CPIN: READY\nOK' ;;
             AT+CMGF=*)             r=OK ;;
@@ -48,7 +50,13 @@ OK"; else r='+CMS ERROR: 302'; fi
                                    else
                                        r='+CMS ERROR: 302'
                                    fi ;;
-            AT+CMGS=*)             r='> ' ;;            # the prompt is no final code
+            AT+CMGS=*)             payload=${cmd#*"$cr"}
+                                   if [ "$payload" != "$cmd" ]; then
+                                       printf '%s' "${payload%$ctrlz}" > "$TD/pdu.log"
+                                       r=$'+CMGS: 7\nOK'
+                                   else
+                                       r='> '             # legacy two-stage prompt
+                                   fi ;;
             0001*)                 printf '%s' "$cmd" | tr -d '\032' > "$TD/pdu.log"
                                    [ "${cmd%$(printf '\032')*}" != "$cmd" ] || r='+CMS ERROR: 500'
                                    [ "$r" = '> ' ] && r=$'+CMGS: 7\nOK' ;;
@@ -108,14 +116,14 @@ grep -q 'deleted SIM slot 3' "$TD/d1" || fail "sim delete: $(cat "$TD/d1")"
 grep -q 'AT+CMGD=3' "$TD/cmgd.log" || fail "wrong slot deleted"
 
 try "fallback: numeric stat when CMGL=\"ALL\" is refused (+CMS ERROR: 302)"
-rm -f "$TD/pool/msg"/[0-9]*
+rm -f "$TD/pool/msg"/[0-9]* "$TD/pool/deleted"
 echo cmgl-numeric > "$TD/mode"
 mu300-sms sync >/dev/null || fail "numeric sync exited $?"
 [ "$(pool_count)" = 2 ] || fail "numeric fallback pooled $(pool_count)"
 mu300-sms list | grep -q '测试' || fail "numeric fallback lost the UCS-2 body"
 
 try "fallback: CMGR slot scan when no listing exists at all"
-rm -f "$TD/pool/msg"/[0-9]* "$TD/cmgd.log"
+rm -f "$TD/pool/msg"/[0-9]* "$TD/pool/deleted" "$TD/cmgd.log"
 echo cmgr-only > "$TD/mode"
 mu300-sms sync >/dev/null || fail "scan sync exited $?"
 [ "$(pool_count)" = 2 ] || fail "scan pooled $(pool_count)"
@@ -126,11 +134,16 @@ grep -q 'AT+CMGD=3' "$TD/cmgd.log" || fail "scan-path wrong slot"
 
 try "smsd triggers on a new +CMTI in the URC log"
 echo cmgl-string > "$TD/mode"
+rm -f "$TD/pool/msg"/[0-9]* "$TD/pool/deleted"
 : > "$TD/at/urc/nr0.log"
 MU300_SMS_LOCK=$TD/smsd.lock mu300-smsd > "$TD/smsd.log" 2>&1 &
 SMSD=$!
-sleep 6   # boot wait + initial sync
-[ "$(pool_count)" = 2 ] || fail "initial sync: $(pool_count) files"
+for _ in $(seq 1 20); do
+    [ "$(pool_count)" = 2 ] && break
+    sleep 1
+done
+[ "$(pool_count)" = 2 ] || \
+    fail "initial sync: $(pool_count) files; $(tr '\n' ' ' < "$TD/smsd.log" 2>/dev/null)"
 cat >> "$TD/cmgl.txt" <<'EOF'
 +CMGL: 5,"REC UNREAD","+8613912345678",,"26/09/26,20:01:00+08"
 00480065006C006C006F
@@ -139,9 +152,10 @@ printf '+CMTI: "SM",5\r\n' >> "$TD/at/urc/nr0.log"
 sleep 12
 kill -TERM $SMSD 2>/dev/null; wait $SMSD 2>/dev/null
 grep -q 'AT+CMGD=5' "$TD/cmgd.log" && fail "smsd deleted from the SIM"
-mu300-sms show 9 > "$TD/s9"
-grep -q 'Hello' "$TD/s9" || fail "triggered sync missed the new message: $(cat "$TD/smsd.log")"
-grep -q 'unread' "$TD/s9" || fail "new message not unread"
-mu300-sms show 9 | grep -q 'status:    read' || fail "second show did not mark it read"
+new_id=$(cat "$TD/pool/next_id")
+mu300-sms show "$new_id" > "$TD/new-message"
+grep -q 'Hello' "$TD/new-message" || fail "triggered sync missed the new message: $(cat "$TD/smsd.log")"
+grep -q 'unread' "$TD/new-message" || fail "new message not unread"
+mu300-sms show "$new_id" | grep -q 'status:    read' || fail "second show did not mark it read"
 
 echo "ALL TESTS PASSED"

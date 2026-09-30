@@ -34,17 +34,19 @@ if [ "${1:-}" = --fast-run ]; then
     echo "" > "$G/UDC" 2>/dev/null
     n=0
     while [ -n "$(cat "$G/UDC" 2>/dev/null)" ] && [ "$n" -lt 100 ]; do
-        n=$((n + 1)); usleep 20000 2>/dev/null || sleep 0.02
+        n=$((n + 1)); /opt/mu300/bin/busybox usleep 20000 2>/dev/null || sleep 1
     done
     # USB 2.0 requires a visible disconnect interval; 100 ms is enough for the
     # Windows NCM stack to observe removal while remaining far below the old 5 s.
-    usleep 100000 2>/dev/null || sleep 0.1
+    /opt/mu300/bin/busybox usleep 100000 2>/dev/null || sleep 1
     n=0
     while [ "$n" -lt 100 ]; do
         echo "$udc" > "$G/UDC" 2>/dev/null && [ "$(cat "$G/UDC" 2>/dev/null)" = "$udc" ] && break
-        n=$((n + 1)); usleep 20000 2>/dev/null || sleep 0.02
+        n=$((n + 1)); /opt/mu300/bin/busybox usleep 20000 2>/dev/null || sleep 1
     done
+    ip link set usb0 master br-lan 2>/dev/null || true
     ip link set usb0 up 2>/dev/null || ifconfig usb0 up 2>/dev/null
+    logger -t mu300-usb "fast gadget rebind completed on $udc"
     exit 0
 fi
 sleep 2

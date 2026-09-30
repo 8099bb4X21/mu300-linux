@@ -7,13 +7,6 @@ rm -f /run/mu300-early-udhcpd.pid
 # netifd has transferred usb0 to br-lan without changing the management IP or
 # DHCP lease.
 
-# The boot's only USB enumeration (the initramfs gadget bind) intermittently
-# comes up with the NCM TX endpoint dead: the host's packets arrive, ours never
-# leave, and the host ends up on APIPA with no page and no ping - while netifd,
-# br-lan and dnsmasq are all healthy. Only a UDC rebind recovers it (see
-# docs/FINDINGS.md 31c). Rebind once per boot, after the LAN has settled: the
-# host keeps its lease across the short blip and dnsmasq's broadcast OFFER/ACK
-# finishes the renewal; netifd re-adopts the recreated usb0 into br-lan itself.
-[ -e /run/mu300-usb-healed ] && exit 0
-touch /run/mu300-usb-healed
-( sleep 5; /opt/mu300/bin/mu300-usb-reset ) >/dev/null 2>&1 &
+# The final NCM endpoint health check/rebind is a procd one-shot in mu300-post.
+# A detached child launched by hotplug can be reaped with the hotplug process;
+# keep this hook limited to the deterministic DHCP handoff above.

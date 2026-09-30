@@ -11,7 +11,7 @@
 #   online-5g      solid white         - data connected, 5G NR
 #   offline        solid red           - booted, no data
 #   thermal        red blink           - SoC above 85C (overrides network color)
-#   wifi-on        remember AP state   - never contaminates the exact network colour
+#   wifi-on        WiFi lamp on        - independent from the exact network colour
 #
 # Usage:  led-status <state>          set a state
 #         led-status wifi-on/off     remember the hotspot state
@@ -33,6 +33,15 @@ else
 fi
 [ -w "$LED_B" ] || exit 0
 
+# On the F50 the keyboard-backlight class is the separate hotspot indicator.
+# Do not use it on the U30 Air: that model assigns the same class to another
+# front-panel function.  Keeping this separate also guarantees that LTE stays
+# pure blue (B=255, R=W=0), 5G pure white and offline pure red.
+WIFI_LED=
+if [ "$(mu300-device 2>/dev/null)" = f50 ] && [ -w /sys/class/leds/keyboard-backlight/brightness ]; then
+    WIFI_LED=/sys/class/leds/keyboard-backlight/brightness
+fi
+
 STATE_FILE=/run/led-status.state
 WIFI_FILE=/run/led-status.wifi
 BLINK_PID=/run/led-status.blink.pid
@@ -43,6 +52,19 @@ if [ "${1:-}" = current ]; then
     cat "$STATE_FILE" 2>/dev/null || echo boot
     exit 0
 fi
+
+# WiFi changes must not cancel the boot chase, thermal alarm, or modem/network
+# animation.  They only drive the F50's independent hotspot lamp.
+case "${1:-}" in
+wifi-on|wifi-off)
+    [ "${1:-}" = wifi-on ] && wifi_state=on || wifi_state=off
+    echo "$wifi_state" > "$WIFI_FILE"
+    if [ -n "$WIFI_LED" ]; then
+        echo none > "$(dirname "$WIFI_LED")/trigger" 2>/dev/null
+        [ "$wifi_state" = on ] && echo 127 > "$WIFI_LED" || echo 0 > "$WIFI_LED"
+    fi
+    exit 0 ;;
+esac
 
 # stop any previous user-space blinker
 [ -f "$BLINK_PID" ] && kill "$(cat "$BLINK_PID")" 2>/dev/null
@@ -132,12 +154,6 @@ offline)        # solid red: no data
     restore_steady ;;
 thermal)        # red blink: SoC too hot (called by thermal-guard)
     start_blink 255 0 0 200000 200000 ;;
-wifi-on)
-    echo on > "$WIFI_FILE"
-    restore_steady ;;
-wifi-off)
-    echo off > "$WIFI_FILE"
-    restore_steady ;;
 current)
     cat "$STATE_FILE" 2>/dev/null || echo boot ;;
 *)

@@ -8,6 +8,7 @@ set -euo pipefail
 DEV=${MU300_AT_DEV:-/dev/stty_nr1}
 CID=1
 IFACE=sipa_eth$((CID - 1))
+DEVICE=$(/opt/mu300/bin/mu300-device 2>/dev/null || echo f50)
 
 # The blue LED only reports whether data is up. The PMIC rejects a brightness write now and then (seen as
 # "write error: Invalid argument"), and under `set -e` that killed up() one line before it could report the
@@ -18,9 +19,20 @@ led() { /opt/mu300/bin/mu300-led data "$1" 2>/dev/null || true; }
 # data is up: the LED tells 4G from 5G as ZTE's firmware does (the U30 Air: blue on 4G, white on 5G). The access
 # technology changes under a live connection, so the watchdog asks again on every round.
 led_up() {
-    case $(at 'AT+COPS?' 4 | sed -n 's/^+COPS: [0-9],[0-9],"[^"]*",\([0-9]*\).*/\1/p') in
-        11|12|13) led 5g ;;
-        *) led on ;;
+    # CEREG is a short local-status read; COPS can take about two seconds on
+    # weak service and used to hold an AT channel on every watchdog round.
+    # F50's legacy mu300-led maps both 4G and 5G to blue, so only led-status
+    # may drive its RGB lamp. U30 Air keeps its separate legacy network LEDs.
+    act=$(at 'AT+CEREG?' 4 2>/dev/null | grep '+CEREG:' | head -1 | awk -F, '{print $NF}' | tr -d '" ')
+    case "$act" in
+        11|12|13|15)
+            led-status online-5g 2>/dev/null || true
+            [ "$DEVICE" = u30air ] && led 5g
+            ;;
+        *)
+            led-status online-4g 2>/dev/null || true
+            [ "$DEVICE" = u30air ] && led on
+            ;;
     esac
 }
 
@@ -615,7 +627,8 @@ watch() {
         fails=$((fails + 1))
         [ "$fails" -lt 2 ] && continue
         echo "mobile data lost (modem reset or detached), reconnecting" >&2
-        led off
+        led-status offline 2>/dev/null || true
+        [ "$DEVICE" = u30air ] && led off
         if [ "${MU300_NETIFD:-0}" = 1 ]; then
             ifup "${MU300_WAN:-wan}"   # OpenWrt: let netifd run the mu300cell protocol again
         else

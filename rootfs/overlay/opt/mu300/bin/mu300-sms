@@ -266,7 +266,7 @@ parse_cmgr() {  # parse_cmgr INDEX
 }
 
 select_storage() {
-    local s reply line used total best= cache=/run/mu300-sms-store
+    local s reply line used total best= cache=${MU300_SMS_STORE_CACHE:-/run/mu300-sms-store}
     if [ -s "$cache" ]; then
         s=$(cat "$cache" 2>/dev/null)
         case $s in SM|MT|ME)

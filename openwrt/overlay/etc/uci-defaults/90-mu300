@@ -2,11 +2,15 @@
 # First boot: one LAN for USB and Wi-Fi (192.168.77.1/24 on an F50, 192.168.78.1/24 on a U30 Air), cellular WAN through the modem, hostname, USB console.
 # lan ip6assign 64: a carrier hands out one /64 (the wan_6 that mu300cell adds), and the default /60 request
 # would leave the LAN without IPv6
+usb_host_mac=$(tr -d '\000\r\n' < /sys/kernel/config/usb_gadget/linux/functions/ncm.usb0/host_addr 2>/dev/null)
+[ -n "$usb_host_mac" ] || usb_host_mac='02:50:00:00:77:03'
+lan_ip=$(/opt/mu300/bin/mu300-lan-ip)
+usb_host_ip=${lan_ip%.*}.200
 uci -q batch <<UCI
 set system.@system[0].hostname='mu300'
 set system.@system[0].zonename='Asia/Shanghai'
 set system.@system[0].timezone='CST-8'
-set network.lan.ipaddr='192.168.77.1'
+set network.lan.ipaddr='$lan_ip'
 set network.lan.netmask='255.255.255.0'
 set network.lan.ip6assign='64'
 delete network.wan6
@@ -44,8 +48,8 @@ set dhcp.lan.ndp='relay'
 # in the NCM host stack. Pin the USB host and tag its OFFER/ACK for broadcast.
 set dhcp.mu300_usb=host
 set dhcp.mu300_usb.name='mu300-usb-host'
-set dhcp.mu300_usb.mac='02:50:00:00:77:03'
-set dhcp.mu300_usb.ip='192.168.77.200'
+set dhcp.mu300_usb.mac='$usb_host_mac'
+set dhcp.mu300_usb.ip='$usb_host_ip'
 set dhcp.mu300_usb.broadcast='1'
 UCI
 zone=$(uci -q show firewall | sed -n "s/^\(firewall\.@zone\[[0-9]*\]\)\.name='wan'$/\1/p")
