@@ -327,12 +327,36 @@ pick_root() {
     done
 }
 mkdir -p /disk
-rootloop=$(losetup -f 2>/run/rootmount.err)
-if [ -n "$rootloop" ] && losetup -o $ROOT_OFFSET "$rootloop" /dev/mmcblk0 2>>/run/rootmount.err \
-   && [ "$(cat /sys/block/${rootloop#/dev/}/loop/offset)" = "$ROOT_OFFSET" ] \
-   && [ "$(dd if="$rootloop" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' ')" = 53ef ] \
-   && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err \
-   && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
+# Prefer an ext4 TF filesystem labelled mu300sd. A missing/foreign card costs
+# at most the short device-enumeration window and falls back to internal eMMC.
+sd_root=
+for n in $(seq 1 8); do
+    for d in /dev/mmcblk1p1 /dev/mmcblk1; do
+        [ -b "$d" ] || continue
+        magic=$(dd if="$d" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+        label=$(dd if="$d" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
+        [ "$magic" = 53ef ] && [ "$label" = mu300sd ] && { sd_root=$d; break 2; }
+    done
+    [ -d /sys/block/mmcblk1 ] || { mdev -s; sleep 1; continue; }
+    break
+done
+rootloop=
+root_mounted=0
+if [ -n "$sd_root" ]; then
+    rootloop=$sd_root
+    mount -t ext4 -o noatime "$sd_root" /disk 2>>/run/rootmount.err && root_mounted=1
+    log "stage=sd-root dev=$sd_root mounted=$root_mounted"
+fi
+if [ "$root_mounted" = 0 ]; then
+    rootloop=$(losetup -f 2>/run/rootmount.err)
+    if [ -n "$rootloop" ] && losetup -o $ROOT_OFFSET "$rootloop" /dev/mmcblk0 2>>/run/rootmount.err \
+       && [ "$(cat /sys/block/${rootloop#/dev/}/loop/offset)" = "$ROOT_OFFSET" ] \
+       && [ "$(dd if="$rootloop" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' ')" = 53ef ] \
+       && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err; then
+        root_mounted=1
+    fi
+fi
+if [ "$root_mounted" = 1 ] && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
     # A way back to Android with no computer and no keyboard: cut the power during boot N times in a row (N is
     # .mu300/boot-attempts, 5 without it). Every boot counts up here and mu300-next-boot --rearm clears the count
     # once the system is really up, so only boots that never got that far add up. LK does the same with the

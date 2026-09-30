@@ -105,6 +105,22 @@ class Rules(unittest.TestCase):
         calls = [l.strip() for l in init.splitlines() if l.strip() in ('load_vendor_modules', 'find_partitions')]
         self.assertEqual(calls, ['load_vendor_modules', 'find_partitions'])
 
+    def test_tf_boot_and_package_stay_wired_to_mainline(self):
+        init = (TOP / 'boot' / 'init').read_text()
+        builder = (TOP / 'tools' / 'build-openwrt-tf-magisk.sh').read_text()
+        customize = (TOP / 'android' / 'magisk' / 'mu300-openwrt-tf' / 'customize.sh').read_text()
+        port = (TOP / 'upstream' / 'port' / 'install.py').read_text()
+        self.assertIn('/dev/mmcblk1p1', init)
+        self.assertIn('mu300sd', init)
+        self.assertIn('root_mounted', init)  # TF miss must retain the internal-root fallback
+        self.assertIn('MU300_MAINLINE_OUT', builder)
+        self.assertIn('--append-ramdisk', builder)
+        self.assertIn('7.2.*', builder)
+        self.assertIn('/dev/block/by-name/boot_b', customize)
+        self.assertIn('--no-reboot', customize)
+        self.assertIn("t = t.replace(old, '')", port)
+        self.assertNotIn("return -ENODEV;\\n' + t[j:]", port)
+
     def test_every_device_has_its_files(self):
         # a device the installers know needs its module order; its modules come from kernel/build-<device>.sh
         for dev in ('u30air',):
