@@ -2,6 +2,8 @@
 import shutil
 import subprocess
 import unittest
+import json
+import re
 
 from helpers import TOP
 
@@ -24,7 +26,7 @@ class DashboardI18n(unittest.TestCase):
     def run_js(self, body):
         harness = r'''
 const fs = require('fs');
-const src = fs.readFileSync(process.argv[1], 'utf8');
+const src = fs.readFileSync(process.argv[2], 'utf8');
 let lang = 'en', aurora = '', official = 'hsl(0,0%,100%)', selected;
 const root = { classList: { remove: () => {}, toggle: (name, value) => { selected = value; } } };
 const document = { documentElement: root, body: {}, getElementById: () => ({}), head: { appendChild: () => {} } };
@@ -34,7 +36,9 @@ const M = new Function('rpc', 'baseclass', 'L', 'document', 'navigator', 'getCom
     { declare: () => () => {} }, { extend: (obj) => obj }, { env: { get lang() { return lang; } } },
     document, { language: 'en-US' }, style);
 ''' + body
-        result = subprocess.run(['node', '-e', harness, str(COMMON)], capture_output=True, text=True)
+        # Pass Unicode source on stdin; Windows node -e can mangle non-ASCII
+        # command-line arguments under the active console code page.
+        result = subprocess.run(['node', '-', str(COMMON)], input=harness, capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_three_dashboard_languages(self):
@@ -64,10 +68,69 @@ const home = new Function('view', 'poll', 'M', homeSrc)(
     { extend: (obj) => obj }, {}, M);
 for (const locale of ['en', 'tr']) {
     lang = locale;
+    if (/[㐀-鿿]/.test(M.translate('正在后台应用')))
+        throw Error('phrase translation failed: ' + M.translate('正在后台应用'));
     const visible = M.translate(home.html().replace(/<[^>]+>/g, ' '));
     if (/[\u3400-\u9fff]/.test(visible)) throw Error(locale + ': untranslated static label: ' + visible.match(/[\u3400-\u9fff]+/)[0]);
 }
 """.replace('process.argv[2]', repr(str(HOME))))
+
+    def test_menu_dialog_toast_and_each_view_vocabulary(self):
+        self.run_js(r"""
+const labels = [
+    '状态看板', '蜂窝', '网络锁定', '短信', 'AT 终端', '适配设置',
+    '应用「网络模式：仅 4G」？', '正在后台应用 NR 频段锁定：n78（SFUN 重启 + 重新驻网，约半分钟）',
+    '回读超时，请点「刷新锁定状态」', '开机自动应用已开启',
+    '会话历史（点击复用）', '错误：AT 通道正忙，命令未发出',
+    '清空本地短信池', '只删本地文件，SIM 上的不动。',
+    '删除这条短信', '本地 + SIM', '发送失败：未知错误',
+    '收件人：号码，如 10086 或 +86...', '蜂窝逻辑接口',
+    '等待 AT 就绪上限（秒）', '留空则从 netifd 自动获取'
+];
+for (const locale of ['en', 'tr']) {
+    lang = locale;
+    for (const label of labels) {
+        const translated = M.translate(label);
+        if (/[㐀-鿿]/.test(translated))
+            throw Error(locale + ': untranslated: ' + label + ' -> ' + translated);
+    }
+}
+lang = 'zh';
+if (M.translate('删除这条短信') !== '删除这条短信') throw Error('Chinese must remain unchanged');
+""")
+
+    def test_other_views_call_localization_without_translating_user_data(self):
+        for name in ('at', 'locks', 'sms'):
+            source = (PACKAGE / f'htdocs/luci-static/resources/view/mu300/{name}.js').read_text(encoding='utf-8')
+            self.assertIn('M.localize(root)', source, name)
+        sms = (PACKAGE / 'htdocs/luci-static/resources/view/mu300/sms.js').read_text(encoding='utf-8')
+        self.assertIn("(last.preview || '')", sms)
+        self.assertIn('bd.textContent = body', sms)
+        at = (PACKAGE / 'htdocs/luci-static/resources/view/mu300/at.js').read_text(encoding='utf-8')
+        self.assertIn("line('ln-data', l)", at)
+        settings = (PACKAGE / 'htdocs/luci-static/resources/view/mu300/settings.js').read_text(encoding='utf-8')
+        self.assertIn('M.localizeMenu()', settings)
+        self.assertIn("t('适配设置')", settings)
+
+    def test_visible_chinese_literals_have_translations(self):
+        literals = []
+        for name in ('home', 'at', 'locks', 'sms', 'settings'):
+            source = (PACKAGE / f'htdocs/luci-static/resources/view/mu300/{name}.js').read_text(encoding='utf-8')
+            for line in source.splitlines():
+                stripped = line.lstrip()
+                if stripped.startswith(('/*', '*', '//', '<!--')):
+                    continue
+                code = line.split('/*', 1)[0].split('//', 1)[0]
+                literals += re.findall(r"'([^'\\\n]*(?:\\.[^'\\\n]*)*)'", code)
+        literals = sorted({s for s in literals if re.search(r'[\u3400-\u9fff]', s)})
+        self.run_js(r'''
+const literals = %s;
+for (const locale of ['en', 'tr']) {
+    lang = locale;
+    const missing = literals.filter(s => /[\u3400-\u9fff]/.test(M.translate(s)));
+    if (missing.length) throw Error(locale + ': ' + JSON.stringify(missing).replace(/[^\x00-\x7f]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')));
+}
+''' % json.dumps(literals, ensure_ascii=True))
 
 
 if __name__ == '__main__':

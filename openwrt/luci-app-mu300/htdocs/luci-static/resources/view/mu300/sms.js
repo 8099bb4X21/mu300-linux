@@ -42,6 +42,7 @@ return view.extend({
   </div>
   <div class="mud-note" id="mud-sms-note">发送走 AT+CMGS（PDU 模式）；通道忙会提示重试。删除单条：在气泡上右键（手机长按）。</div>
 </div>`;
+		M.localize(root);
 		this.Q = function(id) { return root.querySelector('#mud-' + id); };
 		this.sel = null;          /* 当前会话的 peer */
 		this.convs = {};          /* peer -> {msgs:[], unread:n} */
@@ -169,11 +170,11 @@ return view.extend({
 			return (mb && mb.time || '').localeCompare(ma && ma.time || '');
 		});
 		var st = this.stat || {};
-		this.Q('sms-stat').textContent = '· ' + (st.total || all.length) + ' 条' +
-			(st.unread ? '，' + st.unread + ' 条未读' : '') + ' · ' + peers.length + ' 个会话';
+		this.Q('sms-stat').textContent = M.translate('· ' + (st.total || all.length) + ' 条' +
+			(st.unread ? '，' + st.unread + ' 条未读' : '') + ' · ' + peers.length + ' 个会话');
 		var box = this.Q('sms-convs');
 		if (!peers.length) {
-			box.innerHTML = '<div class="mud-note" style="margin:6px">池子是空的：收到/发出的短信会出现在这里，或点「从 SIM 同步」。</div>';
+			box.innerHTML = '<div class="mud-note" style="margin:6px">' + M.esc(M.translate('池子是空的：收到/发出的短信会出现在这里，或点「从 SIM 同步」。')) + '</div>';
 			return;
 		}
 		box.innerHTML = peers.map(function(p) {
@@ -182,7 +183,7 @@ return view.extend({
 			return '<div class="mud-conv' + (p === self.sel ? ' sel' : '') + '" data-peer="' + M.esc(p) + '">' +
 				'<div class="n"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + M.esc(p) + '</span>' +
 				(cv.unread ? '<span class="mud-badge">' + cv.unread + '</span>' : '') + '</div>' +
-				'<div class="p">' + M.esc((last.dir === 'mo' ? '我: ' : '') + (last.preview || '')) + '</div>' +
+				'<div class="p">' + M.esc((last.dir === 'mo' ? M.translate('我: ') : '') + (last.preview || '')) + '</div>' +
 				'<div class="p" style="opacity:.7">' + M.esc(last.time || '') + '</div></div>';
 		}).join('');
 		box.querySelectorAll('.mud-conv').forEach(function(el) {
@@ -236,7 +237,7 @@ return view.extend({
 			/* 垃圾桶删除按钮：气泡右上角，悬停显形（触屏常显由 opacity 常开保证） */
 			var del = document.createElement('button');
 			del.className = 'mud-del';
-			del.title = '删除';
+			del.title = M.translate('删除');
 			del.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
 				'<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>' +
 				'<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
