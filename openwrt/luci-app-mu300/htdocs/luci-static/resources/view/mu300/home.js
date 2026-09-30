@@ -380,7 +380,7 @@ return view.extend({
 		if (oper === '--' && c && c.ident && c.ident.imsi) {
 			var imsi = c.ident.imsi;
 			var plmn5 = imsi.substring(0, 5), plmn6 = imsi.substring(0, 6);
-			oper = M.PLMN_CN[plmn5] || M.PLMN_CN[plmn6] || plmn5;
+			oper = M.translate(M.PLMN_CN[plmn5] || M.PLMN_CN[plmn6] || plmn5);
 		}
 		M.set('op', oper + (score != null ? ' · 信号 ' + label + ' ' + score.toFixed(1) + ' 分' : ' · 信号 ' + label));
 
