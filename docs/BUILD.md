@@ -31,6 +31,9 @@ USB dependency chain, the PM watchdog, the `modem_control` process-name check, m
 The TF package is deliberately self-contained: it builds against the clean upstream branch, writes the OpenWrt
 rootfs to a card labelled `mu300sd`, writes only `boot_b`, and arms slot b without rebooting from inside Magisk.
 If no valid TF filesystem is present at boot, the initramfs falls back to the existing internal `mu300root` rootfs.
+The TF rootfs includes the standalone `openwrt/luci-app-mu300` package by default. The package remains a separate
+LuCI application and can be built for other Unisoc OpenWrt systems; `MU300_LUCI_PLUGIN_SRC` can point to a different
+source checkout when testing a newer plugin version.
 
 ```sh
 docker build -t mu300-mainline-build upstream

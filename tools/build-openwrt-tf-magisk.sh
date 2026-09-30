@@ -1,11 +1,15 @@
 #!/bin/sh
 # Build a Magisk-installable OpenWrt-on-TF package with Linux 7.2.
 # Usage: MU300_INPUTS=work MU300_UPSTREAM_OUT=upstream/out-7.2 tools/build-openwrt-tf-magisk.sh [OUT.zip]
+# The TF image includes the standalone LuCI package from openwrt/luci-app-mu300.
 set -eu
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 IN=${MU300_INPUTS:-$TOP/work}
 UO=${MU300_UPSTREAM_OUT:-$TOP/upstream/out-7.2}
+PLUGIN=${MU300_LUCI_PLUGIN_SRC:-$TOP/openwrt/luci-app-mu300}
+[ -s "$PLUGIN/Makefile" ] || { echo "standalone LuCI plugin missing: $PLUGIN (set MU300_LUCI_PLUGIN_SRC)" >&2; exit 1; }
 OUT=${1:-$TOP/mu300-linux-openwrt-tf.zip}
+case $OUT in /*) ;; *) OUT=$TOP/$OUT ;; esac
 STAGE=$TOP/work/tf-magisk-stage
 ROOTFS=$TOP/openwrt/mu300-openwrt-tf-rootfs.tar.gz
 BOOT=$TOP/work/boot-linux-slotb-tf.img
@@ -33,10 +37,13 @@ echo "==> OpenWrt rootfs ($rel modules included)"
 if [ "${MU300_REUSE_BUILD:-0}" = 1 ] && [ -s "$ROOTFS" ]; then
     echo "reusing $ROOTFS"
 else
-    MU300_GPU=0 MU300_INPUTS="$IN" MU300_MAINLINE_OUT="$UO" \
+    MU300_GPU=0 MU300_INPUTS="$IN" MU300_MAINLINE_OUT="$UO" MU300_LUCI_PLUGIN_SRC="$PLUGIN" \
       MU300_VERSION="$VERSION-tf-7.2" \
       sh "$TOP/openwrt/build-rootfs.sh" "$(basename "$ROOTFS")"
 fi
+for f in ./usr/share/luci/menu.d/luci-app-mu300.json ./www/luci-static/resources/view/mu300/home.js ./usr/lib/lua/luci/i18n/mu300.en.lmo ./etc/init.d/unisoc-modem-ui; do
+    tar -tzf "$ROOTFS" "$f" >/dev/null || { echo "built rootfs missing plugin file: $f" >&2; exit 1; }
+done
 
 echo "==> Linux 7.2 boot_b image"
 python3 "$TOP/upstream/wrap-image.py" "$UO/Image" "$WRAPPED"

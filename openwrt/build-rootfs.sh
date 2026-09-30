@@ -21,6 +21,13 @@ TOP=$(cd "$(dirname "$0")/.." && pwd)
 # build inputs (out/, firmware/, android-subset/, tools binaries, busybox) may live outside the checkout
 IN=${MU300_INPUTS:-$TOP}
 MAINLINE=${MU300_MAINLINE_OUT:-$IN/upstream/out}
+PLUGIN=${MU300_LUCI_PLUGIN_SRC:-}
+if [ -n "$PLUGIN" ]; then
+    PLUGIN=$(cd "$PLUGIN" && pwd)
+    for f in Makefile root/usr/libexec/unisoc-modem/lock htdocs/luci-static/resources/view/mu300/home.js lmo/mu300.en.lmo lmo/mu300.tr.lmo; do
+        [ -s "$PLUGIN/$f" ] || { echo "incomplete LuCI plugin: $PLUGIN/$f" >&2; exit 1; }
+    done
+fi
 TARBALL=$FLAVOUR-$VER-armsr-armv8-rootfs.tar.gz
 URL=$BASEURL/$VER/targets/armsr/armv8
 
@@ -39,6 +46,7 @@ docker run --rm --platform linux/arm64 -v "$REGDB":/o ubuntu:26.04 sh -c \
 
 opt() { [ -e "$IN/$1" ] && echo "-v $IN/$1:/in/$2:ro" || true; }
 mainline_opt() { [ -e "$MAINLINE/$1" ] && echo "-v $MAINLINE/$1:/in/$2:ro" || true; }
+plugin_opt() { [ -n "$PLUGIN" ] && echo "-v $PLUGIN:/in/luci-plugin:ro" || true; }
 
 # The required input first, with a readable message: without it docker fails somewhere inside the build.
 ls "$IN/out/modules"/*.ko >/dev/null 2>&1 || {
@@ -58,7 +66,7 @@ docker run --rm --platform linux/arm64 \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
   $(opt firmware firmware) $(opt android-subset android-subset) $(opt android-gpu-subset android-gpu-subset) \
   $(opt tools/logdw/logdw logdw) $(opt tools/bt-init/mu300-bt-init bt-init) $(opt tools/keys/mu300-keys keys) $(opt tools/gpu/cltest cltest) \
-  $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(mainline_opt modules mainline-modules) -v "$TOP/openwrt":/out -v "$REGDB":/in/regdb:ro \
+  $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(mainline_opt modules mainline-modules) $(plugin_opt) -v "$TOP/openwrt":/out -v "$REGDB":/in/regdb:ro \
   -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER /bin/sh -eu -c '
 mkdir -p /var/lock /var/run /tmp
 apk update >/dev/null
@@ -86,6 +94,16 @@ printf "127.0.0.1\tlocalhost\n\n::1\tlocalhost ip6-localhost ip6-loopback\nff02:
 printf "mu300\n" > $R/etc/hostname   # the real one comes from uci (etc/uci-defaults/90-mu300)
 cp -a /in/opt-mu300 $R/opt/mu300
 cp -a /in/overlay/. $R/
+if [ -d /in/luci-plugin ]; then
+    cp -a /in/luci-plugin/root/. $R/
+    cp -a /in/luci-plugin/htdocs/. $R/www/
+    mkdir -p $R/usr/lib/lua/luci/i18n
+    cp -a /in/luci-plugin/lmo/. $R/usr/lib/lua/luci/i18n/
+    # The source-tree install does not run the package postinst. Register only
+    # Turkish; registering zh_cn changes auto-locale for Chinese browsers.
+    uci -c $R/etc/config -q get luci.languages.tr >/dev/null || uci -c $R/etc/config set luci.languages.tr="Türkçe"
+    uci -c $R/etc/config commit luci
+fi
 mv $R/sbin/sysupgrade $R/sbin/sysupgrade.openwrt && mv $R/usr/libexec/mu300-sysupgrade $R/sbin/sysupgrade
 M=$R/lib/modules/$KREL; mkdir -p $M
 cp /in/modules/*.ko $M/          # ubox kmodloader expects the modules flat in /lib/modules/<release>/
@@ -126,6 +144,10 @@ for s in mu300-accounts mu300-vendor mu300-hw mu300-post mu300-toolkit mu300-atd
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
+if [ -d /in/luci-plugin ]; then
+    n=$(sed -n "s/^START=//p" $R/etc/init.d/unisoc-modem-ui)
+    ln -sf ../init.d/unisoc-modem-ui $R/etc/rc.d/S$n"unisoc-modem-ui"
+fi
 # busybox PATH is /usr/sbin:/usr/bin:/sbin:/bin, so the commands go into /usr/bin
 for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-sms led-status mu300-vpn wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc; do ln -sf /opt/mu300/bin/$c $R/usr/bin/$c; done
 # no kernel of its own: OpenWrt kmods (6.12) and grub are unused on this device
