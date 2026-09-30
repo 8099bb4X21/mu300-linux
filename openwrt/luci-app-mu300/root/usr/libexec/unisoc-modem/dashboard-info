@@ -172,10 +172,13 @@ W_COUNTRY=$(wu 'radio0.country')
 W_ENC=$(wu "${IFKEY:-x}.encryption")
 [ -n "$W_ENC" ] || W_ENC=none
 W_HIDDEN=$(wu "${IFKEY:-x}.hidden")
-W_HOSTAPD=0; pidof hostapd >/dev/null 2>&1 && W_HOSTAPD=1
+W_HOSTAPD=0
+HAPD=$(t3 ubus call "hostapd.$WIFI_DEVICE" get_status 2>/dev/null)
+printf '%s' "$HAPD" | grep -q '"status": *"ENABLED"' && W_HOSTAPD=1
 W_DIS=$(wu 'radio0.disabled')
 [ "$W_DIS" = "1" ] && W_UP=0 || W_UP=1
 [ -d "/sys/class/net/$WIFI_DEVICE" ] || W_UP=0
+[ "$W_HOSTAPD" = 1 ] || W_UP=0
 # station table: one block per client - mac, signal, tx/rx bitrate, connected time
 W_CLIENTS=$(t3 iw dev "$WIFI_DEVICE" station dump 2>/dev/null | awk -F':\t*' '
     /^Station / { mac = $2; sub(/ .*/, "", mac); sig = tx = rx = ct = "" }

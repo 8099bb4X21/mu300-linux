@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-mu300
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=MU300 Linux contributors
@@ -13,7 +13,7 @@ define Package/luci-app-mu300
   SECTION:=luci
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
-  TITLE:=MU300 control center
+  TITLE:=Unisoc modem control center
   DEPENDS:=+luci-base +rpcd +jsonfilter
 endef
 
@@ -48,6 +48,8 @@ define Package/luci-app-mu300/postinst
 	fi
 	rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null
 	/etc/init.d/rpcd restart 2>/dev/null || true
+	/etc/init.d/unisoc-modem-ui enable 2>/dev/null || true
+	/etc/init.d/unisoc-modem-ui start 2>/dev/null || true
 }
 exit 0
 endef
@@ -55,6 +57,10 @@ endef
 define Package/luci-app-mu300/postrm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
+	if [ "$$1" = remove ]; then
+		/etc/init.d/unisoc-modem-ui stop 2>/dev/null || true
+		/etc/init.d/unisoc-modem-ui disable 2>/dev/null || true
+	fi
 	rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null
 	/etc/init.d/rpcd restart 2>/dev/null || true
 }

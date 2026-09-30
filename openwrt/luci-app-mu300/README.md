@@ -37,8 +37,9 @@ The worker probes the selected AT adapter every two seconds and replays the
 settings immediately when it becomes ready. It never delays OpenWrt startup and
 stops after `replay_timeout` seconds instead of polling forever.
 
-The portable worker always activates the saved settings with one bounded SFUN
-restart and raises the configured data interface afterwards. A platform with a
+The portable worker activates saved mode/band/cell settings with one bounded
+SFUN restart and raises the configured data interface afterwards. An EN-DC-only
+replay needs no stack restart and is applied immediately. A platform with a
 deliberate pre-radio integration may call
 `/usr/libexec/unisoc-modem/lock replay early` from that hook; the replay marker
 then prevents the package worker from applying the settings twice. `early` is
@@ -47,7 +48,8 @@ point in the platform radio sequence.
 
 ## Build
 
-Copy this directory to `package/luci-app-mu300` in an OpenWrt buildroot, select
-`LuCI -> Applications -> luci-app-mu300`, and build normally. The parent MU300
-repository consumes the same `root/` and `htdocs/` trees for its built-in image;
-there is no second overlay copy to drift.
+Copy this directory alone to `package/luci-app-mu300` in any compatible OpenWrt
+buildroot, select `LuCI -> Applications -> luci-app-mu300`, and build normally.
+No file outside this directory is copied into the package; platform-specific AT
+and SMS implementations are discovered only through the documented adapters at
+runtime.

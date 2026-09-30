@@ -446,11 +446,13 @@ do_replay() {
     # handshake, so another readiness poll would only lengthen boot. It also
     # must never wait minutes on a dead channel: the failed handshake exits the
     # enclosing radio-on attempt and netifd retries it on a fresh AT daemon.
+    need_restart=0
     for kind in endc mode lte nr; do
         [ -f "$d/$kind" ] || continue
         val=$(cat "$d/$kind")
         say "replay $kind=$val"
         do_apply_quiet "$kind" "$val"
+        [ "$kind" = endc ] || need_restart=1
     done
     if [ -f "$d/cell" ]; then
         # Make the modem match the saved list exactly, including the unlocked state.
@@ -461,11 +463,12 @@ do_replay() {
             say "replay cell=$val"
             do_apply_quiet cell "$val"
         done < "$d/cell"
+        need_restart=1
     fi
     # In the boot path radio-on itself is the activation event, so an SFUN cycle
     # would only tear down the modem we are trying to start. `replay` without
     # `early` remains available for a deliberate manual recovery.
-    [ "$phase" = early ] || sfun_restart "$phase"
+    [ "$phase" = early ] || [ "$need_restart" = 0 ] || sfun_restart "$phase"
     : > "$marker"
     say "replay done ($phase)"
 }
