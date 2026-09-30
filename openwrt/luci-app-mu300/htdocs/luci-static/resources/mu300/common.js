@@ -334,13 +334,29 @@ function localize(root) {
 		});
 	});
 }
+var menuObserver, menuRoot;
 function localizeMenu() {
-	/* LuCI renders menu JSON before a view loads; limit translation to this
-	 * plugin's links so unrelated system navigation remains untouched. */
-	if (uiLanguage() === 'zh' || !document.querySelectorAll) return;
-	Array.prototype.forEach.call(document.querySelectorAll('a[href*="/admin/home"], a[href*="/admin/modem"]'), function(a) {
-		localize(a);
-	});
+	/* Bootstrap builds #topmenu asynchronously, often after the view renders.
+	 * Its parent dropdown uses href="#", so link-URL matching alone misses 蜂窝. */
+	var root = document.getElementById('topmenu');
+	if (!root || !root.querySelectorAll) return;
+	var update = function() {
+		if (uiLanguage() === 'zh') return;
+		Array.prototype.forEach.call(root.querySelectorAll('a[href*="/admin/home"], a[href*="/admin/modem"]'), localize);
+		Array.prototype.forEach.call(root.children, function(li) {
+			var a = li.querySelector('a');
+			if (a && a.textContent.trim() === '蜂窝') localize(a);
+		});
+	};
+	if (menuRoot !== root) {
+		if (menuObserver) menuObserver.disconnect();
+		menuRoot = root;
+		if (typeof MutationObserver !== 'undefined') {
+			menuObserver = new MutationObserver(update);
+			menuObserver.observe(root, { childList: true, subtree: true });
+		}
+	}
+	update();
 }
 
 /* 大陆运营商 PLMN -> 名称；COPS 给数字格式时用它还原 */
@@ -353,7 +369,7 @@ var PLMN_CN = {
 
 function carrierName(op) {
 	if (!op) return '--';
-	return op.name || PLMN_CN[op.plmn] || op.plmn || '--';
+	return translate(op.name || PLMN_CN[op.plmn] || op.plmn || '--');
 }
 
 /* 信号质量分级（阈值来自 ufi_tools 的 SignalQuality.kt），返回 CSS 颜色表达式 */

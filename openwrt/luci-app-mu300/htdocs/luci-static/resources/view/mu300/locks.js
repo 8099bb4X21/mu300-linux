@@ -304,7 +304,7 @@ return view.extend({
 		var sig = c.sig || {}, label = M.qLabel(sig.rsrp, sig.rsrq, sig.sinr);
 		var operName = M.carrierName(c.operator);
 			if (operName === '--' && c.ident && c.ident.imsi)
-				operName = M.PLMN_CN[c.ident.imsi.substring(0, 5)] || c.ident.imsi.substring(0, 5);
+				operName = M.translate(M.PLMN_CN[c.ident.imsi.substring(0, 5)] || c.ident.imsi.substring(0, 5));
 			this.Q('srv-rat').textContent = ratTxt + ' · ' + operName;
 		this.Q('srv-rat').style.color = M.qCol(label);
 		var rsrpEl = this.Q('srv-rsrp');

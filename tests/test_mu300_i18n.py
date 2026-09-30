@@ -51,6 +51,17 @@ lang = 'zh_Hans';
 if (M.translate('链路与流量 · 无应答') !== '链路与流量 · 无应答') throw Error('Chinese');
 """)
 
+    def test_carrier_names_follow_locale(self):
+        self.run_js("""
+lang = 'en';
+if (M.carrierName({name: '中国联通'}) !== 'China Unicom') throw Error('English carrier name');
+if (M.carrierName({plmn: '46001'}) !== 'China Unicom') throw Error('English PLMN fallback');
+lang = 'tr';
+if (M.carrierName({name: '中国联通'}) !== 'China Unicom') throw Error('Turkish carrier name');
+lang = 'zh';
+if (M.carrierName({name: '中国联通'}) !== '中国联通') throw Error('Chinese carrier name');
+""")
+
     def test_official_theme_bridge_keeps_aurora_intact(self):
         self.run_js("""
 aurora = ''; M.injectCss();
