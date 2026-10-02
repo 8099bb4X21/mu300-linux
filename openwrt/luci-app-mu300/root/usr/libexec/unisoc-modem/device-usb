@@ -135,7 +135,7 @@ case ${1:-} in
             pending=1
             # Give rpcd/uhttpd a brief chance to flush the acknowledgement
             # before the USB gadget carrying that response disappears.
-            ( sleep 0.25; "$0" apply-role "$role" </dev/null >/dev/null 2>&1 ) &
+            ( sleep 0.25 2>/dev/null || sleep 1; "$0" apply-role "$role" </dev/null >/dev/null 2>&1 ) &
         fi
         printf '{"ok":1,"pending":%s}\n' "$pending"
         ;;

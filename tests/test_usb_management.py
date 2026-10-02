@@ -61,7 +61,11 @@ esac
                            MU300_USB_IP_BIN=self.stubs / 'ip')
 
     def wait_text(self, path, value):
-        for _ in range(30):
+        # Role application is intentionally detached until after the RPC
+        # acknowledgement. CI runners can schedule that child later than a
+        # lightly loaded developer machine, so wait for the state, not a
+        # fixed sub-second deadline.
+        for _ in range(200):
             if path.exists() and path.read_text().strip() == value:
                 return
             time.sleep(0.02)
