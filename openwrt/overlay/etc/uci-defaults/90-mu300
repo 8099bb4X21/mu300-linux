@@ -34,8 +34,11 @@ UCI
 # - firewall masq6: egress NAT66 through the device's own public address (the carrier routes
 #   one address per bearer; Android's tethering does the same)
 # - lan ip6assign + a ULA: a local range for the LAN itself
-# - ndp-learn (init.d/mu300-ndp) pins host routes for each client public address: without
-#   them NAT66 replies follow sipa_eth0's connected /64 and never reach the client
+# - ndp-learn (init.d/mu300-ndp) routes the carrier's /64 to br-lan: NAT66 replies
+#   (and any traffic inside the prefix) then reach clients through on-link NDP on the
+#   LAN. Without that route the lookup falls through to the default route and the
+#   reply leaves through the modem; per-address /128 pins are kept only as a
+#   latency optimisation for already-known neighbours
 uci -q batch <<UCI
 set network.lan.ip6assign='60'
 set network.globals.ula_prefix='fd66:1126:7956::/48'

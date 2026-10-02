@@ -428,21 +428,17 @@ static void rx_net_work_queue(struct work_struct *work)
 
 inline int sc2355_fill_skb_csum(struct sk_buff *skb, unsigned short csum)
 {
-	int ret = 0;
-
-	if (csum) {
-		ret = rx_ipv6_csum(skb->data, (__force __wsum)csum);
-		if (!ret) {
-			skb->ip_summed = CHECKSUM_COMPLETE;
-			skb->csum = (__force __wsum)csum;
-		} else if (ret > 0) {
-			skb->ip_summed = CHECKSUM_UNNECESSARY;
-		}
-	} else {
-		skb->ip_summed = CHECKSUM_NONE;
-	}
-
-	return ret;
+	/*
+	 * The firmware checksum does not match what the stack expects for CHECKSUM_COMPLETE: forwarded frames trigger
+	 * "hw csum failure" with a full packet dump each time. Let the stack verify checksums in software.
+	 * (Same as kernel/patches/wlan_combo-rx-software-checksum.patch does for the 5.4 build: without this,
+	 * rx_ipv6_csum() returns -1 for IPv6 TCP/UDP frames whose msdu_len counts WiFi padding, and mm.c then
+	 * drops the skb before netif_rx - every client IPv6 TCP/UDP frame over Wi-Fi vanished there.)
+	 */
+	(void)rx_ipv6_csum;
+	(void)csum;
+	skb->ip_summed = CHECKSUM_NONE;
+	return 0;
 }
 
 void sc2355_rx_send_cmd(struct sprd_hif *hif, void *data, int len,
