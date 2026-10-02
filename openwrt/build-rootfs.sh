@@ -67,6 +67,7 @@ done
 # shellcheck disable=SC2046
 docker run --rm --platform linux/arm64 \
   -v "$TOP/rootfs/overlay/opt/mu300":/in/opt-mu300:ro -v "$TOP/rootfs/overlay/etc/mu300/vpn.conf.example":/in/vpn.conf.example:ro -v "$TOP/openwrt/overlay":/in/overlay:ro \
+  -v "$TOP/openwrt/patches/fw4-sipa-offload.patch":/in/fw4-sipa-offload.patch:ro \
   -v "$TOP/boot/module-order.txt":/in/module-order.txt:ro -v "$IN/out/modules":/in/modules:ro \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
   $(opt firmware firmware) $(opt android-subset android-subset) $(opt android-gpu-subset android-gpu-subset) \
@@ -99,6 +100,11 @@ printf "127.0.0.1\tlocalhost\n\n::1\tlocalhost ip6-localhost ip6-loopback\nff02:
 printf "mu300\n" > $R/etc/hostname   # the real one comes from uci (etc/uci-defaults/90-mu300)
 cp -a /in/opt-mu300 $R/opt/mu300
 cp -a /in/overlay/. $R/
+# mu300cell reports sipa_eth0 as l3_device only. fw4 otherwise omits it from
+# its software flowtable, leaving cellular downlink on the slow forwarding path.
+# Fail the build if a changed fw4 version no longer matches this targeted patch.
+apk add patch >/dev/null
+patch --batch --fuzz=0 -d $R -p1 -i /in/fw4-sipa-offload.patch
 if [ -d /in/luci-plugin ]; then
     cp -a /in/luci-plugin/root/. $R/
     cp -a /in/luci-plugin/htdocs/. $R/www/

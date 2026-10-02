@@ -59,6 +59,10 @@ set dhcp.mu300_usb.broadcast='1'
 UCI
 zone=$(uci -q show firewall | sed -n "s/^\(firewall\.@zone\[[0-9]*\]\)\.name='wan'$/\1/p")
 [ -n "$zone" ] && uci -q set $zone.masq6='1'
+# Use the kernel's software flowtable for forwarded TCP/UDP traffic. The
+# Unisoc SIPA and SC2355 drivers do not provide nftables hardware flow offload.
+uci -q set firewall.@defaults[0].flow_offloading='1'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
 # Before netifd creates br-lan, the early management address lives directly on
 # usb0. Give that local-only path the same input policy as LAN; forwarding stays
 # blocked, and once bridged packets enter through br-lan as usual.
