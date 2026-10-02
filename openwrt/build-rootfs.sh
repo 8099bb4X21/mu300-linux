@@ -133,6 +133,7 @@ patch --batch --fuzz=0 -d $R -p1 -i /in/fw4-sipa-offload.patch
 if [ -d /in/luci-plugin ]; then
     cp -a /in/luci-plugin/root/. $R/
     cp -a /in/luci-plugin/htdocs/. $R/www/
+    chmod 0755 $R/etc/init.d/unisoc-modem-ui $R/etc/hotplug.d/net/90-unisoc-usb-host $R/etc/hotplug.d/iface/90-unisoc-usb-host $R/usr/libexec/rpcd/mu300dash $R/usr/libexec/unisoc-modem/*
     mkdir -p $R/usr/lib/lua/luci/i18n
     cp -a /in/luci-plugin/lmo/. $R/usr/lib/lua/luci/i18n/
     # The source-tree install does not run the package postinst. Register only

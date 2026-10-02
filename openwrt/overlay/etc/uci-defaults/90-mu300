@@ -83,6 +83,9 @@ dev=$(uci -q show network | sed -n "s/^network\.\(@device\[[0-9]*\]\)\.name='br-
 if [ -n "$dev" ]; then
 	uci -q delete network.$dev.ports
 	uci add_list network.$dev.ports='usb0'
+	# RNDIS is a second USB configuration on Windows. It appears only when
+	# selected in the initramfs; without it in br-lan, Windows has no LAN.
+	[ -e /sys/class/net/rndis0 ] && uci add_list network.$dev.ports='rndis0'
 	# Do not wait for the wireless bridge member before creating the wired LAN.
 	uci set network.$dev.bridge_empty='1'
 fi

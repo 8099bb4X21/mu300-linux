@@ -81,6 +81,8 @@ MU300_INPUTS="$IN" MU300_LUCI_PLUGIN_SRC="$TOP/openwrt/luci-app-mu300" MU300_VER
     sh "$TOP/openwrt/build-rootfs.sh" mu300-openwrt-release.tar.gz >/dev/null
 mv "$TOP/openwrt/mu300-openwrt-release.tar.gz" "$D/mu300-openwrt-rootfs.tar.gz"
 for f in ./usr/share/luci/menu.d/luci-app-mu300.json ./www/luci-static/resources/view/mu300/home.js \
+    ./www/luci-static/resources/view/mu300/device.js ./usr/libexec/unisoc-modem/device-usb \
+    ./etc/hotplug.d/net/90-unisoc-usb-host ./etc/hotplug.d/iface/90-unisoc-usb-host \
     ./etc/init.d/unisoc-modem-ui ./usr/lib/lua/luci/i18n/mu300.en.lmo ./usr/lib/lua/luci/i18n/mu300.tr.lmo; do
     tar -tzf "$D/mu300-openwrt-rootfs.tar.gz" "$f" >/dev/null || {
         echo "release OpenWrt rootfs missing $f" >&2; exit 1;
