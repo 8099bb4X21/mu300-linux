@@ -47,6 +47,14 @@ for m in "$UO"/modules/*.ko; do
     v=$(strings "$m" | sed -n 's/^vermagic=\([^ ]*\) .*/\1/p' | head -n1)
     [ "$v" = "$rel" ] || { echo "$m is built for '$v', Image is '$rel'" >&2; exit 1; }
 done
+# The TF path packages modules directly rather than going through make-bundle.sh.
+# Check the shared WLAN source here too, or an old module can silently undo the
+# IPv6 RX checksum fix even when its vermagic matches the newly built Image.
+wlan_module=$UO/modules/sprd_wlan_combo.ko
+if [ -n "$(find "$TOP/upstream/modules/sprd_wlan_combo" -type f -newer "$wlan_module" -print -quit)" ]; then
+    echo "WLAN source is newer than $wlan_module; rebuild sprd_wlan_combo for $rel" >&2
+    exit 1
+fi
 
 echo "==> OpenWrt rootfs ($rel modules included)"
 MU300_GPU=0 MU300_INPUTS="$IN" MU300_MAINLINE_OUT="$UO" MU300_LUCI_PLUGIN_SRC="$PLUGIN" \
