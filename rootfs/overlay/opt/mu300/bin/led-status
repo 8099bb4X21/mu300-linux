@@ -45,12 +45,29 @@ fi
 STATE_FILE=/run/led-status.state
 WIFI_FILE=/run/led-status.wifi
 BLINK_PID=/run/led-status.blink.pid
+SIGNAL_ENABLED=$(uci -q get system.mu300_leds.signal 2>/dev/null)
+WIFI_ENABLED=$(uci -q get system.mu300_leds.wifi 2>/dev/null)
+[ "$SIGNAL_ENABLED" = 0 ] || SIGNAL_ENABLED=1
+[ "$WIFI_ENABLED" = 0 ] || WIFI_ENABLED=1
 
 # Status reads must be side-effect free. In particular, dashboards and event
 # handlers may query this during boot and must not stop the chase animation.
 if [ "${1:-}" = current ]; then
     cat "$STATE_FILE" 2>/dev/null || echo boot
     exit 0
+fi
+
+# LuCI's System > LED Configuration stores the two physical lamps separately.
+# Reapply their current logical states after a UCI reload without waiting for
+# the next modem or hostapd event.
+if [ "${1:-}" = refresh ]; then
+    case "$(cat "$WIFI_FILE" 2>/dev/null)" in
+        on) "$0" wifi-on ;;
+        *)  "$0" wifi-off ;;
+    esac
+    state=$(cat "$STATE_FILE" 2>/dev/null)
+    [ -n "$state" ] || state=offline
+    exec "$0" "$state"
 fi
 
 # WiFi changes must not cancel the boot chase, thermal alarm, or modem/network
@@ -61,7 +78,7 @@ wifi-on|wifi-off)
     echo "$wifi_state" > "$WIFI_FILE"
     if [ -n "$WIFI_LED" ]; then
         echo none > "$(dirname "$WIFI_LED")/trigger" 2>/dev/null
-        [ "$wifi_state" = on ] && echo 127 > "$WIFI_LED" || echo 0 > "$WIFI_LED"
+        [ "$wifi_state" = on ] && [ "$WIFI_ENABLED" = 1 ] && echo 127 > "$WIFI_LED" || echo 0 > "$WIFI_LED"
     fi
     exit 0 ;;
 esac
@@ -76,6 +93,7 @@ for f in $(dirname "$LED_R")/trigger $(dirname "$LED_W")/trigger $(dirname "$LED
 done
 
 set_rgb() {  # R W B (0-255)
+    [ "$SIGNAL_ENABLED" = 1 ] || set -- 0 0 0
     echo "${1:-0}" > "$LED_R" 2>/dev/null
     echo "${2:-0}" > "$LED_W" 2>/dev/null
     echo "${3:-0}" > "$LED_B" 2>/dev/null
@@ -91,6 +109,7 @@ pause_us() {
 }
 
 start_blink() {  # R W B ON_MS OFF_MS
+    [ "$SIGNAL_ENABLED" = 1 ] || { set_rgb 0 0 0; return 0; }
     _r=$1; _w=$2; _b=$3; _on=$4; _off=$5
     (
         while :; do
@@ -108,6 +127,7 @@ start_blink() {  # R W B ON_MS OFF_MS
 }
 
 start_chase() {
+    [ "$SIGNAL_ENABLED" = 1 ] || { set_rgb 0 0 0; return 0; }
     (
         while :; do
             echo 255 > "$LED_R" 2>/dev/null; echo 0 > "$LED_W" 2>/dev/null; echo 0 > "$LED_B" 2>/dev/null; pause_us 120000
@@ -157,6 +177,6 @@ thermal)        # red blink: SoC too hot (called by thermal-guard)
 current)
     cat "$STATE_FILE" 2>/dev/null || echo boot ;;
 *)
-    echo "usage: $0 boot|modem|registering|online-4g|online-5g|offline|thermal|wifi-on|wifi-off|current" >&2
+    echo "usage: $0 boot|modem|registering|online-4g|online-5g|offline|thermal|wifi-on|wifi-off|current|refresh" >&2
     exit 1 ;;
 esac

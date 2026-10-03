@@ -4,6 +4,14 @@ START=99
 USE_PROCD=1
 export PATH="$PATH:/opt/mu300/busybox-bin"
 
+service_triggers() {
+	procd_add_reload_trigger system
+}
+
+reload_service() {
+	/opt/mu300/bin/led-status refresh
+}
+
 start_service() {
 	# START=99 means the web/LAN services have been started. End the initramfs
 	# chase now; if WAN is not ready yet the specified steady state is red.

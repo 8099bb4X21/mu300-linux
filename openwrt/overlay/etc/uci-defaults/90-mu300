@@ -15,6 +15,9 @@ uci -q batch <<UCI
 set system.@system[0].hostname='mu300'
 set system.@system[0].zonename='Europe/Istanbul'
 set system.@system[0].timezone='<+03>-3'
+set system.mu300_leds=mu300_leds
+set system.mu300_leds.signal='1'
+set system.mu300_leds.wifi='1'
 set network.lan.ipaddr='$lan_ip'
 set network.lan.netmask='255.255.255.0'
 set network.lan.ip6assign='64'
