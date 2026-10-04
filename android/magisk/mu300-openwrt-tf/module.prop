@@ -3,4 +3,4 @@ name=MU300 Linux OpenWrt TF deployer
 version=v3.0-7.2
 versionCode=30
 author=mu300-linux
-description=Installs OpenWrt on TF, writes Linux 7.2 to boot_b and safely arms one Linux boot.
+description=Installs OpenWrt on TF, writes Linux to the slot opposite Android and safely arms one Linux boot.

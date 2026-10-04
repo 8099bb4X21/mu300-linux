@@ -118,8 +118,11 @@ class Rules(unittest.TestCase):
         self.assertIn('MU300_KERNEL', builder)
         self.assertIn('6.18) DEFAULT_UO=$TOP/upstream/out', builder)
         self.assertIn('7.2) DEFAULT_UO=$TOP/upstream/out-7.2', builder)
-        self.assertIn('/dev/block/by-name/boot_b', customize)
+        self.assertIn('bootdev=/dev/block/by-name/boot_$linux_slot', customize)
+        self.assertIn('case $slot in a) linux_slot=b ;; b) linux_slot=a', customize)
         self.assertIn('--no-reboot', customize)
+        self.assertIn('lazy_itable_init=1,lazy_journal_init=1,nodiscard',
+                      (TOP / 'tools' / 'android-install.sh').read_text())
         self.assertIn("t = t.replace(old, '')", port)
         self.assertNotIn("return -ENODEV;\\n' + t[j:]", port)
 

@@ -29,7 +29,9 @@ USB dependency chain, the PM watchdog, the `modem_control` process-name check, m
 ### Clean Linux 6.18 / 7.2 + OpenWrt TF Magisk packages
 
 The TF package is deliberately self-contained: it builds against the clean upstream branch, writes the OpenWrt
-rootfs to a card labelled `mu300sd`, writes only `boot_b`, and arms slot b without rebooting from inside Magisk.
+rootfs to a card labelled `mu300sd`, writes Linux only to the slot opposite the running Android slot, and arms
+that slot without rebooting from inside Magisk. The installer formats the full selected TF partition as ext4;
+there is no 32 GiB limit. It does not repartition the card.
 If no valid TF filesystem is present at boot, the initramfs falls back to the existing internal `mu300root` rootfs.
 The TF rootfs includes the standalone `openwrt/luci-app-mu300` package by default. The package remains a separate
 LuCI application and can be built for other Unisoc OpenWrt systems; `MU300_LUCI_PLUGIN_SRC` can point to a different

@@ -17,7 +17,7 @@ PLUGIN=${MU300_LUCI_PLUGIN_SRC:-$TOP/openwrt/luci-app-mu300}
 OUT=${1:-$TOP/mu300-linux-openwrt-tf-$KERNEL.zip}
 case $OUT in /*) ;; *) OUT=$TOP/$OUT ;; esac
 ROOTFS=$TOP/openwrt/mu300-openwrt-tf-$KERNEL-rootfs.tar.gz
-BOOT=$TOP/work/boot-linux-slotb-tf-$KERNEL.img
+BOOT=$TOP/work/boot-linux-tf-$KERNEL.img
 GENERIC=$TOP/work/ramdisk-$KERNEL-tf.lz4
 WRAPPED=$TOP/work/Image-$KERNEL.lk
 VERSION=${MU300_VERSION:-}
@@ -83,7 +83,7 @@ tar -tzf "$ROOTFS" "./lib/modules/$rel/sprd_wlan_combo.ko" >/dev/null || {
     echo "built rootfs missing $rel Wi-Fi module" >&2; exit 1;
 }
 
-echo "==> Linux $KERNEL boot_b image"
+echo "==> Linux $KERNEL boot image (installer selects the opposite slot)"
 python3 "$TOP/upstream/wrap-image.py" "$UO/Image" "$WRAPPED"
 python3 "$TOP/boot/build-boot-image.py" --generic-ramdisk --modules "$UO/modules" \
   --module-order "$TOP/upstream/module-order.txt" --busybox "$IN/busybox" \
@@ -100,14 +100,15 @@ STAGE=$(mktemp -d "$TOP/work/tf-magisk-stage.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
 cp "$TOP/android/magisk/mu300-openwrt-tf/module.prop" \
    "$TOP/android/magisk/mu300-openwrt-tf/customize.sh" \
+   "$TOP/android/magisk/mu300-openwrt-tf/locale.sh" \
    "$TOP/android/magisk/mu300-linux-switch/switch.sh" \
    "$TOP/tools/android-install.sh" "$TOP/tools/mu300-vendor-from-device.sh" "$STAGE/"
 sed -i "s/Linux 7\.2/Linux $KERNEL/g; s/KERNEL=7\.2/KERNEL=$KERNEL/g" "$STAGE/customize.sh"
 sed -i "s/7\.2/$KERNEL/g" "$STAGE/module.prop"
 cp "$IN/busybox" "$STAGE/busybox"
 cp "$ROOTFS" "$STAGE/mu300-openwrt.tar.gz"
-cp "$BOOT" "$STAGE/boot-linux-slotb.img"
-(cd "$STAGE" && sha256sum boot-linux-slotb.img | cut -d' ' -f1 > boot-linux-slotb.sha256)
+cp "$BOOT" "$STAGE/boot-linux.img"
+(cd "$STAGE" && sha256sum boot-linux.img | cut -d' ' -f1 > boot-linux.sha256)
 chmod 755 "$STAGE"/*.sh "$STAGE/busybox"
 rm -f "$OUT"
 python3 - "$STAGE" "$OUT" <<'PY'

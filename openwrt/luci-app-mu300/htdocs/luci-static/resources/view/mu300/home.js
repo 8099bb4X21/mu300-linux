@@ -1,6 +1,6 @@
 'use strict';
 'require view';
-'require poll';
+'require uci';
 'require mu300.common as M';
 
 /* MU300 状态看板 -- LuCI 落地页（menu.d 挂在 admin/home）。
@@ -9,12 +9,17 @@
  * 设备·SIM / 快捷控制）。锁频、短信、AT 终端在「蜂窝」子菜单。
  *
  * 数据只有一个来源：ubus mu300dash status（info 快照 + sig 快档蜂窝缓存 + cell 慢档缓存）。
- * 页面 1.5 s 一轮：信号/速率/CPU 每轮都刷；邻区/QoS/身份只在慢档时间戳变化时重绘。
+ * 页面默认 1.5 s 一轮：信号/速率/CPU 每轮都刷；邻区/QoS/身份只在慢档时间戳变化时重绘。
  * 邻区行内「锁定」走 lock_set cell（SFUN 重启协议栈，约半分钟断网）；锁定状态来自
  * lock_get（页面加载时取一次，锁定操作后刷新）。 */
 
-var POLL_S = 1.5;
+var DEFAULT_POLL_S = 1.5;
 var RATE_WIN = 40;
+
+function pollSeconds(value) {
+	var seconds = Number(value);
+	return Number.isFinite(seconds) && seconds >= 0.5 && seconds <= 60 ? seconds : DEFAULT_POLL_S;
+}
 
 /* 工程口只提供 MCS/BLER；调制方式按 3GPP 常用 MCS table 1 就地换算，
  * 不为展示项增加 AT 请求。LTE 上行的 MCS 分界与下行/NR 不同。 */
@@ -62,17 +67,31 @@ return view.extend({
 		M.localize(root);
 		this.wire(root);
 		var self = this;
-		/* 立即取一次完整状态；不要同时重复执行 sysinfo 与 status 两轮本地采集。 */
-		var first = L.resolveDefault(M.callStatus());
-		first.then(function(st) {
-			self.update(st || {});
-			first = null;
+		var intervalMs = DEFAULT_POLL_S * 1000;
+		var config = L.resolveDefault(uci.load('unisoc_modem')).then(function() {
+			intervalMs = pollSeconds(uci.get('unisoc_modem', 'main', 'home_refresh_interval')) * 1000;
 		});
-		poll.add(function() {
-			if (first) return first;
-			return L.resolveDefault(M.callStatus()).then(function(st) { self.update(st || {}); });
-		}, POLL_S);
+		/* 立即取一次完整状态；不要同时重复执行 sysinfo 与 status 两轮本地采集。 */
+		var first = L.resolveDefault(M.callStatus()).then(function(st) {
+			self.update(st || {});
+		});
+		/* LuCI poll.add() truncates intervals to whole seconds. Use a one-shot
+		 * timer so 1.5 s remains 1.5 s and slow requests never overlap. */
+		function refresh() {
+			if (!document.documentElement.contains(root)) return;
+			L.resolveDefault(M.callStatus()).then(function(st) { self.update(st || {}); }).finally(function() {
+				if (document.documentElement.contains(root))
+					self._refreshTimer = setTimeout(refresh, intervalMs);
+			});
+		}
+		Promise.all([first, config]).then(function() {
+			self._refreshTimer = setTimeout(refresh, intervalMs);
+		});
 		return root;
+	},
+
+	unload: function() {
+		clearTimeout(this._refreshTimer);
 	},
 
 	html: function() {

@@ -32,7 +32,7 @@ HERE = Path(__file__).resolve().parent
 PAGE = 4096
 BOOT_CMDLINE = b'loglevel=5'
 MISC_BC_OFFSET = 0x800
-# persistent init log lives at 48 MiB inside boot_b (8 MiB); the image must end before it
+# persistent init log lives at 48 MiB inside the Linux boot partition (8 MiB); the image must end before it
 PERSIST_LOG_OFFSET = 48 << 20
 # written by android-vendor/extract_subset.py on a host whose file system cannot hold every name from the
 # device (Windows: the property area's u:object_r:<context>:s0); while it exists it holds the whole subset
@@ -86,7 +86,7 @@ def cpio_archive(dirs, files):
 
 
 def bootloader_control(misc_head):
-    """Return (slot_a_block, slot_b_trial_block) derived from the live misc bootloader_control."""
+    """Return Android A/B and opposite-slot Linux trial blocks derived from misc."""
     bc = misc_head[MISC_BC_OFFSET:MISC_BC_OFFSET + 32]
     if bc[4:8] != b'BCAB':
         sys.exit('misc head has no bootloader_control magic at 0x800')
@@ -102,11 +102,13 @@ def bootloader_control(misc_head):
         return bytes(x)
 
     # slot_info byte: priority (4 bits) | tries_remaining (3 bits) | successful_boot (1 bit)
-    slot_a = with_slots(b'_a\0\0', 0x9f, 0x1e)          # a: prio 15, tries 1, successful
+    android_a = with_slots(b'_a\0\0', 0x9f, 0x1e)       # a: prio 15, successful
     # Unisoc LK treats tries==1 && !successful as an already failed boot, so the one-shot
     # trial needs tries=2 (LK decrements to 1; a failed boot then rolls back to slot a).
-    slot_b_trial = with_slots(b'_b\0\0', 0x9e, 0x2f)    # a: prio 14 successful, b: prio 15 tries 2
-    return slot_a, slot_b_trial
+    linux_b_trial = with_slots(b'_b\0\0', 0x9e, 0x2f)  # Android a, Linux b
+    android_b = with_slots(b'_b\0\0', 0x1e, 0x9f)       # b: prio 15, successful
+    linux_a_trial = with_slots(b'_a\0\0', 0x2f, 0x9e)  # Android b, Linux a
+    return android_a, linux_b_trial, android_b, linux_a_trial
 
 
 def main():
@@ -206,9 +208,11 @@ def main():
     base = a.stock_boot.read_bytes()
     if base[:8] != b'ANDROID!' or struct.unpack_from('<I', base, 40)[0] != 4:
         sys.exit('stock boot is not an Android boot image header v4')
-    slot_a_bc, slot_b_bc = bootloader_control(a.misc_head.read_bytes())
-    files['etc/misc-bc-slot-a.bin'] = (slot_a_bc, stat.S_IFREG | 0o644)
-    files['etc/misc-bc-slot-b-trial.bin'] = (slot_b_bc, stat.S_IFREG | 0o644)
+    android_a_bc, linux_b_bc, android_b_bc, linux_a_bc = bootloader_control(a.misc_head.read_bytes())
+    files['etc/misc-bc-slot-a.bin'] = (android_a_bc, stat.S_IFREG | 0o644)
+    files['etc/misc-bc-slot-b-trial.bin'] = (linux_b_bc, stat.S_IFREG | 0o644)
+    files['etc/misc-bc-slot-b.bin'] = (android_b_bc, stat.S_IFREG | 0o644)
+    files['etc/misc-bc-slot-a-trial.bin'] = (linux_a_bc, stat.S_IFREG | 0o644)
     if a.android_subset:
         dirs.add('android')
         side = a.android_subset / WINDOWS_TAR
@@ -284,17 +288,20 @@ def main():
     assert len(image) == len(base)
 
     a.out.write_bytes(image)
-    a.out.with_suffix('.misc-slot-b-trial.bin').write_bytes(slot_b_bc)
+    a.out.with_suffix('.misc-slot-b-trial.bin').write_bytes(linux_b_bc)
+    a.out.with_suffix('.misc-slot-a-trial.bin').write_bytes(linux_a_bc)
     manifest = {
         'image': a.out.name,
         'sha256': hashlib.sha256(image).hexdigest(),
-        # boot_b's tail holds the persistent init log, so on-device checks compare only the first 48 MiB
+        # the Linux boot partition's tail holds the persistent init log; compare only the first 48 MiB
         'sha256_head48m': hashlib.sha256(image[:PERSIST_LOG_OFFSET]).hexdigest(),
         'kernel_sha256': hashlib.sha256(kern).hexdigest(),
         'ramdisk_size': len(ram),
         'modules': len(a.module_order.read_text().split()),
-        'misc_slot_b_trial_hex': slot_b_bc.hex(),
-        'misc_slot_a_hex': slot_a_bc.hex(),
+        'misc_slot_b_trial_hex': linux_b_bc.hex(),
+        'misc_slot_a_trial_hex': linux_a_bc.hex(),
+        'misc_slot_a_hex': android_a_bc.hex(),
+        'misc_slot_b_hex': android_b_bc.hex(),
     }
     a.out.with_suffix('.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(json.dumps(manifest, indent=2))

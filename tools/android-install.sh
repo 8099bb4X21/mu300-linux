@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # Device side of install.sh (runs as root on Android). Settings come from /data/local/tmp/mu300-install.env:
 #   SD_MODE=0          rootfs in the free eMMC region after the last GPT partition
-#   SD_MODE=1 SD_DEV   rootfs on the TF card, formatted ext4 with label mu300sd
+#   SD_MODE=1 SD_DEV   rootfs on the full selected TF partition, ext4 mu300sd
 #   OFF SIZE           free eMMC region (bytes) after the last GPT partition, as strings (SD_MODE=0)
 #   OFF_S SIZE_S       the same in 512-byte sectors (Android's mksh has 32-bit arithmetic: never compute with bytes)
 #   FORMAT=0|1         create ext4 mu300root internally or mu300sd on TF
@@ -21,16 +21,19 @@ P=${MU300_PAYLOAD_DIR:-$T}
 . "$P/mu300-install.env"
 M=$T/mu300root
 say() { echo "[device] $*"; }
+say_i18n() { if [ "${MU300_INSTALL_LANG:-en}" = zh ]; then say "$1"; else say "$2"; fi; }
 
 if [ "${SD_MODE:-0}" = 1 ]; then
     R=${SD_DEV:?SD_DEV is not set}
-    [ -b "$R" ] || { say "no block device $R (is the TF card inserted?)"; exit 1; }
+    [ -b "$R" ] || { say_i18n "找不到块设备 $R（TF 卡是否已插入？）" \
+                                    "no block device $R (is the TF card inserted?)"; exit 1; }
     vol=$(sm list-volumes 2>/dev/null | sed -n 's/^\(public:[^ ]*\) mounted.*/\1/p')
     if [ -n "$vol" ]; then
-        say "asking vold to unmount $vol"
+        say_i18n "正在请求 Android 卸载 $vol" "asking vold to unmount $vol"
         sm unmount "$vol" 2>/dev/null || true
         sm list-volumes 2>/dev/null | grep -q "^$vol mounted" && {
-            say "vold still has the card mounted; unmount it in Android Storage settings"; exit 1; }
+            say_i18n "TF 卡仍被 Android 挂载；请先在系统存储设置中卸载" \
+                     "vold still has the card mounted; unmount it in Android Storage settings"; exit 1; }
     fi
     for m in $(grep -o '^/dev/block/mmcblk1[^ ]*' /proc/mounts 2>/dev/null); do
         umount "$m" 2>/dev/null || umount -f "$m" 2>/dev/null || true
@@ -39,15 +42,30 @@ if [ "${SD_MODE:-0}" = 1 ]; then
     label=$(dd if="$R" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
     if [ "$FORMAT" = 1 ]; then
         [ "$magic" != 53ef ] || [ "$label" = mu300sd ] || {
-            say "refusing to format foreign ext4 filesystem '$label'"; exit 1; }
-        say "creating ext4 mu300sd on $R"
-        if command -v make_ext4fs >/dev/null 2>&1; then
-            make_ext4fs -L mu300sd "$R"
+            say_i18n "拒绝格式化非 mu300sd 的 ext4 文件系统 '$label'" \
+                     "refusing to format foreign ext4 filesystem '$label'"; exit 1; }
+        say_i18n "正在 $R 创建 ext4 mu300sd（使用所选分区全部容量）" \
+                 "creating ext4 mu300sd on $R (full selected partition capacity)"
+        # make_ext4fs creates large cards very slowly and can fail on 128 GiB
+        # media. Use e2fsprogs' lazy metadata initialization and one inode per
+        # MiB (still plenty for OpenWrt) so formatting touches only metadata,
+        # not the whole card. nodiscard avoids a full-card erase on slow TFs.
+        # Magisk runs customize.sh in BusyBox standalone mode: bare mke2fs
+        # resolves to BusyBox's ext2-only applet, even when Android's real
+        # e2fsprogs is installed. An absolute path bypasses that interception.
+        if [ -x /system/bin/mke2fs ]; then
+            /system/bin/mke2fs -t ext4 -F -b 4096 -m 0 -i 1048576 \
+                -E lazy_itable_init=1,lazy_journal_init=1,nodiscard \
+                -L mu300sd "$R" || { say_i18n '快速创建 ext4 文件系统失败' \
+                                                         'optimized ext4 format failed'; exit 1; }
         else
-            mke2fs -b 4096 -L mu300sd "$R"
+            say_i18n '缺少 Android 的 /system/bin/mke2fs，无法可靠地格式化 TF 卡' \
+                     'Android /system/bin/mke2fs is required for reliable TF formatting'
+            exit 1
         fi
     elif [ "$magic" != 53ef ] || [ "$label" != mu300sd ]; then
-        say "no mu300sd filesystem on $R (FORMAT=1 is required)"; exit 1
+        say_i18n "$R 上没有 mu300sd 文件系统（需要 FORMAT=1）" \
+                 "no mu300sd filesystem on $R (FORMAT=1 is required)"; exit 1
     fi
     mkdir -p "$M"
     mount -t ext4 -o noatime "$R" "$M"
@@ -102,13 +120,14 @@ if [ "$IMPORT_HOTSPOT" = 1 ]; then
     X=/data/misc/apexdata/com.android.wifi/WifiConfigStoreSoftAp.xml
     ssid=$(sed -n 's/.*<string name="WifiSsid">&quot;\(.*\)&quot;<\/string>.*/\1/p; s/.*<string name="WifiSsid">\([^&<]*\)<\/string>.*/\1/p' $X 2>/dev/null | head -1)
     psk=$(sed -n 's/.*<string name="Passphrase">\(.*\)<\/string>.*/\1/p' $X 2>/dev/null | head -1 | sed "s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/\"/g; s/&apos;/'/g")
-    [ -n "$ssid" ] && [ ${#psk} -ge 8 ] || { say "no usable Android hotspot config, a random password will be generated"; ssid=; psk=; }
+    [ -n "$ssid" ] && [ ${#psk} -ge 8 ] || { say_i18n "无法读取可用的 Android 热点配置，将生成随机密码" \
+                                                    "no usable Android hotspot config, a random password will be generated"; ssid=; psk=; }
 fi
 
 for os in $OSES; do
     tarball=$P/mu300-$os.tar.gz
-    [ -f $tarball ] || { say "missing $tarball"; exit 1; }
-    say "installing $os"
+    [ -f $tarball ] || { say_i18n "缺少 $tarball" "missing $tarball"; exit 1; }
+    say_i18n "正在安装 $os" "installing $os"
     rm -rf $M/$os.new && mkdir $M/$os.new
     tar -xzpf $tarball -C $M/$os.new
     # prebuilt images: firmware and Android userspace pulled from this device by install.sh (tools/vendor-overlay.py)
@@ -159,8 +178,8 @@ for os in $OSES; do
                     cp -a "$l" "$M/$os.new/etc/rc.d/$u" && extra="$extra $u"
                 done ;;
         esac
-        say "kept from the previous $os:$kept"
-        [ -n "$extra" ] && say "kept enabled services:$extra"
+        say_i18n "已保留先前 $os 的配置：$kept" "kept from the previous $os:$kept"
+        [ -n "$extra" ] && say_i18n "已保留启用的服务：$extra" "kept enabled services:$extra"
     fi
     rm -rf $M/$os && mv $M/$os.new $M/$os
     R=$M/$os
@@ -191,7 +210,10 @@ case ${KERNEL:-5.4} in
 esac
 # the boot image is the installer's now: a release tag left by an earlier mu300-update would describe another one
 rm -f $M/boot/installed.tag
-[ -n "$ssid" ] && say "hotspot: SSID $ssid imported (passphrase ${#psk} chars)"
-say "installed: $(ls -d $M/ubuntu $M/openwrt 2>/dev/null | sed "s|$M/||g" | tr '\n' ' ')boot-os=$BOOT_OS default-linux=$DEFAULT_LINUX"
+[ -n "$ssid" ] && say_i18n "热点：已导入 SSID $ssid（密码 ${#psk} 位）" \
+                             "hotspot: SSID $ssid imported (passphrase ${#psk} chars)"
+installed=$(ls -d $M/ubuntu $M/openwrt 2>/dev/null | sed "s|$M/||g" | tr '\n' ' ')
+say_i18n "已安装：${installed}启动系统=$BOOT_OS 默认启动 Linux=$DEFAULT_LINUX" \
+         "installed: ${installed}boot-os=$BOOT_OS default-linux=$DEFAULT_LINUX"
 [ "${MU300_KEEP_PAYLOAD:-0}" = 1 ] || rm -f $P/mu300-install.env
 echo MU300-INSTALL-OK   # install.sh checks for this line (set -e stops before it on any failure)

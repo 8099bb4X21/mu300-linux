@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Boot the Linux system on slot b, from Android.
+# Boot Linux from the slot opposite the currently running Android system.
 #
 #   mu300-linux            arm the one-shot trial and reboot
 #   mu300-linux status     show what is on each slot, change nothing
@@ -7,15 +7,15 @@
 #   mu300-linux --no-reboot arm the trial without rebooting (for installers)
 #
 # The only thing written is the 32-byte AOSP bootloader_control block at offset 0x800 of the misc partition:
-# slot b gets the highest priority with tries_remaining = 2, slot a stays bootable and marked successful. LK then
-# boots slot b once. Linux writes the slot-a block back as one of its first steps, so the reboot after that
+# the Linux slot gets the highest priority with tries_remaining = 2, Android stays bootable and marked successful. LK then
+# boots Linux once. Linux writes the Android slot block back as one of its first steps, so the reboot after that
 # returns to Android, and a Linux that does not boot falls back to Android by itself.
 #
-# boot_a, the GPT, userdata and every other partition are never touched.
+# Android's boot partition, the GPT, userdata and every other partition are never touched.
 BC_OFFSET=2048          # 0x800
 MAGIC=42434142          # "BCAB", little endian in the struct
-SLOT_A_ARMED=158        # 0x9e: priority 14, tries 1, successful 1
-SLOT_B_ARMED=47         # 0x2f: priority 15, tries 2, successful 0
+ANDROID_ARMED=158       # 0x9e: priority 14, tries 1, successful 1
+LINUX_ARMED=47          # 0x2f: priority 15, tries 2, successful 0
 
 DRY=0
 DO_REBOOT=1
@@ -39,13 +39,13 @@ done
 [ -n "${BB:-}" ] || die "Magisk's busybox was not found"
 AWK="$BB awk"
 
-by_name=/dev/block/by-name
+by_name=${MU300_BY_NAME:-/dev/block/by-name}
 [ -e "$by_name/misc" ] || by_name=$(dirname "$(ls -d /dev/block/platform/*/by-name/misc 2>/dev/null | head -n1)" 2>/dev/null)
 MISC=$by_name/misc
 BOOT_A=$by_name/boot_a
 BOOT_B=$by_name/boot_b
 [ -e "$MISC" ] || die "no misc partition at $MISC"
-[ -e "$BOOT_B" ] || die "no boot_b partition at $BOOT_B"
+[ -e "$BOOT_A" ] && [ -e "$BOOT_B" ] || die "both boot_a and boot_b are required at $by_name"
 
 hex_of() {  # hex_of FILE OFFSET COUNT -> lowercase hex, no spaces (only ever used for a few bytes)
     dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | od -An -tx1 -v | tr -d ' \n'
@@ -58,36 +58,40 @@ live=$(hex_of "$MISC" "$BC_OFFSET" 32)
 [ ${#live} -eq 64 ] || die "could not read the bootloader_control block"
 [ "$(echo "$live" | cut -c9-16)" = "$MAGIC" ] || die "misc does not hold an AOSP bootloader_control block ($live)"
 
-slot=$(getprop ro.boot.slot_suffix)
+slot=${MU300_SLOT_SUFFIX:-$(getprop ro.boot.slot_suffix)}
+case $slot in
+    _a) android_boot=$BOOT_A; linux_boot=$BOOT_B; linux_slot=b; a_arm=$ANDROID_ARMED; b_arm=$LINUX_ARMED ;;
+    _b) android_boot=$BOOT_B; linux_boot=$BOOT_A; linux_slot=a; a_arm=$LINUX_ARMED; b_arm=$ANDROID_ARMED ;;
+    *) die "Android boot slot '$slot' is unknown" ;;
+esac
 a_meta=$(echo "$live" | cut -c25-26)
 b_meta=$(echo "$live" | cut -c29-30)
 
-# what is on slot b: an Android boot image starts with "ANDROID!", and the Linux image is one too, so the only
-# thing worth checking is that slot b is not simply a copy of Android
-head_b=$(hex_of "$BOOT_B" 0 8)
+# A boot image starts with "ANDROID!" even when it carries Linux. Reject an
+# opposite slot that is still an identical copy of Android before arming it.
+head_target=$(hex_of "$linux_boot" 0 8)
 same=no
-[ -e "$BOOT_A" ] && [ "$(head_md5 "$BOOT_A")" = "$(head_md5 "$BOOT_B")" ] && same=yes
+[ "$(head_md5 "$android_boot")" = "$(head_md5 "$linux_boot")" ] && same=yes
 
 if [ "$ACTION" = status ]; then
     echo "running slot   ${slot:-unknown}"
     echo "slot a         priority $((0x$a_meta & 15)), tries $(( (0x$a_meta >> 4) & 7 )), successful $(( (0x$a_meta >> 7) & 1 ))"
     echo "slot b         priority $((0x$b_meta & 15)), tries $(( (0x$b_meta >> 4) & 7 )), successful $(( (0x$b_meta >> 7) & 1 ))"
-    if [ "$head_b" = "414e44524f494421" ]; then
-        [ "$same" = yes ] && echo "boot_b         an Android boot image identical to boot_a (no Linux installed)" \
-                          || echo "boot_b         a boot image that is not Android's (this is the Linux one)"
+    if [ "$head_target" = "414e44524f494421" ]; then
+        [ "$same" = yes ] && echo "boot_$linux_slot         identical to Android's boot image (no Linux installed)" \
+                          || echo "boot_$linux_slot         a boot image distinct from Android's"
     else
-        echo "boot_b         does not start with ANDROID! - not a boot image"
+        echo "boot_$linux_slot         does not start with ANDROID! - not a boot image"
     fi
     exit 0
 fi
 
-[ "$slot" = "_a" ] || die "Android is running from slot '$slot', expected '_a'"
-[ "$head_b" = "414e44524f494421" ] || die "boot_b is not a boot image - install Linux first (./install.sh)"
-[ "$same" = no ] || die "boot_b is the same image as boot_a: no Linux is installed on slot b"
+[ "$head_target" = "414e44524f494421" ] || die "boot_$linux_slot is not a boot image - install Linux first"
+[ "$same" = no ] || die "boot_$linux_slot is the same image as Android's boot partition: no Linux is installed"
 
 # the new block: same as the live one, but with the slot suffix and the two metadata bytes of an armed trial,
 # and a fresh CRC32 (zlib, over the first 28 bytes, stored little endian at offset 28)
-new=$($AWK -v live="$live" -v am="$SLOT_A_ARMED" -v bm="$SLOT_B_ARMED" '
+new=$($AWK -v live="$live" -v am="$a_arm" -v bm="$b_arm" -v suffix="_$linux_slot" '
 function xor32(a, b,   i, r, p, x, y) {
     r = 0; p = 1
     for (i = 0; i < 32; i++) {
@@ -112,7 +116,7 @@ function crc32(bytes, n,   c, i, k) {
 }
 BEGIN {
     for (i = 0; i < 32; i++) b[i + 1] = h2i(substr(live, i * 2 + 1, 2))
-    b[2] = 98            # "_b"
+    b[2] = (suffix == "_a" ? 97 : 98)
     b[13] = am           # slot a metadata
     b[15] = bm           # slot b metadata
     c = crc32(b, 28)
@@ -142,8 +146,13 @@ back=$(hex_of "$MISC" "$BC_OFFSET" 32)
 [ "$back" = "$new" ] || die "misc verify failed ($back) - reboot normally, Android is unaffected"
 
 echo
-echo "slot b armed for one boot."
-echo "If it does not boot, the device returns to Android by itself."
+if [ "${MU300_INSTALL_LANG:-en}" = zh ]; then
+    echo "已设置下次从 $linux_slot 槽位启动一次。"
+    echo "若 Linux 启动失败，设备会自动返回 Android。"
+else
+    echo "slot $linux_slot armed for one boot."
+    echo "If it does not boot, the device returns to Android by itself."
+fi
 [ "$DO_REBOOT" = 0 ] && exit 0
 echo "Rebooting into Linux."
 sleep 3

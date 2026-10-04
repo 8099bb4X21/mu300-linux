@@ -246,6 +246,8 @@ var DASH_I18N = {
 	'短信': ['SMS', 'SMS'],
 	'AT 终端': ['AT terminal', 'AT terminali'],
 	'适配设置': ['Adapter settings', 'Bağdaştırıcı ayarları'],
+	'主页刷新间隔（秒）': ['Home dashboard refresh interval (seconds)', 'Ana pano yenileme aralığı (saniye)'],
+	'仅控制主页状态看板的刷新频率；允许 0.5–60 秒，保存后重新进入主页生效。': ['Controls only the home dashboard refresh rate; 0.5–60 seconds. Reopen Home after saving to apply.', 'Yalnızca ana panonun yenileme hızını kontrol eder; 0,5–60 saniye. Kaydettikten sonra uygulamak için Ana Sayfa’yı yeniden açın.'],
 	'当前驻网': ['Serving network', 'Bağlı olunan ağ'],
 	'网络模式 · EN-DC': ['Network mode · EN-DC', 'Ağ modu · EN-DC'],
 	'自动（5G/4G）': ['Automatic (5G/4G)', 'Otomatik (5G/4G)'],

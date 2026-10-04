@@ -97,8 +97,8 @@ if (selected !== false) throw Error('Aurora must retain its own variables');
     def test_dashboard_static_labels_have_english_and_turkish(self):
         self.run_js("""
 const homeSrc = fs.readFileSync(process.argv[2], 'utf8');
-const home = new Function('view', 'poll', 'M', homeSrc)(
-    { extend: (obj) => obj }, {}, M);
+const home = new Function('view', 'poll', 'uci', 'M', homeSrc)(
+    { extend: (obj) => obj }, {}, {}, M);
 for (const locale of ['en', 'tr']) {
     lang = locale;
     if (/[㐀-鿿]/.test(M.translate('正在后台应用')))
@@ -118,7 +118,8 @@ const labels = [
     '清空本地短信池', '只删本地文件，SIM 上的不动。',
     '删除这条短信', '本地 + SIM', '发送失败：未知错误',
     '收件人：号码，如 10086 或 +86...', '蜂窝逻辑接口',
-    '等待 AT 就绪上限（秒）', '留空则从 netifd 自动获取'
+    '等待 AT 就绪上限（秒）', '留空则从 netifd 自动获取',
+    '主页刷新间隔（秒）', '仅控制主页状态看板的刷新频率；允许 0.5–60 秒，保存后重新进入主页生效。'
 ];
 for (const locale of ['en', 'tr']) {
     lang = locale;
