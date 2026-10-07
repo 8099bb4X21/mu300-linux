@@ -40,25 +40,15 @@ KERNEL=7.2
 PWHASH=''
 EOF
 ui_msg "- 正在将 OpenWrt 根文件系统安装到 $R" "- Installing OpenWrt rootfs to $R"
+# Use init's namespace: Magisk's private mounts must not hide vold's aliases.
+# A subprocess also isolates traps/options from Magisk's own final cleanup.
+mkdir -p /data/local/tmp/mu300-tf-install
 MU300_PAYLOAD_DIR="$MODPATH" MU300_INSTALL_TMP=/data/local/tmp/mu300-tf-install \
-MU300_VENDOR_FROM_DEVICE=1 MU300_KEEP_PAYLOAD=1 \
-    sh "$MODPATH/android-install.sh" || ui_fail "! TF 卡根文件系统安装失败；启动分区未改动" \
-                                                  "! TF rootfs installation failed; boot partitions were not changed"
-IMG=$MODPATH/boot-linux.img
-want=$(cat "$MODPATH/boot-linux.sha256")
-have=$("$BB" sha256sum "$IMG" | "$BB" cut -d' ' -f1)
-[ "$have" = "$want" ] || ui_fail "! 安装包中的启动镜像校验失败" "! packaged boot image checksum mismatch"
-ui_msg "- 正在写入并校验 boot_$linux_slot" "- Writing and verifying boot_$linux_slot"
-"$BB" dd if="$IMG" of="$bootdev" bs=4M 2>/dev/null || ui_fail "! 写入 boot_$linux_slot 失败" "! writing boot_$linux_slot failed"
-sync
-bytes=$("$BB" stat -c %s "$IMG")
-back=$("$BB" dd if="$bootdev" bs=1M count=$(( (bytes + 1048575) / 1048576 )) 2>/dev/null | \
-       "$BB" head -c "$bytes" | "$BB" sha256sum | "$BB" cut -d' ' -f1)
-[ "$back" = "$want" ] || ui_fail "! boot_$linux_slot 校验失败；misc 未改动" \
-                                "! boot_$linux_slot verification failed; misc was not changed"
-ui_msg "- 正在设置下次从 $linux_slot 槽位启动" "- Arming slot $linux_slot"
-MU300_BUSYBOX="$BB" MAGISKTMP=${MAGISKTMP:-/data/adb/magisk} \
-    sh "$MODPATH/switch.sh" --no-reboot || ui_fail "! 无法设置启动槽位" "! boot slot could not be armed"
+MU300_VENDOR_FROM_DEVICE=1 MU300_KEEP_PAYLOAD=1 MU300_BUSYBOX="$BB" \
+MU300_TF_BOOTDEV="$bootdev" MAGISKTMP=${MAGISKTMP:-/data/adb/magisk} \
+    "$BB" nsenter -t 1 -m "$BB" sh "$MODPATH/tf-install-worker.sh" || \
+    ui_fail "! 安装未完成，已停止后续步骤。请保留 /data/local/tmp/mu300-tf-install 日志并重启 Android 后再试" \
+            "! Installation incomplete; subsequent stages stopped. Keep /data/local/tmp/mu300-tf-install logs and reboot Android before retrying"
 ui_msg "- 安装完成；重启后进入 OpenWrt" "- Installation complete; reboot to enter OpenWrt"
 ui_msg "- 如果 Linux 启动失败，设备会自动返回 Android" \
        "- A failed Linux boot automatically returns to Android"

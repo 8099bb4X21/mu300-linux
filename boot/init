@@ -175,10 +175,10 @@ find_partitions() {
 
 write_misc_bc() {  # write_misc_bc FILE STAGE
     [ -n "$misc" ] || { log "stage=misc-NOT-FOUND"; return 1; }
-    dd if="$1" of="$misc" bs=1 seek=2048 conv=notrunc 2>/dev/null
-    sync
-    dd if="$misc" of=/run/bc.bin bs=1 skip=2048 count=32 2>/dev/null
-    if cmp -s /run/bc.bin "$1"; then log "stage=$2 dev=$misc"; else log "stage=$2-MISMATCH dev=$misc"; fi
+    dd if="$1" of="$misc" bs=1 seek=2048 conv=notrunc,fsync 2>/dev/null || return 1
+    dd if="$misc" of=/run/bc.bin bs=512 skip=4 count=1 2>/dev/null || return 1
+    head -c 32 /run/bc.bin > /run/bc-check.bin
+    if cmp -s /run/bc-check.bin "$1"; then log "stage=$2 dev=$misc"; else log "stage=$2-MISMATCH dev=$misc"; return 1; fi
 }
 restore_android() {
     if [ "$linux_slot" = a ]; then
@@ -368,12 +368,32 @@ ROOT_OFFSET=27762098176   # linux-boot/rootfs-region.env; outside every GPT part
 # this file - with the default above. Devices whose region is elsewhere then booted into standalone mode and went
 # back to Android. So find it the way the installer places it - the first 2 MiB boundary after the last partition
 # - and take the first candidate that really holds the mu300root filesystem (ext4 magic and label).
-is_mu300root() {  # is_mu300root OFFSET; loop setup seeks instead of reading through tens of GiB
-    probe=$(losetup -f 2>/dev/null) || return 1
-    losetup -o "$1" "$probe" /dev/mmcblk0 2>/dev/null || return 1
-    magic=$(dd if="$probe" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
-    label=$(dd if="$probe" bs=1 skip=1144 count=9 2>/dev/null)
-    losetup -d "$probe" 2>/dev/null
+root_region_valid() {
+    # Validate both GPT boundaries BEFORE dd or losetup. Some Android MMC
+    # drivers wedge on out-of-device reads instead of returning an error (#65).
+    case $1 in ''|*[!0-9]*) return 1 ;; esac
+    disk_sectors=$(cat /sys/block/mmcblk0/size) || return 1
+    case $disk_sectors in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -gt 0 ] && [ $(( $1 % 512 )) -eq 0 ] || return 1
+    root_sector=$(( $1 / 512 )); partition_end=0
+    for partition in /sys/block/mmcblk0/mmcblk0p*; do
+        [ -r "$partition/start" ] || continue
+        part_start=$(cat "$partition/start") || return 1
+        part_size=$(cat "$partition/size") || return 1
+        case $part_start:$part_size in *[!0-9:]*|:*|*:) return 1 ;; esac
+        part_end=$((part_start + part_size))
+        [ "$part_end" -le "$partition_end" ] || partition_end=$part_end
+    done
+    [ "$partition_end" -gt 0 ] && [ "$root_sector" -ge "$partition_end" ] || return 1
+    [ "$root_sector" -le $((disk_sectors - 34 - 8)) ] || return 1
+    root_bytes=$(( (disk_sectors - 34 - root_sector) * 512 ))
+}
+is_mu300root() {
+    root_region_valid "$1" || return 1
+    dd if=/dev/mmcblk0 of=/run/root-super bs=512 skip="$root_sector" count=8 2>/dev/null || return 1
+    [ "$(wc -c < /run/root-super)" -eq 4096 ] || return 1
+    magic=$(dd if=/run/root-super bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    label=$(dd if=/run/root-super bs=1 skip=1144 count=9 2>/dev/null)
     [ "$magic" = 53ef ] && [ "$label" = mu300root ]
 }
 find_root_offset() {
@@ -388,16 +408,22 @@ find_root_offset() {
     done
     return 1
 }
-# Prefer an ext4 TF filesystem labelled mu300sd. A missing/foreign card costs
-# at most the short device-enumeration window and falls back to internal eMMC.
+# A TF-only image must never fall through to the eMMC free-region probe.
+root_target=$(cat /etc/mu300-root-target 2>/dev/null)
+# Generic images retain the bounded internal-root fallback.
 sd_root=
 for n in $(seq 1 8); do
     seen=
     for d in /dev/mmcblk[1-9]p1 /dev/mmcblk[1-9]; do
         [ -b "$d" ] || continue
         seen=1
-        magic=$(dd if="$d" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
-        label=$(dd if="$d" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
+        sectors=$(cat "/sys/class/block/${d##*/}/size" 2>/dev/null)
+        case $sectors in ''|*[!0-9]*) continue ;; esac
+        [ "$sectors" -ge 8 ] || continue
+        dd if="$d" of=/run/sd-super bs=512 count=8 2>/dev/null || continue
+        [ "$(wc -c < /run/sd-super)" -eq 4096 ] || continue
+        magic=$(dd if=/run/sd-super bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+        label=$(dd if=/run/sd-super bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
         [ "$magic" = 53ef ] && [ "$label" = mu300sd ] && { sd_root=$d; break 2; }
     done
     [ -n "$seen" ] && break
@@ -416,12 +442,14 @@ if [ -n "$sd_root" ]; then
 fi
 [ "$root_mounted" = 1 ] && read_usb_boot_policy
 setup_usb_gadget
-if [ -z "$sd_root" ]; then
+internal_root=
+if [ "$root_mounted" = 0 ] && [ "$root_target" != sd ]; then
     if found=$(find_root_offset); then
         [ "$found" = "$ROOT_OFFSET" ] || log "stage=root-offset found=$found (default $ROOT_OFFSET)"
         ROOT_OFFSET=$found
+        internal_root=1
     else
-        log "stage=root-offset not-found (trying the default $ROOT_OFFSET)"
+        log "stage=root-offset not-found (no internal mount attempted)"
     fi
 fi
 mkdir -p /newroot
@@ -438,11 +466,10 @@ pick_root() {
         [ "$os" = ubuntu ] && [ -x /disk/lib/systemd/systemd ] && { echo /disk; return; }
     done
 }
-if [ "$root_mounted" = 0 ]; then
+if [ "$root_mounted" = 0 ] && [ "$internal_root" = 1 ] && root_region_valid "$ROOT_OFFSET"; then
     rootloop=$(losetup -f 2>/run/rootmount.err)
-    if [ -n "$rootloop" ] && losetup -o $ROOT_OFFSET "$rootloop" /dev/mmcblk0 2>>/run/rootmount.err \
+    if [ -n "$rootloop" ] && losetup -o "$ROOT_OFFSET" -S "$root_bytes" "$rootloop" /dev/mmcblk0 2>>/run/rootmount.err \
        && [ "$(cat /sys/block/${rootloop#/dev/}/loop/offset)" = "$ROOT_OFFSET" ] \
-       && [ "$(dd if="$rootloop" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' ')" = 53ef ] \
        && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err; then
         root_mounted=1
     fi
@@ -537,6 +564,13 @@ if [ "$root_mounted" = 1 ] && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
 fi
 log "stage=rootfs-unavailable $(cat /run/rootmount.err)"
 restore_android
+if [ "$root_target" = sd ]; then
+    log 'stage=tf-root-unavailable (returning to Android; eMMC root probe skipped)'
+    # Do not enter the vendor/standalone diagnostic boot on a missing TF root.
+    # No extra global sync into the failed TF; restore_android verifies misc.
+    reboot -f
+    while :; do sleep 1; done
+fi
 ifconfig usb0 $NET.1 netmask 255.255.255.0 up
 log "stage=usb0 $(ifconfig usb0 2>&1 | head -1)"
 cat > /etc/udhcpd.conf <<EOF

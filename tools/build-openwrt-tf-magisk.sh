@@ -38,6 +38,7 @@ for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
     [ -s "$IN/out/modules/$f" ] || { echo "missing $IN/out/modules/$f" >&2; exit 1; }
 done
 [ -s "$UO/Image" ] || { echo "missing Linux $KERNEL Image in $UO" >&2; exit 1; }
+python3 "$TOP/upstream/check-container-support.py" "$UO"
 rel=$(strings "$UO/Image" | sed -n 's/^Linux version \([^ ]*\) .*/\1/p' | head -n1)
 case $rel in "$KERNEL".*) ;; *) echo "$UO is kernel '$rel', expected $KERNEL.x" >&2; exit 1 ;; esac
 for m in $(cat "$TOP/upstream/module-order.txt"); do
@@ -73,6 +74,10 @@ for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
     ./usr/lib/lua/luci/i18n/mu300.en.lmo ./usr/lib/lua/luci/i18n/mu300.tr.lmo \
     ./etc/init.d/unisoc-modem-ui ./etc/rc.d/S95unisoc-modem-ui \
     ./www/luci-static/aurora/main.css \
+    ./www/luci-static/resources/view/aurora/studio.js \
+    ./www/luci-static/resources/view/aurora/marketplace.js \
+    ./usr/share/luci/menu.d/luci-app-aurora.json ./usr/share/rpcd/acl.d/luci-app-aurora.json \
+    ./usr/lib/lua/luci/i18n/aurora-config.zh-cn.lmo ./usr/lib/lua/luci/i18n/aurora-config.tr.lmo \
     ./usr/share/ucode/luci/template/themes/aurora/header.ut; do
     tar -tzf "$ROOTFS" "$f" >/dev/null || { echo "built rootfs missing required file: $f" >&2; exit 1; }
 done
@@ -94,7 +99,7 @@ python3 "$TOP/boot/build-boot-image.py" \
   --kernel "$WRAPPED" --append-ramdisk "$GENERIC" --modules "$IN/out/modules" \
   --init "$TOP/boot/init" --busybox "$IN/busybox" --logdw "$IN/tools/logdw/logdw" \
   --ueventd-perms "$TOP/android-vendor/ueventd-perms.sh" \
-  --android-subset "$IN/android-subset" --out "$BOOT" >/dev/null
+  --android-subset "$IN/android-subset" --root-target sd --out "$BOOT" >/dev/null
 
 STAGE=$(mktemp -d "$TOP/work/tf-magisk-stage.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
@@ -102,13 +107,15 @@ cp "$TOP/android/magisk/mu300-openwrt-tf/module.prop" \
    "$TOP/android/magisk/mu300-openwrt-tf/customize.sh" \
    "$TOP/android/magisk/mu300-openwrt-tf/locale.sh" \
    "$TOP/android/magisk/mu300-linux-switch/switch.sh" \
-   "$TOP/tools/android-install.sh" "$TOP/tools/mu300-vendor-from-device.sh" "$STAGE/"
+   "$TOP/tools/android-install.sh" "$TOP/tools/mu300-vendor-from-device.sh" \
+   "$TOP/tools/tf-storage.sh" "$TOP/tools/tf-stage.sh" "$TOP/tools/tf-install-worker.sh" "$STAGE/"
 sed -i "s/Linux 7\.2/Linux $KERNEL/g; s/KERNEL=7\.2/KERNEL=$KERNEL/g" "$STAGE/customize.sh"
 sed -i "s/7\.2/$KERNEL/g" "$STAGE/module.prop"
 cp "$IN/busybox" "$STAGE/busybox"
 cp "$ROOTFS" "$STAGE/mu300-openwrt.tar.gz"
 cp "$BOOT" "$STAGE/boot-linux.img"
 (cd "$STAGE" && sha256sum boot-linux.img | cut -d' ' -f1 > boot-linux.sha256)
+python3 "$TOP/tools/tf-payload-manifest.py" "$STAGE"
 chmod 755 "$STAGE"/*.sh "$STAGE/busybox"
 rm -f "$OUT"
 python3 - "$STAGE" "$OUT" <<'PY'

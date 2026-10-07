@@ -128,6 +128,9 @@ return view.extend({
   <div class="mud-kpis">
     <div class="mud-kpi"><b id="mud-rx">--</b><span>累计接收</span></div>
     <div class="mud-kpi"><b id="mud-tx">--</b><span>累计发送</span></div>
+    <div class="mud-kpi"><b id="mud-tr-day">--</b><span>今日流量</span></div>
+    <div class="mud-kpi"><b id="mud-tr-month">--</b><span>当月流量</span></div>
+    <div class="mud-kpi"><b id="mud-tr-left">--</b><span>套餐剩余</span></div>
   </div>
   <div class="mud-cols">
     <div>
@@ -178,28 +181,35 @@ return view.extend({
         <div class="mud-r"><span class="mud-k">USB 网络</span><span class="mud-v" id="mud-wusb">--</span></div>
         <div class="mud-r"><span class="mud-k">连接跟踪</span><span class="mud-v" id="mud-conntrack">--</span></div>
         <div class="mud-r"><span class="mud-k">LAN 地址</span><span class="mud-v" id="mud-lanip">--</span></div>
-        <div class="mud-r"><span class="mud-k">无线客户端</span><span class="mud-v" id="mud-wcl">--</span></div>
-        <div class="mud-r"><span class="mud-k">DHCP 租约</span><span class="mud-v" id="mud-wleases">--</span></div>
+        <div class="mud-r"><span class="mud-k">系统</span><span class="mud-v" id="mud-fwos">--</span></div>
       </div>
-      <div id="mud-clist" style="margin-top:8px"></div>
     </div>
     <div>
       <div class="mud-rows">
         <div class="mud-r"><span class="mud-k">设备型号</span><span class="mud-v" id="mud-model">--</span></div>
-        <div class="mud-r"><span class="mud-k">系统</span><span class="mud-v" id="mud-fwos">--</span></div>
         <div class="mud-r"><span class="mud-k">调制解调器</span><span class="mud-v" id="mud-modem">--</span></div>
         <div class="mud-r"><span class="mud-k">运营商</span><span class="mud-v" id="mud-carr">--</span></div>
         <div class="mud-r"><span class="mud-k">PLMN</span><span class="mud-v" id="mud-plmn">--</span></div>
         <div class="mud-r"><span class="mud-k">IMEI</span><span class="mud-v" id="mud-imei">--</span></div>
         <div class="mud-r"><span class="mud-k">IMSI</span><span class="mud-v" id="mud-imsi">--</span></div>
         <div class="mud-r"><span class="mud-k">ICCID</span><span class="mud-v" id="mud-iccid">--</span></div>
+        <div class="mud-r"><span class="mud-k">本机号码</span><span class="mud-v" id="mud-msisdn">--</span></div>
         <div class="mud-r"><span class="mud-k">模组</span><span class="mud-v" id="mud-fwmodel">--</span></div>
         <div class="mud-r"><span class="mud-k">固件</span><span class="mud-v" id="mud-fw">--</span></div>
       </div>
       <div class="mud-chiprow"><span class="mud-chip" id="mud-reveal">显示卡号信息</span></div>
     </div>
   </div>
-  <div id="mud-leases" style="margin-top:10px"></div>
+  <div class="mud-cols mud-client-cols">
+    <div>
+      <div class="mud-r"><span class="mud-k">无线客户端</span><span class="mud-v" id="mud-wcl">--</span></div>
+      <div id="mud-clist" style="margin-top:8px"></div>
+    </div>
+    <div>
+      <div class="mud-r"><span class="mud-k">DHCP 租约</span><span class="mud-v" id="mud-wleases">--</span></div>
+      <div id="mud-leases" style="margin-top:8px"></div>
+    </div>
+  </div>
 </div>
 
 
@@ -325,6 +335,7 @@ return view.extend({
 		M.set('imei', mask(id && id.imei));
 		M.set('imsi', mask(id && id.imsi));
 		M.set('iccid', mask(id && id.iccid));
+		M.set('msisdn', mask(id && id.msisdn));
 		M.set('fwmodel', id ? (id.model || '--') : '--');
 		M.set('fw', id ? (id.fw || '--') : '--');
 	},
@@ -446,6 +457,10 @@ return view.extend({
 			this.lastNet = { ts: i.ts, rx: net.rx, tx: net.tx };
 		}
 		var w = i.wan || {};
+		var traffic = i.traffic && i.traffic.clock_ok && i.ts - i.traffic.updated_at < 30 ? i.traffic : null;
+		M.set('tr-day', traffic ? M.fmtTrafficBytes(traffic.today_used) : '--');
+		M.set('tr-month', traffic ? M.fmtTrafficBytes(traffic.month_used) : '--');
+		M.set('tr-left', traffic ? (traffic.remaining == null ? M.translate('不限量') : M.fmtTrafficBytes(traffic.remaining)) : '--');
 		M.v('ip').innerHTML = M.esc(w.ip4 || '--') + (w.ip6 ? '<br>' + M.esc(w.ip6) : '');
 		M.set('dns', w.dns || '--');
 		M.set('apn', w.apn || '--');
@@ -498,13 +513,11 @@ return view.extend({
 		}).join('') || '';
 		/* 近期 DHCP 租约：没人连着的时候这里也能看出谁来过 */
 		M.v('leases').innerHTML = (i.lan && i.lan.list && i.lan.list.length)
-			? '<div class="mud-note" style="margin:0 0 4px">近期 DHCP 租约</div>' +
-				'<table class="mud-table"><tbody>' +
-				i.lan.list.slice(0, 8).map(function(l) {
-					return '<tr><td>' + M.esc(l.host || l.ip || '?') + '</td><td>' + M.esc(l.ip || '') + '</td>' +
-						'<td style="color:var(--text-subtle,var(--text-light,#999))">' + M.esc(l.mac) + '</td>' +
-						'<td>' + (l.left >= 3600 ? Math.round(l.left / 3600) + ' 小时' : Math.max(0, Math.round(l.left / 60)) + ' 分') + '</td></tr>';
-				}).join('') + '</tbody></table>'
+			? i.lan.list.slice(0, 8).map(function(l) {
+					return '<div class="mud-cli"><div class="t"><b>' + M.esc(l.host || l.ip || '?') + '</b>' +
+						'<span class="mud-sub">' + (l.left >= 3600 ? Math.round(l.left / 3600) + ' 小时' : Math.max(0, Math.round(l.left / 60)) + ' 分') + '</span>' +
+						'</div><div class="s">' + (l.ip ? M.esc(l.ip) + ' · ' : '') + M.esc(l.mac) + '</div></div>';
+				}).join('')
 			: '';
 
 		var t = i.temps || {};

@@ -52,4 +52,7 @@ mkdir -p $OUT
 cp $O/arch/arm64/boot/Image $O/ums9620-mu300.dtb $OUT/
 # for depmod on the device: modprobe of a built-in driver fails without them
 cp $O/modules.builtin $O/modules.builtin.modinfo $OUT/
+# Tie feature checks to the Image actually built, not just the requested fragment.
+cp "$O/.config" "$OUT/kernel.config"
+(cd "$OUT" && sha256sum Image kernel.config > kernel.sha256)
 ls -la $OUT

@@ -21,15 +21,16 @@
 #   AT+SPENGMD=0,6,0    Unisoc engineering: LTE serving cell (band/EARFCN/PCI/RSRP/RSRQ/bandwidth/ECI/TAC)
 #   AT+SPENGMD=0,14,1   NR serving cell (band/ARFCN/PCI/RSRP/RSRQ/SINR/MCS/BLER)
 #   AT+SPENGMD=0,6,6    LTE neighbour slots (8 x 12 fields, first 4 per slot are the reading)
-#   AT+SPQ5GNCELLEX     NR neighbour table with real per-cell SINR
+#   AT+SPENGMD=0,14,2   NR neighbour arrays with per-cell band and SINR
+#   AT+SPQ5GNCELLEX     fallback NR neighbour table (no per-cell band)
 #   AT+CGEQOSRDP=1      QCI + up/down AMBR of the active bearer
 # AT+SPENGMD=0,1,0 is NEVER sent: it switches the AT port into streaming mode and
 # kills the channel until the next reboot (V50 archive; blacklisted in the rpcd
 # AT terminal too).
 #
-# SIM/module identity (IMEI/IMSI/ICCID/model/firmware) changes only when the SIM
+# SIM/module identity (IMEI/IMSI/ICCID/phone number/model/firmware) changes only when the SIM
 # or the firmware changes, so it lives in the configured state directory and is re-read
-# at most every 6 hours - not on every round, and never inside a page request.
+# once per boot and at most every 6 hours thereafter, never inside a page request.
 
 # Two rounds share this script:
 #   mu300-dash-cell          full: everything below, ~11 commands, neighbours included
@@ -52,6 +53,8 @@ IDENT_DIR=${MU300_DASH_IDENT_DIR:-${STATE_DIR%/lock-state.d}}
 IDENT=$IDENT_DIR/sim.json
 AT=${MU300_AT:-/usr/libexec/unisoc-modem/at}
 IDENT_MAXAGE=21600   # seconds; a SIM change goes through a reboot, 6 h is plenty
+BOOT_ID=
+[ ! -r /proc/sys/kernel/random/boot_id ] || IFS= read -r BOOT_ID < /proc/sys/kernel/random/boot_id
 
 mkdir -p "$DIR" "$IDENT_DIR" 2>/dev/null
 
@@ -77,6 +80,35 @@ at() {
 now() { date +%s; }
 n_or_null() { case "$1" in ''|*[!0-9]*) echo null ;; *) echo "$1" ;; esac; }
 qs() { [ -n "$1" ] && printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n')" || echo null; }
+cnum_number() {
+    # +CNUM: "alpha","number",type[,speed,service,...]. Ignore the label,
+    # echoes and empty entries; an unprovisioned SIM legitimately has no number.
+    awk -F '"' '/^\+CNUM:/ {
+        n=$4; gsub(/[ ()-]/, "", n)
+        if (n !~ /^\+?[0-9]+$/ || length(n) > 32) next
+        if ($5 ~ /^[[:space:]]*,[[:space:]]*145([[:space:]]*,|[[:space:]]*$)/ && n !~ /^\+/) n="+" n
+        print n; exit
+    }'
+}
+ims_number() {
+    # The stock F50 RIL's getPAU request uses AT+SPPAURI?. Prefer an explicit
+    # tel URI, otherwise an international SIP user part. A numeric SIP IMSI
+    # without '+' is not sufficient evidence of a telephone number.
+    awk '/^\+SPPAURI:/ {
+        sub(/^\+SPPAURI:[[:space:]]*/, "")
+        count=split($0, fields, /[[:space:]",<>]+/)
+        for (i=1; i<=count; i++) {
+            uri=fields[i]; lower=tolower(uri)
+            if (lower !~ /^(tel|sips?):/) continue
+            n=uri; sub(/^[^:]*:/, "", n); sub(/[@;?].*$/, "", n)
+            gsub(/[().-]/, "", n)
+            digits=n; sub(/^\+/, "", digits)
+            if (digits !~ /^[0-9]+$/ || length(digits)<3 || length(digits)>15) continue
+            if (lower ~ /^tel:/) { found=1; print n; exit }
+            if (n ~ /^\+/ && sip == "") sip=n
+        }
+    } END { if (!found && sip != "") print sip }'
+}
 
 # --------------------------------------------------------------- one collector
 # the same "one owner, spare waits/takes over" pattern mu300-atd uses, so two
@@ -134,7 +166,7 @@ IDENT_JSON=null
 # (No backslash line continuations inside the awk: comma-newline is portable,
 # busybox awk does not promise the GNU one.)
 sp_fragment() {  # sp_fragment MODE LINE [PHYLINE]  (MODE: lte | nr | ltenb)
-    [ -n "$2" ] || { echo null; return; }
+    [ -n "$2" ] || { [ "$1" = ltenb ] || echo null; return; }
     awk -v mode="$1" -v line="$2" -v phy="${3:-}" '
         function norm(l, arr,   s, n, i) {
             s = l; gsub(/\r/, "", s)
@@ -171,13 +203,7 @@ sp_fragment() {  # sp_fragment MODE LINE [PHYLINE]  (MODE: lte | nr | ltenb)
             return (v == "" || v == "NA" || v == "N/A") ? "null" : "\"" v "\""
         }
         function lteband(fr,   a,b,r,i,n) {
-            n = split("1:0-599 2:600-1199 3:1200-1949 4:1950-2399 5:2400-2649 7:2750-3449 8:3450-3799 12:5010-5179 13:5180-5279 14:5280-5379 17:5730-5849 18:5850-5999 19:6000-6149 20:6150-6449 25:8040-8689 26:8690-9039 27:9040-9209 28:9210-9659 30:9770-9869 31:9870-9919 33:36000-36199 34:36200-36349 35:36350-36949 36:36950-37549 37:37550-37749 38:37750-38249 39:38250-38649 40:38650-39649 41:39650-41589 42:41590-43589 43:43590-45589 44:45590-46589 46:46790-54539 47:54540-55239 48:55240-56739 49:56740-58239 50:58240-59089 51:59090-59139 65:65536-66435 66:66436-67335", a, " ")
-            for (i = 1; i <= n; i++) { split(a[i], b, ":"); split(b[2], r, "-")
-                if (fr >= r[1] && fr <= r[2]) return b[1] }
-            return 0
-        }
-        function nrband(fr,   a,b,r,i,n) {
-            n = split("1:422000-434000 3:361000-376000 5:173800-178800 8:185000-192000 28:151600-160600 40:460000-480000 41:499200-537999 77:620000-680000 78:620000-653333 79:693334-733333", a, " ")
+            n = split("1:0-599 2:600-1199 3:1200-1949 4:1950-2399 5:2400-2649 6:2650-2749 7:2750-3449 8:3450-3799 9:3800-4149 10:4150-4749 11:4750-4949 12:5010-5179 13:5180-5279 14:5280-5379 17:5730-5849 18:5850-5999 19:6000-6149 20:6150-6449 21:6450-6599 22:6600-7399 23:7500-7699 24:7700-8039 25:8040-8689 26:8690-9039 27:9040-9209 28:9210-9659 29:9660-9769 30:9770-9869 31:9870-9919 32:9920-10359 33:36000-36199 34:36200-36349 35:36350-36949 36:36950-37549 37:37550-37749 38:37750-38249 39:38250-38649 40:38650-39649 41:39650-41589 42:41590-43589 43:43590-45589 44:45590-46589 45:46590-46789 46:46790-54539 47:54540-55239 48:55240-56739 49:56740-58239 50:58240-59089 51:59090-59139 52:59140-60139 65:65536-66435 66:66436-67335 67:67336-67535 68:67536-67835 69:67836-68335 70:68336-68585 71:68586-68935 72:68936-68985 73:68986-69035 74:69036-69465 75:69466-70315 76:70316-70365 85:70366-70545", a, " ")
             for (i = 1; i <= n; i++) { split(a[i], b, ":"); split(b[2], r, "-")
                 if (fr >= r[1] && fr <= r[2]) return b[1] }
             return 0
@@ -226,38 +252,68 @@ sp_fragment() {  # sp_fragment MODE LINE [PHYLINE]  (MODE: lte | nr | ltenb)
                 printf "{\"band\":%d,\"arfcn\":%d,\"pci\":%d,\"rsrp\":%s,\"rsrq\":%s,\"sinr\":%s,\"bw_mhz\":%s,\"gnb\":%s,\"cid\":%s,\"ul_mcs\":%s,\"dl_mcs\":%s,\"ul_bler\":%s,\"dl_bler\":%s}",
                     band, arfcn, pci, c1(f(t[3])), c1(f(t[4])), c1(f(t[15])), num(bw),
                     fs(t[8]), fs(t[9]), num(f(t[16])), num(f(t[17])), c1(f(t[18])), c1(f(t[19]))
-            } else {   # ltenb: eight 12-field slots, first four are EARFCN/PCI/RSRP/RSRQ
+            } else {   # ltenb: up to eight dash-delimited 12-field CSV blocks
                 out = ""
-                for (s = 0; s < 8; s++) {
-                    b = s*12; if (b+3 >= n) break
-                    earfcn = f(t[b]); pci = f(t[b+1])
+                for (s = 0; s < n && s < 8; s++) {
+                    fields = split(t[s], row, ","); if (fields < 4) continue
+                    earfcn = f(row[1]); pci = f(row[2])
                     if (earfcn == 0 && pci == 0) continue
                     out = out sprintf("{\"rat\":\"lte\",\"band\":%d,\"arfcn\":%d,\"pci\":%d,\"rsrp\":%s,\"rsrq\":%s},",
-                        lteband(earfcn), earfcn, pci, c1(f(t[b+2])), c1(f(t[b+3])))
+                        lteband(earfcn), earfcn, pci, c1(f(row[3])), c1(f(row[4])))
                 }
                 sub(/,$/, "", out); print (out == "" ? "" : out)
             }
         }'
 }
 
-nr_neighbours() {  # SPQ5GNCELLEX CSV: serving 8-tuple, count at index 8, then 8-tuples (arfcn,pci,rsrp,rsrq,sinr,..)
+nr_neighbours() {  # SPENGMD: band/ARFCN/PCI/RSRP/RSRQ/SINR arrays; SPQ fallback has no band
     [ -n "$1" ] || { echo ""; return; }
-    awk -v line="$1" '
+    awk -v line="$1" -v source="$2" '
+        function signed(v) { gsub(/\+/, "-", v); return v+0 }
         function nrband(fr,   a,b,r,i,n) {
-            n = split("1:422000-434000 3:361000-376000 5:173800-178800 8:185000-192000 28:151600-160600 40:460000-480000 41:499200-537999 77:620000-680000 78:620000-653333 79:693334-733333", a, " ")
+            # n78 is contained in n77. The fallback does not report the band,
+            # so their shared ARFCNs must remain ambiguous rather than n77.
+            if (fr >= 620000 && fr <= 653333) return "null"
+            n = split("1:422000-434000 3:361000-376000 5:173800-178800 8:185000-192000 28:151600-160600 40:460000-480000 41:499200-537999 77:653334-680000 79:693334-733333", a, " ")
             for (i = 1; i <= n; i++) { split(a[i], b, ":"); split(b[2], r, "-")
                 if (fr >= r[1] && fr <= r[2]) return b[1] }
-            return 0
+            return "null"
         }
         BEGIN {
+            if (source == "spengmd") {
+                # Unisoc uses "-" between arrays but "+" for negative values.
+                # Restore the signs before splitting; do not infer band from ARFCN.
+                gsub(/\r/, "", line)
+                gsub(/,-/, ",+", line); gsub(/--/, "-+", line); sub(/^-/, "+", line)
+                n = split(line, field, "-")
+                if (n < 6) exit
+                count = split(field[1], bands, ",")
+                a = split(field[2], arfcns, ","); if (a < count) count = a
+                a = split(field[3], pcis, ","); if (a < count) count = a
+                a = split(field[4], rsrps, ","); if (a < count) count = a
+                a = split(field[5], rsrqs, ","); if (a < count) count = a
+                a = split(field[6], sinrs, ","); if (a < count) count = a
+                for (i = 1; i <= count; i++) {
+                    if (bands[i] !~ /^[0-9]+$/ || arfcns[i] !~ /^[0-9]+$/ || pcis[i] !~ /^[0-9]+$/) continue
+                    if (rsrps[i] !~ /^\+?[0-9]+$/ || rsrqs[i] !~ /^\+?[0-9]+$/ || sinrs[i] !~ /^\+?[0-9]+$/) continue
+                    if (bands[i]+0 == 0 || arfcns[i]+0 == 0) continue
+                    out = out sprintf("{\"rat\":\"nr\",\"band\":%d,\"arfcn\":%d,\"pci\":%d,\"rsrp\":%.1f,\"rsrq\":%.1f,\"sinr\":%.1f},",
+                        bands[i], arfcns[i], pcis[i], signed(rsrps[i])/100, signed(rsrqs[i])/100, signed(sinrs[i])/100)
+                }
+                sub(/,$/, "", out); print out
+                exit
+            }
+            # SPQ5GNCELLEX CSV: serving 8-tuple, count at index 8, then
+            # 8-tuples (arfcn,pci,rsrp,rsrq,sinr,...). It has no band field.
             m = split(line, a, ","); cnt = a[9]+0
             out = ""
             for (i = 0; i < cnt && i < 8; i++) {
                 b = 9 + i*8; if (b+5 > m) break
                 fr = a[b+1]+0; pci = a[b+2]+0
                 if (fr == 0 && pci == 0) continue
-                out = out sprintf("{\"rat\":\"nr\",\"band\":%d,\"arfcn\":%d,\"pci\":%d,\"rsrp\":%.1f,\"rsrq\":%.1f,\"sinr\":%.1f},",
-                    nrband(fr), fr, pci, a[b+3]/100, a[b+4]/100, a[b+5]/100)
+                out = out sprintf("{\"rat\":\"nr\",\"band\":%s,\"band_candidates\":%s,\"arfcn\":%d,\"pci\":%d,\"rsrp\":%.1f,\"rsrq\":%.1f,\"sinr\":%.1f},",
+                    nrband(fr), (fr >= 620000 && fr <= 653333) ? "[77,78]" : "[]",
+                    fr, pci, a[b+3]/100, a[b+4]/100, a[b+5]/100)
             }
             sub(/,$/, "", out); print out
         }'
@@ -316,7 +372,7 @@ R4=$(printf '%s\n' "$CEREG" | tr -d '"' | awk -F',' '{ gsub(/ /,"",$2); print $2
 R5=$(printf '%s\n' "$C5GREG" | tr -d '"' | awk -F',' '{ gsub(/ /,"",$2); print $2 }')
 REGISTERED=0
 case "$R4:$R5" in 1:*|5:*|10:*|*:1|*:5|*:10) REGISTERED=1 ;; esac
-SP_LTE=; SP_LTEPHY=; SP_NR=; SP_LN=; SP_NRNB=; QOS=; COPS=
+SP_LTE=; SP_LTEPHY=; SP_NR=; SP_LN=; SP_NRNB=; SP_NRNB_SOURCE=; QOS=; COPS=
 if [ "$REGISTERED" = 1 ]; then
     SP_LTE=$(at 'AT+SPENGMD=0,6,0' 2 | grep -v '^AT' | grep -- '-' | head -n1)
     SP_LTEPHY=$(at 'AT+SPENGMD=0,0,6' 2 | grep -v '^AT' | grep -- '-' | head -n1)
@@ -326,12 +382,19 @@ if [ "$MODE" = full ]; then
     COPS=$(at 'AT+COPS?' 2 | grep '^+COPS:' | head -n1)
     if [ "$REGISTERED" = 1 ]; then
         SP_LN=$(at 'AT+SPENGMD=0,6,6' 2 | grep -v '^AT' | grep -- '-' | head -n1)
-        SP_NRNB=$(at 'AT+SPQ5GNCELLEX' 2 | sed -n 's/^+SPQ5GNCELLEX: *//p' | head -n1)
+        SP_NRNB=$(at 'AT+SPENGMD=0,14,2' 2 | grep -v '^AT' | grep -- '-' | head -n1)
+        SP_NRNB_SOURCE=spengmd
+        if [ -z "$SP_NRNB" ]; then
+            SP_NRNB=$(at 'AT+SPQ5GNCELLEX' 2 | sed -n 's/^+SPQ5GNCELLEX: *//p' | head -n1)
+            SP_NRNB_SOURCE=spq
+        fi
         QOS=$(at 'AT+CGEQOSRDP=1' 2 | sed -n 's/^+CGEQOSRDP: *//p' | head -n1)
     fi
     IDENT_AGE=999999
     [ -s "$IDENT" ] && IDENT_AGE=$(( $(now) - $(date -r "$IDENT" +%s 2>/dev/null || echo 0) ))
-    if [ "$IDENT_AGE" -le "$IDENT_MAXAGE" ]; then
+    if [ "$IDENT_AGE" -ge 0 ] && [ "$IDENT_AGE" -le "$IDENT_MAXAGE" ] &&
+       [ -n "$BOOT_ID" ] && grep -Fq "\"boot_id\":\"$BOOT_ID\"" "$IDENT" &&
+       grep -q '"msisdn"[[:space:]]*:' "$IDENT"; then
         IDENT_JSON=$(cat "$IDENT" 2>/dev/null || echo null)
     else
         i_mfg=$(at 'AT+CGMI' 2 | grep -v '^OK' | head -n1)
@@ -341,8 +404,18 @@ if [ "$MODE" = full ]; then
         i_imsi=$(at 'AT+CIMI' 2 | tr -cd '0-9' | cut -c1-15)
         i_iccid=$(at 'AT+CCID' 2 | tr -cd '0-9' | cut -c1-20)
         if [ -n "$i_imei$i_imsi$i_iccid" ]; then
-            IDENT_JSON=$(printf '{"ts":%d,"mfg":%s,"model":%s,"fw":%s,"imei":%s,"imsi":%s,"iccid":%s}' \
-                "$(now)" "$(qs "$i_mfg")" "$(qs "$i_model")" "$(qs "$i_fw")" "$(qs "$i_imei")" "$(qs "$i_imsi")" "$(qs "$i_iccid")")
+            # Keep this optional query out of the live signal polling path.
+            # Cache a null too, so a SIM without a number is not queried again
+            # on every full refresh. Older identity caches migrate once.
+            i_msisdn=$(at 'AT+CNUM' 2 | cnum_number)
+            i_msisdn_source=sim
+            if [ -z "$i_msisdn" ]; then
+                i_msisdn=$(at 'AT+SPPAURI?' 2 | ims_number)
+                i_msisdn_source=ims
+            fi
+            [ -n "$i_msisdn" ] || i_msisdn_source=
+            IDENT_JSON=$(printf '{"ts":%d,"boot_id":%s,"mfg":%s,"model":%s,"fw":%s,"imei":%s,"imsi":%s,"iccid":%s,"msisdn":%s,"msisdn_source":%s}' \
+                "$(now)" "$(qs "$BOOT_ID")" "$(qs "$i_mfg")" "$(qs "$i_model")" "$(qs "$i_fw")" "$(qs "$i_imei")" "$(qs "$i_imsi")" "$(qs "$i_iccid")" "$(qs "$i_msisdn")" "$(qs "$i_msisdn_source")")
             printf '%s\n' "$IDENT_JSON" > "$IDENT.part" 2>/dev/null && mv "$IDENT.part" "$IDENT"
         elif [ -s "$IDENT" ]; then IDENT_JSON=$(cat "$IDENT"); fi
     fi
@@ -377,7 +450,7 @@ printf '{"ts":%d,"cfun":%s,"reg":%s,"reg5g":%s,"sig_src":"%s","sig":%s,"lte":%s,
 
 # the full tier: everything else the page needs only every few seconds
 LN=$(sp_fragment ltenb "$SP_LN")
-NN=$(nr_neighbours "$SP_NRNB")
+NN=$(nr_neighbours "$SP_NRNB" "$SP_NRNB_SOURCE")
 # one neighbour list, NR first (the page shows NR cells at the top)
 if [ -n "$NN" ] && [ -n "$LN" ]; then NEIGH="[$NN,$LN]"
 elif [ -n "$NN" ]; then NEIGH="[$NN]"

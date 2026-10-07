@@ -18,16 +18,18 @@
 #         led-status current         print the last set state
 
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
+LED_ROOT=${MU300_LED_SYSFS_ROOT:-/sys/class/leds}
+RUN_DIR=${MU300_LED_RUN_DIR:-/run}
 
 # --- detect LED paths (F50 sc27xx vs V50 plain)
-if [ -d /sys/class/leds/sc27xx:blue ]; then
-    LED_R=/sys/class/leds/sc27xx:red/brightness
-    LED_W=/sys/class/leds/sc27xx:green/brightness   # physically white on the F50
-    LED_B=/sys/class/leds/sc27xx:blue/brightness
-elif [ -d /sys/class/leds/blue ]; then
-    LED_R=/sys/class/leds/red/brightness
-    LED_W=/sys/class/leds/white/brightness
-    LED_B=/sys/class/leds/blue/brightness
+if [ -d "$LED_ROOT/sc27xx:blue" ]; then
+    LED_R=$LED_ROOT/sc27xx:red/brightness
+    LED_W=$LED_ROOT/sc27xx:green/brightness   # physically white on the F50
+    LED_B=$LED_ROOT/sc27xx:blue/brightness
+elif [ -d "$LED_ROOT/blue" ]; then
+    LED_R=$LED_ROOT/red/brightness
+    LED_W=$LED_ROOT/white/brightness
+    LED_B=$LED_ROOT/blue/brightness
 else
     exit 0
 fi
@@ -38,17 +40,41 @@ fi
 # front-panel function.  Keeping this separate also guarantees that LTE stays
 # pure blue (B=255, R=W=0), 5G pure white and offline pure red.
 WIFI_LED=
-if [ "$(mu300-device 2>/dev/null)" = f50 ] && [ -w /sys/class/leds/keyboard-backlight/brightness ]; then
-    WIFI_LED=/sys/class/leds/keyboard-backlight/brightness
+if [ "$(mu300-device 2>/dev/null)" = f50 ] && [ -w "$LED_ROOT/keyboard-backlight/brightness" ]; then
+    WIFI_LED=$LED_ROOT/keyboard-backlight/brightness
 fi
 
-STATE_FILE=/run/led-status.state
-WIFI_FILE=/run/led-status.wifi
-BLINK_PID=/run/led-status.blink.pid
+STATE_FILE=$RUN_DIR/led-status.state
+WIFI_FILE=$RUN_DIR/led-status.wifi
+BLINK_PID=$RUN_DIR/led-status.blink.pid
 SIGNAL_ENABLED=$(uci -q get system.mu300_leds.signal 2>/dev/null)
 WIFI_ENABLED=$(uci -q get system.mu300_leds.wifi 2>/dev/null)
 [ "$SIGNAL_ENABLED" = 0 ] || SIGNAL_ENABLED=1
 [ "$WIFI_ENABLED" = 0 ] || WIFI_ENABLED=1
+
+level() {  # validated 0-255 UCI value, otherwise the legacy brightness
+    value=$1 fallback=$2
+    case $value in ''|*[!0-9]*) echo "$fallback"; return ;; esac
+    while [ "${value#0}" != "$value" ]; do value=${value#0}; done
+    [ -n "$value" ] || value=0
+    [ "$value" -le 255 ] && echo "$value" || echo "$fallback"
+}
+hw_max() {
+    value=$(cat "$(dirname "$1")/max_brightness" 2>/dev/null)
+    level "$value" 255
+}
+SIGNAL_BRIGHTNESS=$(level "$(uci -q get system.mu300_leds.signal_brightness 2>/dev/null)" 255)
+WIFI_BRIGHTNESS=$(level "$(uci -q get system.mu300_leds.wifi_brightness 2>/dev/null)" 127)
+R_MAX=$(hw_max "$LED_R")
+W_MAX=$(hw_max "$LED_W")
+B_MAX=$(hw_max "$LED_B")
+[ -n "$WIFI_LED" ] && WIFI_MAX=$(hw_max "$WIFI_LED") || WIFI_MAX=255
+
+scaled() {  # channel intensity, configured brightness, hardware maximum
+    value=$(( ($1 * $2 + 127) / 255 ))
+    [ "$value" -le "$3" ] || value=$3
+    echo "$value"
+}
 
 # Status reads must be side-effect free. In particular, dashboards and event
 # handlers may query this during boot and must not stop the chase animation.
@@ -78,7 +104,11 @@ wifi-on|wifi-off)
     echo "$wifi_state" > "$WIFI_FILE"
     if [ -n "$WIFI_LED" ]; then
         echo none > "$(dirname "$WIFI_LED")/trigger" 2>/dev/null
-        [ "$wifi_state" = on ] && [ "$WIFI_ENABLED" = 1 ] && echo 127 > "$WIFI_LED" || echo 0 > "$WIFI_LED"
+        if [ "$wifi_state" = on ] && [ "$WIFI_ENABLED" = 1 ]; then
+            scaled 255 "$WIFI_BRIGHTNESS" "$WIFI_MAX" > "$WIFI_LED"
+        else
+            echo 0 > "$WIFI_LED"
+        fi
     fi
     exit 0 ;;
 esac
@@ -94,9 +124,9 @@ done
 
 set_rgb() {  # R W B (0-255)
     [ "$SIGNAL_ENABLED" = 1 ] || set -- 0 0 0
-    echo "${1:-0}" > "$LED_R" 2>/dev/null
-    echo "${2:-0}" > "$LED_W" 2>/dev/null
-    echo "${3:-0}" > "$LED_B" 2>/dev/null
+    scaled "${1:-0}" "$SIGNAL_BRIGHTNESS" "$R_MAX" > "$LED_R" 2>/dev/null
+    scaled "${2:-0}" "$SIGNAL_BRIGHTNESS" "$W_MAX" > "$LED_W" 2>/dev/null
+    scaled "${3:-0}" "$SIGNAL_BRIGHTNESS" "$B_MAX" > "$LED_B" 2>/dev/null
 }
 
 pause_us() {
@@ -113,13 +143,9 @@ start_blink() {  # R W B ON_MS OFF_MS
     _r=$1; _w=$2; _b=$3; _on=$4; _off=$5
     (
         while :; do
-            echo "$_r" > "$LED_R" 2>/dev/null
-            echo "$_w" > "$LED_W" 2>/dev/null
-            echo "$_b" > "$LED_B" 2>/dev/null
+            set_rgb "$_r" "$_w" "$_b"
             pause_us "$_on"
-            echo 0 > "$LED_R" 2>/dev/null
-            echo 0 > "$LED_W" 2>/dev/null
-            echo 0 > "$LED_B" 2>/dev/null
+            set_rgb 0 0 0
             pause_us "$_off"
         done
     ) &
@@ -130,9 +156,9 @@ start_chase() {
     [ "$SIGNAL_ENABLED" = 1 ] || { set_rgb 0 0 0; return 0; }
     (
         while :; do
-            echo 255 > "$LED_R" 2>/dev/null; echo 0 > "$LED_W" 2>/dev/null; echo 0 > "$LED_B" 2>/dev/null; pause_us 120000
-            echo 0 > "$LED_R" 2>/dev/null; echo 255 > "$LED_W" 2>/dev/null; echo 0 > "$LED_B" 2>/dev/null; pause_us 120000
-            echo 0 > "$LED_R" 2>/dev/null; echo 0 > "$LED_W" 2>/dev/null; echo 255 > "$LED_B" 2>/dev/null; pause_us 120000
+            set_rgb 255 0 0; pause_us 120000
+            set_rgb 0 255 0; pause_us 120000
+            set_rgb 0 0 255; pause_us 120000
         done
     ) &
     echo $! > "$BLINK_PID"

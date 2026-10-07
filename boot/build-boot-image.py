@@ -127,6 +127,8 @@ def main():
                          'ones of the same name when it runs on that device')
     ap.add_argument('--device', help='the device this image is for (f50, u30air): written to /etc/mu300-device, '
                                      'which init trusts over its own guess from the device tree')
+    ap.add_argument('--root-target', choices=['sd'],
+                    help='TF-only device segment: never probe an internal eMMC root when TF fails')
     ap.add_argument('--trial-guard', type=int, metavar='SECONDS',
                     help='for experiments only: reboot SECONDS after switch_root unless /run/stay exists (with a '
                          'one-shot trial, that is back to Android when the kernel boots without USB)')
@@ -180,6 +182,12 @@ def main():
                 files['linux-modules/' + name] = ((a.modules / name).read_bytes(), stat.S_IFREG | 0o644)
     if a.trial_guard and a.generic_ramdisk:
         ap.error('--trial-guard does not go into a generic ramdisk')
+    if a.root_target:
+        if a.generic_ramdisk:
+            ap.error('--root-target does not go into a generic ramdisk')
+        # Deliberately absent from generic updates: keep the install target
+        # from the device segment when concatenating a new generic ramdisk.
+        files['etc/mu300-root-target'] = (a.root_target.encode() + b'\n', stat.S_IFREG | 0o644)
     if a.device:
         # only in the device segment: a generic segment is the same for every device
         if a.generic_ramdisk:

@@ -24,22 +24,19 @@ say() { echo "[device] $*"; }
 say_i18n() { if [ "${MU300_INSTALL_LANG:-en}" = zh ]; then say "$1"; else say "$2"; fi; }
 
 if [ "${SD_MODE:-0}" = 1 ]; then
+    . "$P/tf-storage.sh"
+    mkdir -p "$T"
+    if [ -n "${MU300_TF_STATE:-}" ]; then
+        read -r required_kib required_inodes < "$P/rootfs.requirements"
+    fi
     R=${SD_DEV:?SD_DEV is not set}
     [ -b "$R" ] || { say_i18n "找不到块设备 $R（TF 卡是否已插入？）" \
                                     "no block device $R (is the TF card inserted?)"; exit 1; }
-    vol=$(sm list-volumes 2>/dev/null | sed -n 's/^\(public:[^ ]*\) mounted.*/\1/p')
-    if [ -n "$vol" ]; then
-        say_i18n "正在请求 Android 卸载 $vol" "asking vold to unmount $vol"
-        sm unmount "$vol" 2>/dev/null || true
-        sm list-volumes 2>/dev/null | grep -q "^$vol mounted" && {
-            say_i18n "TF 卡仍被 Android 挂载；请先在系统存储设置中卸载" \
-                     "vold still has the card mounted; unmount it in Android Storage settings"; exit 1; }
-    fi
-    for m in $(grep -o '^/dev/block/mmcblk1[^ ]*' /proc/mounts 2>/dev/null); do
-        umount "$m" 2>/dev/null || umount -f "$m" 2>/dev/null || true
-    done
-    magic=$(dd if="$R" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
-    label=$(dd if="$R" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
+    # Never touch an eMMC free-region candidate from the SD branch.
+    tf_release "$R"
+    tf_read_super "$R" || { tf_die 'failed/short TF superblock read'; exit 1; }
+    magic=$(dd if="$T/tf-super" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    label=$(dd if="$T/tf-super" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
     if [ "$FORMAT" = 1 ]; then
         [ "$magic" != 53ef ] || [ "$label" = mu300sd ] || {
             say_i18n "拒绝格式化非 mu300sd 的 ext4 文件系统 '$label'" \
@@ -54,7 +51,15 @@ if [ "${SD_MODE:-0}" = 1 ]; then
         # resolves to BusyBox's ext2-only applet, even when Android's real
         # e2fsprogs is installed. An absolute path bypasses that interception.
         if [ -x /system/bin/mke2fs ]; then
+            # Explicit minimum inode count for small TFs; large cards retain
+            # the sparse 1 MiB/inode layout. No filesystem-size argument/cap.
+            inode_args=
+            if [ -n "${MU300_TF_STATE:-}" ]; then
+                read -r required_kib required_inodes < "$P/rootfs.requirements"
+                [ $((tf_sectors / 2048)) -ge $((required_inodes + 1024)) ] || inode_args="-N $((required_inodes + 1024))"
+            fi
             /system/bin/mke2fs -t ext4 -F -b 4096 -m 0 -i 1048576 \
+                $inode_args \
                 -E lazy_itable_init=1,lazy_journal_init=1,nodiscard \
                 -L mu300sd "$R" || { say_i18n '快速创建 ext4 文件系统失败' \
                                                          'optimized ext4 format failed'; exit 1; }
@@ -69,7 +74,15 @@ if [ "${SD_MODE:-0}" = 1 ]; then
     fi
     mkdir -p "$M"
     mount -t ext4 -o noatime "$R" "$M"
-    trap 'sync; umount "$M" >/dev/null 2>&1 || true' EXIT
+    # On failure do not global-sync or launch a second I/O request into a
+    # possibly wedged card. The bounded Magisk worker leaves a reboot lock.
+    if [ -n "${MU300_TF_STATE:-}" ]; then
+        free_kib=$(df -Pk "$M" | awk 'END {print $4}')
+        free_inodes=$(df -Pi "$M" | awk 'END {print $4}')
+        [ "$free_kib" -ge "$required_kib" ] && [ "$free_inodes" -ge "$required_inodes" ] || {
+            tf_die 'insufficient usable space/inodes after format'; exit 1;
+        }
+    fi
 else
 # --- the region must not overlap any partition (checked again here, on the device itself)
 end=0
@@ -78,7 +91,8 @@ for p in /sys/block/mmcblk0/mmcblk0p*; do
     [ $e -gt $end ] && end=$e
 done
 disk=$(cat /sys/block/mmcblk0/size)
-[ "$OFF_S" -ge $end ] && [ $((OFF_S + SIZE_S)) -le $((disk - 34)) ] || { say "region overlaps partitions or the backup GPT"; exit 1; }
+[ "$SIZE_S" -ge 8 ] && [ "$OFF_S" -ge $end ] && [ "$OFF_S" -lt "$disk" ] && \
+    [ "$SIZE_S" -le $((disk - 34 - OFF_S)) ] || { say "region overlaps partitions or the backup GPT"; exit 1; }
 
 attach() {
     for o in /sys/block/loop*/loop/offset; do
@@ -130,10 +144,20 @@ for os in $OSES; do
     say_i18n "正在安装 $os" "installing $os"
     rm -rf $M/$os.new && mkdir $M/$os.new
     tar -xzpf $tarball -C $M/$os.new
+    if [ -n "${MU300_TF_STATE:-}" ]; then
+        (cd "$M/$os.new" && sha256sum -c "$P/rootfs-critical.sha256")
+        [ -L "$M/$os.new/sbin/init" ] || [ -x "$M/$os.new/sbin/init" ]
+    fi
     # prebuilt images: firmware and Android userspace pulled from this device by install.sh (tools/vendor-overlay.py)
     if [ -f $P/mu300-vendor-$os.tar.gz ]; then
         tar -xzpf $P/mu300-vendor-$os.tar.gz -C $M/$os.new
         [ "${MU300_KEEP_PAYLOAD:-0}" = 1 ] || rm -f $P/mu300-vendor-$os.tar.gz
+    elif [ -n "${MU300_PREPARED_VENDOR:-}" ]; then
+        # Do not merge stale property snapshots/libraries from the build device
+        # with this device's vendor tree.
+        rm -rf "$M/$os.new/opt/mu300/android"
+        cp -a "$MU300_PREPARED_VENDOR/." "$M/$os.new/"
+        (cd "$M/$os.new" && sha256sum -c "$MU300_TF_STATE/vendor.sha256" >/dev/null)
     elif [ "${MU300_VENDOR_FROM_DEVICE:-0}" = 1 ]; then
         sh "$P/mu300-vendor-from-device.sh" "$M/$os.new" "$os"
     fi
@@ -181,8 +205,8 @@ for os in $OSES; do
         say_i18n "已保留先前 $os 的配置：$kept" "kept from the previous $os:$kept"
         [ -n "$extra" ] && say_i18n "已保留启用的服务：$extra" "kept enabled services:$extra"
     fi
-    rm -rf $M/$os && mv $M/$os.new $M/$os
-    R=$M/$os
+    # Configure and validate the staged tree before publishing its name.
+    R=$M/$os.new
     [ "${SD_MODE:-0}" = 1 ] && [ -f $R/etc/fstab ] && \
         sed -i 's|LABEL=mu300root|LABEL=mu300sd|' $R/etc/fstab
     mkdir -p $R/etc/mu300
@@ -200,6 +224,7 @@ for os in $OSES; do
             openwrt) sed -i "s|^root:[^:]*:|root:$PWHASH:|" $R/etc/shadow ;;
         esac
     fi
+    rm -rf "$M/$os" && mv "$M/$os.new" "$M/$os"
     [ "${MU300_KEEP_PAYLOAD:-0}" = 1 ] || rm -f $tarball
 done
 mkdir -p $M/.mu300
@@ -216,4 +241,24 @@ installed=$(ls -d $M/ubuntu $M/openwrt 2>/dev/null | sed "s|$M/||g" | tr '\n' ' 
 say_i18n "已安装：${installed}启动系统=$BOOT_OS 默认启动 Linux=$DEFAULT_LINUX" \
          "installed: ${installed}boot-os=$BOOT_OS default-linux=$DEFAULT_LINUX"
 [ "${MU300_KEEP_PAYLOAD:-0}" = 1 ] || rm -f $P/mu300-install.env
+if [ "${SD_MODE:-0}" = 1 ]; then
+    say_i18n '正在刷盘、卸载并回读 TF 文件系统' 'flushing, unmounting and reading back TF filesystem'
+    # umount performs filesystem writeback and reports failure. A read-only
+    # remount checks the published tree before any boot partition is written.
+    umount "$M"
+    if [ -n "${MU300_TF_STATE:-}" ]; then
+        mount -t ext4 -o ro,noload "$SD_DEV" "$M"
+        (cd "$M/openwrt" && sha256sum -c "$P/rootfs-critical.sha256")
+        if [ -n "${MU300_PREPARED_VENDOR:-}" ]; then
+            (cd "$M/openwrt" && sha256sum -c "$MU300_TF_STATE/vendor.sha256" >/dev/null)
+        fi
+        [ "$(cat "$M/.mu300/boot-os")" = "$BOOT_OS" ]
+        [ "$(cat "$M/openwrt/etc/mu300/default-boot")" = linux ]
+        umount "$M"
+    fi
+else
+    # Also make the legacy path's success marker mean unmount has finished.
+    sh "$T/android-mount-mu300root.sh" -u "$M"
+    trap - EXIT
+fi
 echo MU300-INSTALL-OK   # install.sh checks for this line (set -e stops before it on any failure)

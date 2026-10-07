@@ -15,6 +15,12 @@ msgstr "Network locks"
 msgid "短信"
 msgstr "SMS"
 
+msgid "短信转发"
+msgstr "SMS forwarding"
+
+msgid "流量池"
+msgstr "Data plan"
+
 msgid "AT 终端"
 msgstr "AT terminal"
 

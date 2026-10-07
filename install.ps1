@@ -713,7 +713,7 @@ Write-Host ('  ' + (T 'writes:         Linux region at offset {1}, boot_b, 32 by
 if ((Ask (T 'Type INSTALL to continue') 'no') -ne 'INSTALL') { Die (T 'cancelled') }
 
 Say (T 'Copying to the device')
-foreach ($f in 'android-mount-mu300root.sh', 'android-install.sh') { PushUnix "$Top\tools\$f" "$T/$f" | Out-Null }
+foreach ($f in 'android-mount-mu300root.sh', 'android-install.sh', 'tf-storage.sh') { PushUnix "$Top\tools\$f" "$T/$f" | Out-Null }
 foreach ($os in $OSES) {
     & adb push "$REL\$(RootfsFile $os)" "$T/mu300-$os.tar.gz" | Out-Null
     & adb push "$Work\mu300-vendor-$os.tar.gz" "$T/mu300-vendor-$os.tar.gz" | Out-Null

@@ -12,6 +12,7 @@ from helpers import TOP
 
 COMMON = TOP / 'openwrt/luci-app-mu300/htdocs/luci-static/resources/mu300/common.js'
 HOME = TOP / 'openwrt/luci-app-mu300/htdocs/luci-static/resources/view/mu300/home.js'
+FORWARD = TOP / 'openwrt/luci-app-mu300/htdocs/luci-static/resources/view/mu300/forward.js'
 PACKAGE = TOP / 'openwrt/luci-app-mu300'
 
 
@@ -24,7 +25,12 @@ class DashboardI18n(unittest.TestCase):
         self.assertIn('$(CP) ./lmo/. $(1)/usr/lib/lua/luci/i18n/', makefile)
         self.assertNotIn('uci set luci.languages.zh_cn', makefile)
         self.assertIn('/etc/init.d/unisoc-modem-ui enable', makefile)
-        for name in ('home', 'at', 'locks', 'sms', 'settings', 'device'):
+        self.assertIn('/etc/init.d/unisoc-sms-forward enable', makefile)
+        self.assertIn('+msmtp', makefile)
+        self.assertIn('+curl', makefile)
+        self.assertTrue((PACKAGE / 'root/etc/init.d/unisoc-sms-forward').is_file())
+        self.assertTrue((PACKAGE / 'root/usr/libexec/unisoc-modem/sms-forward').is_file())
+        for name in ('home', 'at', 'locks', 'sms', 'forward', 'traffic', 'settings', 'device'):
             self.assertTrue((PACKAGE / f'htdocs/luci-static/resources/view/mu300/{name}.js').is_file())
 
     def test_global_menu_catalogs_are_complete(self):
@@ -148,7 +154,7 @@ if (M.translate('删除这条短信') !== '删除这条短信') throw Error('Chi
 
     def test_visible_chinese_literals_have_translations(self):
         literals = []
-        for name in ('home', 'at', 'locks', 'sms', 'settings'):
+        for name in ('home', 'at', 'locks', 'sms', 'forward', 'traffic', 'settings'):
             source = (PACKAGE / f'htdocs/luci-static/resources/view/mu300/{name}.js').read_text(encoding='utf-8')
             for line in source.splitlines():
                 stripped = line.lstrip()
@@ -165,6 +171,38 @@ for (const locale of ['en', 'tr']) {
     if (missing.length) throw Error(locale + ': ' + JSON.stringify(missing).replace(/[^\x00-\x7f]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')));
 }
 ''' % json.dumps(literals, ensure_ascii=True))
+
+    def test_forward_page_static_html_has_three_languages(self):
+        source = FORWARD.read_text(encoding='utf-8')
+        html = re.search(r'root\.innerHTML = `(.*?)`;', source, re.S)
+        self.assertIsNotNone(html)
+        visible = re.sub(r'<style>.*?</style>|<[^>]+>', ' ', html.group(1), flags=re.S)
+        self.run_js(r'''
+const visible = %s;
+for (const locale of ['en', 'tr']) {
+    lang = locale;
+    const translated = M.translate(visible);
+    if (/[\u3400-\u9fff]/.test(translated))
+        throw Error(locale + ': untranslated forward page: ' +
+            translated.match(/[\u3400-\u9fff]+/)[0]);
+}
+lang = 'zh';
+if (!M.translate(visible).includes('短信转发')) throw Error('Chinese source lost');
+''' % json.dumps(visible, ensure_ascii=True))
+
+    def test_traffic_page_static_html_has_three_languages(self):
+        source = (PACKAGE / 'htdocs/luci-static/resources/view/mu300/traffic.js').read_text(encoding='utf-8')
+        html = re.search(r'root\.innerHTML = `(.*?)`;', source, re.S)
+        self.assertIsNotNone(html)
+        visible = re.sub(r'<style>.*?</style>|<[^>]+>', ' ', html.group(1), flags=re.S)
+        self.run_js(r'''
+const visible = %s;
+for (const locale of ['en', 'tr']) {
+    lang = locale;
+    if (/[\u3400-\u9fff]/.test(M.translate(visible)))
+        throw Error(locale + ': untranslated data-plan page');
+}
+''' % json.dumps(visible, ensure_ascii=True))
 
 
 if __name__ == '__main__':

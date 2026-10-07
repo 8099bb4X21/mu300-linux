@@ -551,7 +551,7 @@ ask confirm "$(t 'Type INSTALL to continue')" no
 [ "$confirm" = INSTALL ] || die "$(t 'cancelled')"
 
 say "$(t 'Copying to the device')"
-adb push "$TOP/tools/android-mount-mu300root.sh" "$TOP/tools/android-install.sh" $T/ >/dev/null
+adb push "$TOP/tools/android-mount-mu300root.sh" "$TOP/tools/android-install.sh" "$TOP/tools/tf-storage.sh" $T/ >/dev/null
 for os in $OSES; do
     if [ $MODE = prebuilt ]; then
         adb push "$REL/$(rootfs_file $os)" $T/mu300-$os.tar.gz >/dev/null

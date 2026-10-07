@@ -218,7 +218,7 @@ class USBIntegration(unittest.TestCase):
         self.assertLess(init.index('stage=sd-root dev='),
                         init.index('[ "$root_mounted" = 1 ] && read_usb_boot_policy\nsetup_usb_gadget'))
         self.assertLess(init.index('[ "$root_mounted" = 1 ] && read_usb_boot_policy\nsetup_usb_gadget'),
-                        init.index('if [ -z "$sd_root" ]; then'))
+                        init.index('if [ "$root_mounted" = 0 ] && [ "$root_target" != sd ]; then'))
         self.assertIn('/disk/openwrt/etc/unisoc-modem/usb-boot.conf', init)
         self.assertIn('/run/unisoc-usb-net-applied', init)
 

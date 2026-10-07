@@ -29,25 +29,66 @@ BB=/opt/mu300/bin/busybox
 t3() { "$BB" timeout -s KILL 3 "$@" 2>/dev/null; }   # external asks: netifd, uci, iw...
 t2() { "$BB" timeout -s KILL 2 "$@" 2>/dev/null; }
 
-rd() { cat "$1" 2>/dev/null; }
+# All callers except the device-tree fallback read one-line proc/sysfs text.
+# A shell builtin avoids starting cat for every thermal zone, battery and
+# interface counter (dozens of short-lived processes per snapshot).
+rd() {
+    [ -r "$1" ] || return 0
+    IFS= read -r _rd < "$1" || :
+    printf '%s\n' "$_rd"
+}
 n_or_null() { case "$1" in ''|*[!0-9.-]*) echo null ;; *) echo "$1" ;; esac; }
 f_or_null() { case "$1" in ''|*[!0-9.-]*) echo null ;; *) echo "$1" ;; esac; }
-# JSON string escaping (and drop newlines: the output is one line)
-esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'; }
-qs() { [ -n "$1" ] && printf '"%s"' "$(esc "$1")" || echo null; }
+# JSON string escaping (and drop newlines: the output is one line).
+# Avoid a sed+tr process pair for every hostname, address and client field.
+CR=$(printf '\r')
+NL=$(printf '\nx'); NL=${NL%x}
+esc() {
+    local value=$1 out= ch
+    while [ -n "$value" ]; do
+        ch=${value%"${value#?}"}; value=${value#?}
+        case "$ch" in
+            "\\") out="$out\\\\" ;;
+            '"') out="$out\\\"" ;;
+            "$CR"|"$NL") ;;
+            *) out=$out$ch ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+qs() { [ -n "$1" ] && { printf '"'; esc "$1"; printf '"'; } || printf 'null'; }
 
 # ------------------------------------------------------------- temperature
 # type -> label, the four zones this SoC actually has; hottest covers the rest
-temp_of() {
-    local z t
+# Read all zone types in one pass instead of rescanning every zone four times.
+named_temps() {
+    local z type temp seen_soc= seen_cpu= seen_nr= seen_brd=
+    local raw_soc= raw_cpu= raw_nr= raw_brd=
     for z in /sys/class/thermal/thermal_zone*; do
         [ -r "$z/type" ] || continue
-        [ "$(rd "$z/type")" = "$1" ] || continue
-        t=$(rd "$z/temp")
-        [ -n "$t" ] || return 0
-        awk -v v="$t" 'BEGIN{printf "%.1f", v/1000}'
-        return 0
+        type=; IFS= read -r type < "$z/type" || :
+        case "$type" in
+            soc-thmzone) [ -z "$seen_soc" ] || continue; seen_soc=1 ;;
+            apcpu0-thmzone) [ -z "$seen_cpu" ] || continue; seen_cpu=1 ;;
+            nr0-thmzone) [ -z "$seen_nr" ] || continue; seen_nr=1 ;;
+            board-thmzone) [ -z "$seen_brd" ] || continue; seen_brd=1 ;;
+            *) continue ;;
+        esac
+        temp=; [ -r "$z/temp" ] && IFS= read -r temp < "$z/temp" || :
+        case "$type" in
+            soc-thmzone) raw_soc=$temp ;;
+            apcpu0-thmzone) raw_cpu=$temp ;;
+            nr0-thmzone) raw_nr=$temp ;;
+            board-thmzone) raw_brd=$temp ;;
+        esac
     done
+    awk -v soc="$raw_soc" -v cpu="$raw_cpu" -v nr="$raw_nr" -v brd="$raw_brd" '
+        BEGIN {
+            printf "%s %s %s %s", soc=="" ? "null" : sprintf("%.1f", soc/1000),
+                cpu=="" ? "null" : sprintf("%.1f", cpu/1000),
+                nr=="" ? "null" : sprintf("%.1f", nr/1000),
+                brd=="" ? "null" : sprintf("%.1f", brd/1000)
+        }'
 }
 temp_hottest() {
     rd /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -n | tail -n1 | awk '{printf "%.1f", $1/1000}'
@@ -87,11 +128,12 @@ apn=$(t3 uci -q get "network.$DATA_IFACE.apn")
 
 # ------------------------------------------------------------------- system
 NOW=$(date +%s)
-UPTIME=$(cut -d' ' -f1 /proc/uptime | cut -d. -f1)
+read -r UPTIME _ < /proc/uptime
+UPTIME=${UPTIME%%.*}
 HOST=$(t3 uci -q get system.@system[0].hostname)
 [ -n "$HOST" ] || HOST=$(rd /proc/sys/kernel/hostname)
 MODEL=$(rd /tmp/sysinfo/model 2>/dev/null)
-[ -n "$MODEL" ] || MODEL=$(rd /proc/device-tree/model 2>/dev/null | tr -d '\0')
+[ -n "$MODEL" ] || MODEL=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0')
 FW=$(sed -n "s/^DISTRIB_DESCRIPTION='\(.*\)'$/\1/p" /etc/openwrt_release 2>/dev/null)
 [ -n "$FW" ] || FW=$(uname -sr)
 
@@ -105,7 +147,7 @@ CPUN=$(grep -c '^processor' /proc/cpuinfo)
 FREQS=
 for p in /sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq; do
     [ -r "$p" ] || continue
-    d=$(dirname "$p")
+    d=${p%/*}
     FREQS="$FREQS{\"cur\":$(n_or_null "$(rd "$p")"),\"max\":$(n_or_null "$(rd "$d/cpuinfo_max_freq")")},"
 done
 FREQS=${FREQS%,}
@@ -117,10 +159,8 @@ MEM_A=$(awk '/^MemAvailable/{print $2}' /proc/meminfo)
 DF=$(df -k / 2>/dev/null | awk 'NR==2{print $2, $3, $4}')
 set -- $DF; DISK_T=$1; DISK_U=$2; DISK_A=$3
 
-T_SOC=$(temp_of soc-thmzone)
-T_CPU=$(temp_of apcpu0-thmzone)
-T_NR=$(temp_of nr0-thmzone)
-T_BRD=$(temp_of board-thmzone)
+set -- $(named_temps)
+T_SOC=$1; T_CPU=$2; T_NR=$3; T_BRD=$4
 T_HOT=$(temp_hottest)
 
 # ------------------------------------------------------------------- power
@@ -154,48 +194,87 @@ net_obj() {  # net_obj IFACE -> {"rx":N,"tx":N,"up":0|1} or null
 # ONE "uci show wireless" instead of nine "uci get": each uci call costs a fork
 # plus config parse and they added up to most of this script's runtime.
 WSHOW=$(t3 uci -q show wireless 2>/dev/null)
-wu() {  # wu KEY -> value ('' when absent); KEY like "radio0.channel"
-    printf '%s\n' "$WSHOW" | sed -n "s/^wireless\\.$1='\\(.*\\)'$/\\1/p" | head -n1
-}
 # anonymous sections appear in "uci show" under their cfg id, and named ones use
 # their name - either way the section type line has no quotes; resolve the first
 # wifi-iface section once and read its options through that key
-IFKEY=$(printf '%s\n' "$WSHOW" | sed -n "s/^wireless\\.\\([^.]*\\)=wifi-iface\$/\\1/p" | head -n1)
-W_SSID=$(wu "${IFKEY:-x}.ssid")
-W_CH=$(wu 'radio0.channel')
-W_BAND=$(wu 'radio0.band')
-[ -n "$W_BAND" ] || W_BAND=$(wu 'radio0.hwmode')
-W_HT=$(wu 'radio0.htmode')   # HE80 / VHT40 / HT20 -> the number is the width
-W_WIDTH=$(printf '%s' "$W_HT" | tr -cd '0-9' | head -c 2)
+IFKEY=
+while IFS= read -r line; do
+    case "$line" in
+        wireless.*=wifi-iface)
+            IFKEY=${line#wireless.}; IFKEY=${IFKEY%%=*}
+            case "$IFKEY" in *.*) IFKEY= ;; *) break ;; esac
+            ;;
+    esac
+done <<EOF_WIFI
+$WSHOW
+EOF_WIFI
+IFKEY=${IFKEY:-x}
+W_SSID= W_CH= W_BAND= W_HW= W_HT= W_COUNTRY= W_ENC= W_HIDDEN= W_DIS=
+while IFS= read -r line; do
+    key=${line%%=*}; [ "$key" != "$line" ] || continue
+    val=${line#*=}
+    case "$val" in \'*\') val=${val#\'}; val=${val%\'} ;; *) continue ;; esac
+    case "$key" in
+        "wireless.$IFKEY.ssid") W_SSID=$val ;;
+        wireless.radio0.channel) W_CH=$val ;;
+        wireless.radio0.band) W_BAND=$val ;;
+        wireless.radio0.hwmode) W_HW=$val ;;
+        wireless.radio0.htmode) W_HT=$val ;;
+        wireless.radio0.country) W_COUNTRY=$val ;;
+        "wireless.$IFKEY.encryption") W_ENC=$val ;;
+        "wireless.$IFKEY.hidden") W_HIDDEN=$val ;;
+        wireless.radio0.disabled) W_DIS=$val ;;
+    esac
+done <<EOF_WIFI
+$WSHOW
+EOF_WIFI
+[ -n "$W_BAND" ] || W_BAND=$W_HW
+# HE80 / VHT40 / HT20: retain the first two digits, as before.
+W_WIDTH=; digits=$W_HT
+while [ -n "$digits" ] && [ "${#W_WIDTH}" -lt 2 ]; do
+    ch=${digits%"${digits#?}"}; digits=${digits#?}
+    case "$ch" in [0-9]) W_WIDTH=$W_WIDTH$ch ;; esac
+done
 [ -n "$W_WIDTH" ] && W_WIDTH="$W_WIDTH MHz"
-W_COUNTRY=$(wu 'radio0.country')
-W_ENC=$(wu "${IFKEY:-x}.encryption")
 [ -n "$W_ENC" ] || W_ENC=none
-W_HIDDEN=$(wu "${IFKEY:-x}.hidden")
 W_HOSTAPD=0
 HAPD=$(t3 ubus call "hostapd.$WIFI_DEVICE" get_status 2>/dev/null)
 printf '%s' "$HAPD" | grep -q '"status": *"ENABLED"' && W_HOSTAPD=1
-W_DIS=$(wu 'radio0.disabled')
 [ "$W_DIS" = "1" ] && W_UP=0 || W_UP=1
 [ -d "/sys/class/net/$WIFI_DEVICE" ] || W_UP=0
 [ "$W_HOSTAPD" = 1 ] || W_UP=0
-# station table: one block per client - mac, signal, tx/rx bitrate, connected time
-W_CLIENTS=$(t3 iw dev "$WIFI_DEVICE" station dump 2>/dev/null | awk -F':\t*' '
-    /^Station / { mac = $2; sub(/ .*/, "", mac); sig = tx = rx = ct = "" }
-    /^	signal:/ { sig = $2 + 0 }
-    /^	tx bitrate:/ { tx = $2; sub(/ .*/, "", tx); sub(/$/, " Mbit/s", tx) }
-    /^	rx bitrate:/ { rx = $2; sub(/ .*/, "", rx); sub(/$/, " Mbit/s", rx) }
-    /^	connected time:/ { ct = $2 + 0; ct = int(ct / 60) + " min" }
-    mac != "" && sig != "" && !seen[mac]++ {
-        printf "%s|%s|%s|%s|%s\n", mac, sig, tx, rx, ct; sig = ""
-    }')
-W_CN=0; W_CLIST=
+# SC2355 may report only associated MACs, with no station metrics. Count the
+# association regardless of RSSI and emit after the COMPLETE block, not at
+# the signal line. Whitespace splitting leaves the colons inside a MAC intact.
+station_rows() {
+    awk '
+    function emit(    a, n, i) {
+        n = split(mac, a, ":")
+        if (n != 6) return
+        for (i = 1; i <= n; i++)
+            if (a[i] !~ /^[[:xdigit:]][[:xdigit:]]$/) return
+        if (seen[mac]++) return
+        printf "%s|%s|%s|%s|%s\n", mac, sig, tx, rx, ct
+    }
+    /^Station[ \t]+/ { emit(); mac = tolower($2); sig = tx = rx = ct = ""; next }
+    /^[ \t]+signal:/ && $2 ~ /^-?[0-9]+([.][0-9]+)?$/ { sig = $2 + 0 }
+    /^[ \t]+tx bitrate:/ && $3 ~ /^[0-9]+([.][0-9]+)?$/ { tx = $3 " Mbit/s" }
+    /^[ \t]+rx bitrate:/ && $3 ~ /^[0-9]+([.][0-9]+)?$/ { rx = $3 " Mbit/s" }
+    /^[ \t]+connected time:/ && $3 ~ /^[0-9]+$/ { ct = sprintf("%d min", int($3 / 60)) }
+    END { emit() }'
+}
+W_CN=null; W_CLIST=; W_CLIENTS=
+if W_STATIONS=$(t3 iw dev "$WIFI_DEVICE" station dump 2>/dev/null); then
+    W_CLIENTS=$(printf '%s\n' "$W_STATIONS" | station_rows)
+    W_CN=0
+elif [ ! -d "/sys/class/net/$WIFI_DEVICE" ]; then
+    W_CN=0
+fi
 while IFS='|' read -r mac sig txr rxr ct; do
     [ -n "$mac" ] || continue
-    umac=$(echo "$mac" | tr 'a-f' 'A-F')
-    line=$(awk -v m="$umac" '$2 == m { print $3 "|" $4; exit }' /tmp/dhcp.leases 2>/dev/null)
+    line=$(awk -v m="$mac" 'tolower($2) == m { print $3 "|" $4; exit }' /tmp/dhcp.leases 2>/dev/null)
     ip=${line%%|*}; host=${line#*|}
-    [ "$host" = "$line" ] && host=
+    { [ "$host" = "$line" ] || [ "$host" = '*' ]; } && host=
     W_CLIST="$W_CLIST{\"mac\":\"$mac\",\"host\":$(qs "$host"),\"ip\":$(qs "$ip"),\"signal\":$(n_or_null "$sig"),\"tx\":$(qs "$txr"),\"rx\":$(qs "$rxr"),\"conn\":$(qs "$ct")},"
     W_CN=$((W_CN + 1))
 done <<EOF2
@@ -230,7 +309,25 @@ fi
 ATD_OK=0; /usr/libexec/unisoc-modem/at --available >/dev/null 2>&1 && ATD_OK=1
 [ "$MODEM_ALIVE" = 1 ] || MODEM_ALIVE=$ATD_OK
 DATA_PAUSED=0; [ -e /run/mu300-mobile-data-down ] && DATA_PAUSED=1
-CONNS=$(cat /proc/net/nf_conntrack 2>/dev/null | wc -l)
+# Constant-size counter works without CONFIG_NF_CONNTRACK_PROCFS. Only older
+# platforms lacking this counter need the connection-table fallback.
+# Missing/failed reads are unknown (null), never a made-up zero.
+conntrack_count() {
+    local counter=${1:-/proc/sys/net/netfilter/nf_conntrack_count}
+    local table=${2:-/proc/net/nf_conntrack} count=
+    # sysctl proc handlers may return EOF after the first small read; ash's
+    # byte-at-a-time read can truncate this value. Read it in one cat buffer.
+    if [ -r "$counter" ] && count=$(cat "$counter" 2>/dev/null); then
+        case "$count" in ''|*[!0-9]*) ;; *) printf '%s\n' "$count"; return ;; esac
+    fi
+    if [ -r "$table" ] && count=$(wc -l < "$table" 2>/dev/null); then
+        count=$((count + 0))
+        printf '%s\n' "$count"
+        return
+    fi
+    printf 'null\n'
+}
+CONNS=$(conntrack_count)
 
 # --------------------------------------------------------------------- VPN
 VPN_ENABLED=0; VPN_ENGINE=""; VPN_UP=0
@@ -252,14 +349,22 @@ printf '"temps":{"soc":%s,"cpu":%s,"modem":%s,"board":%s,"hottest":%s},' \
     "$(f_or_null "$T_SOC")" "$(f_or_null "$T_CPU")" "$(f_or_null "$T_NR")" "$(f_or_null "$T_BRD")" "$(f_or_null "$T_HOT")"
 printf '"power":{"present":%d,"capacity":%s,"status":%s,"volt":%s,"ua":%s,"usb":%s},' \
     "$P_PRESENT" "$(n_or_null "$P_CAP")" "$(qs "$P_STATUS")" "$P_V" "$P_I" "$(n_or_null "$P_USB")"
+MOBILE_NET=$(net_obj "$DATA_DEVICE")
 printf '"net":{"mobile":%s,"sipa_eth0":%s,"brlan":%s,"wlan0":%s,"usb0":%s},' \
-    "$(net_obj "$DATA_DEVICE")" "$(net_obj "$DATA_DEVICE")" "$(net_obj "$LAN_DEVICE")" "$(net_obj "$WIFI_DEVICE")" "$(net_obj "$USB_DEVICE")"
+    "$MOBILE_NET" "$MOBILE_NET" "$(net_obj "$LAN_DEVICE")" "$(net_obj "$WIFI_DEVICE")" "$(net_obj "$USB_DEVICE")"
 printf '"wan":{"up":%d,"uptime":%s,"proto":%s,"apn":%s,"ip4":%s,"ip6":%s,"dns":%s},' \
     "$wan_up" "$(n_or_null "$wan_uptime")" "$(qs "$wan_proto")" "$(qs "$apn")" "$(qs "$wan_ip4")" "$(qs "$wan6_ip")" "$(qs "$wan_dns")"
-printf '"wifi":{"up":%d,"ssid":%s,"channel":%s,"band":%s,"width":%s,"country":%s,"enc":%s,"hidden":%s,"hostapd":%d,"clients":[%s],"clients_n":%d},' \
+printf '"wifi":{"up":%d,"ssid":%s,"channel":%s,"band":%s,"width":%s,"country":%s,"enc":%s,"hidden":%s,"hostapd":%d,"clients":[%s],"clients_n":%s},' \
     "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_WIDTH")" "$(qs "$W_COUNTRY")" "$(qs "$W_ENC")" "$(n_or_null "$W_HIDDEN")" "$W_HOSTAPD" "${W_CLIST:-}" "$W_CN"
 printf '"lan":{"leases":%s,"ip":%s,"list":[%s]},' "$(n_or_null "$LAN_LEASES")" "$(qs "$LAN_IP")" "${LEASES:-}"
 printf '"modem":{"alive":%d,"atd":%d,"data_paused":%d},' "$MODEM_ALIVE" "$ATD_OK" "$DATA_PAUSED"
 printf '"capabilities":{"vpn":%d,"dualboot":%d},' "$CAP_VPN" "$CAP_DUALBOOT"
 printf '"conns":%s,' "$(n_or_null "$CONNS")"
+# The accounting worker publishes one atomic JSON line; no extra RPC or AT
+# requests on the dashboard's fast refresh path.
+TRAFFIC=null
+if [ -r /run/unisoc-modem-traffic/view.json ]; then
+    IFS= read -r TRAFFIC < /run/unisoc-modem-traffic/view.json || TRAFFIC=null
+fi
+printf '"traffic":%s,' "${TRAFFIC:-null}"
 printf '"vpn":{"enabled":%d,"engine":%s,"up":%d}}\n' "$VPN_ENABLED" "$(qs "$VPN_ENGINE")" "$VPN_UP"

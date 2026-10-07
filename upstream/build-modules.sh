@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the out-of-tree vendor modules (WCN) against the mainline tree built by build.sh.
+# Build vendor modules and collect the kernel's own modules, flat for kmodloader.
 # Run inside the mu300-mainline-build container: bash /work/build-modules.sh [module-dir...]
 set -eo pipefail
 KV=${KV:-6.18.54}
@@ -14,6 +14,26 @@ mkdir -p $OUT/modules
 [ $# -gt 0 ] || rm -f $OUT/modules/*.ko $OUT/modules/*.log
 # Module.symvers for the built-in exports (pcie-sprd etc.)
 make -C $K O=$O ARCH=arm64 -j"$(nproc)" modules > $O/modules.log 2>&1 || { tail -20 $O/modules.log; exit 1; }
+cmp -s "$O/.config" "$OUT/kernel.config" || {
+    echo 'kernel configuration changed or Image evidence missing; run build.sh first with the same KV/OUTDIR' >&2
+    exit 1
+}
+# Based on upstream 59e17d5/765da29: =m was previously compiled but never shipped.
+# A private staging directory avoids stale modules from a previous configuration.
+STAGE=$(mktemp -d "$O/mod-install.XXXXXX")
+trap 'rm -rf "$STAGE"' EXIT
+make -C "$K" O="$O" ARCH=arm64 INSTALL_MOD_PATH="$STAGE" INSTALL_MOD_STRIP=1 DEPMOD=true modules_install >> "$O/modules.log" 2>&1 ||
+    { tail -20 "$O/modules.log"; exit 1; }
+if [ -f "$OUT/modules.in-tree" ]; then
+    while IFS= read -r ko; do
+        case $ko in ''|*/*|*..*) echo "invalid previous module name: $ko" >&2; exit 1 ;; esac
+        rm -f "$OUT/modules/$ko"
+    done < "$OUT/modules.in-tree"
+fi
+find "$STAGE/lib/modules" -name '*.ko' -printf '%f\n' | sort > "$OUT/modules.in-tree"
+tr - _ < "$OUT/modules.in-tree" | sort > "$O/modules.in-tree.names"
+[ -z "$(uniq -d "$O/modules.in-tree.names")" ] || { echo 'in-tree module name collision' >&2; exit 1; }
+find "$STAGE/lib/modules" -name '*.ko' -exec cp {} "$OUT/modules/" \;
 extra=
 for m in $mods; do
     rm -rf /src/mod-build/$m && mkdir -p /src/mod-build && cp -r /work/modules/$m /src/mod-build/$m
@@ -31,6 +51,13 @@ for m in $mods; do
     [ "$m" = mali ] && margs="src=/src/mod-build/mali CONFIG_MALI_MIDGARD=m CONFIG_MALI_PLATFORM_NAME=qogirn6pro CONFIG_MALI_DEVFREQ=y CONFIG_DEVFREQ_THERMAL=y CONFIG_MALI_DEBUG=n CONFIG_MALI_FENCE_DEBUG=n BUILD=no"
     make -C $O ARCH=arm64 M=/src/mod-build/$m KBUILD_EXTRA_SYMBOLS="$extra" KCFLAGS="$kcflags" $margs -j"$(nproc)" modules 2>&1 | tee $OUT/modules/$m.log
     [ -f /src/mod-build/$m/Module.symvers ] && extra="$extra /src/mod-build/$m/Module.symvers"
-    find /src/mod-build/$m -name '*.ko' -exec cp {} $OUT/modules/ \;
+    while IFS= read -r ko; do
+        name=$(basename "$ko" | tr - _)
+        ! grep -Fqx "$name" "$O/modules.in-tree.names" || { echo "vendor/in-tree module collision: $name" >&2; exit 1; }
+        cp "$ko" "$OUT/modules/"
+    done < <(find /src/mod-build/$m -name '*.ko')
 done
+# Evidence covers every module (including vendor dependencies), not just a shortlist.
+(cd "$OUT" && sha256sum Image kernel.config modules/*.ko > modules.sha256)
+python3 /work/check-container-support.py "$OUT"
 ls -la $OUT/modules/*.ko

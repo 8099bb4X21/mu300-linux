@@ -138,8 +138,7 @@ tmp=${TMPDIR:-/data/local/tmp}/mu300-bc.bin
 $BB printf "$(echo "$new" | sed 's/../\\x&/g')" > "$tmp" || die "could not build the block file"
 [ "$($BB stat -c %s "$tmp")" = 32 ] || { rm -f "$tmp"; die "the block file is not 32 bytes"; }
 
-dd if="$tmp" of="$MISC" bs=1 seek="$BC_OFFSET" conv=notrunc 2>/dev/null || { rm -f "$tmp"; die "writing misc failed"; }
-sync
+$BB dd if="$tmp" of="$MISC" bs=1 seek="$BC_OFFSET" conv=notrunc,fsync 2>/dev/null || { rm -f "$tmp"; die "writing misc failed"; }
 rm -f "$tmp"
 
 back=$(hex_of "$MISC" "$BC_OFFSET" 32)

@@ -120,7 +120,8 @@ class Rules(unittest.TestCase):
         self.assertIn('7.2) DEFAULT_UO=$TOP/upstream/out-7.2', builder)
         self.assertIn('bootdev=/dev/block/by-name/boot_$linux_slot', customize)
         self.assertIn('case $slot in a) linux_slot=b ;; b) linux_slot=a', customize)
-        self.assertIn('--no-reboot', customize)
+        worker = (TOP / 'tools' / 'tf-install-worker.sh').read_text()
+        self.assertIn('--no-reboot', worker)
         self.assertIn('lazy_itable_init=1,lazy_journal_init=1,nodiscard',
                       (TOP / 'tools' / 'android-install.sh').read_text())
         self.assertIn("t = t.replace(old, '')", port)
@@ -147,6 +148,22 @@ class Rules(unittest.TestCase):
         self.assertIn('Aurora theme is not the LuCI default', rootfs)
         self.assertIn('./www/luci-static/aurora/main.css', builder)
         self.assertIn('built rootfs does not enable Aurora by default', builder)
+        self.assertIn('apk add --allow-untrusted /in/luci-app-aurora-config.apk', rootfs)
+        self.assertIn('Aurora config APK checksum mismatch', rootfs)
+        for path in ('www/luci-static/resources/view/aurora/studio.js',
+                     'www/luci-static/resources/view/aurora/marketplace.js',
+                     'usr/share/luci/menu.d/luci-app-aurora.json',
+                     'usr/share/rpcd/acl.d/luci-app-aurora.json',
+                     'usr/lib/lua/luci/i18n/aurora-config.zh-cn.lmo',
+                     'usr/lib/lua/luci/i18n/aurora-config.tr.lmo'):
+            self.assertIn(path, rootfs)
+            self.assertIn('./' + path, builder)
+        pins = (TOP / 'openwrt' / 'aurora-config-packages.sha256').read_text().splitlines()
+        self.assertEqual(len(pins), 3)
+        for pin in pins:
+            checksum, name = pin.split()
+            self.assertRegex(checksum, r'^[0-9a-f]{64}$')
+            self.assertIn(name, rootfs)
 
     def test_every_device_has_its_files(self):
         # a device the installers know needs its module order; its modules come from kernel/build-<device>.sh

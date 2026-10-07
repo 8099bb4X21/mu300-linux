@@ -23,6 +23,7 @@ return view.extend({
 		root.innerHTML = `
 <div class="mud-sec" style="margin-top:0">
   <h3>短信 <span id="mud-sms-stat" style="font-weight:400"></span></h3>
+  <div class="mud-note" id="mud-sms-capacity" style="display:none;margin-bottom:10px"></div>
   <input id="mud-sms-num" placeholder="收件人：号码，如 10086 或 +86..." spellcheck="false"
     style="width:100%;margin-bottom:8px;padding:7px 11px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222)"/>
   <div class="mud-ctl" style="max-width:460px;margin-bottom:8px">
@@ -96,7 +97,7 @@ return view.extend({
 					if (!choice) return;
 					L.resolveDefault(M.callSmsDel(id, choice === 'sim')).then(function(r) {
 						r = r || {};
-						if (r.ok === false) { self.note('删除失败', 'error'); return; }
+						if (r.ok === false) { self.note(M.translate('删除失败') + (r.error ? ': ' + r.error : ''), 'error'); return; }
 						delete self.cache[id];
 						self.note(choice === 'sim' ? '已删除（本地 + SIM）' : '已删除（仅本地）', 'success');
 						self.reload();
@@ -153,7 +154,8 @@ return view.extend({
 		var self = this;
 		/* 5 秒轮询的防闪烁：数据签名没变（无新消息、无未读状态翻转）就完全
 		 * 不重绘——整块 innerHTML 重建 + 全文异步回填会产生肉眼可见的闪烁 */
-		var sig = (this.stat && this.stat.total) + '|' + all.map(function(m) {
+		var sig = (this.stat && this.stat.total) + '|' +
+			(this.stat && this.stat.sim_used) + '/' + (this.stat && this.stat.sim_total) + '|' + all.map(function(m) {
 			return m.id + ':' + m.status;
 		}).join(',');
 		if (sig === this._sig) return;
@@ -172,6 +174,14 @@ return view.extend({
 		var st = this.stat || {};
 		this.Q('sms-stat').textContent = M.translate('· ' + (st.total || all.length) + ' 条' +
 			(st.unread ? '，' + st.unread + ' 条未读' : '') + ' · ' + peers.length + ' 个会话');
+		var cap = this.Q('sms-capacity');
+		var fresh = st.sim_seen && (Date.now() / 1000 - st.sim_seen < 120);
+		cap.style.display = fresh && st.sim_total > 0 ? '' : 'none';
+		if (fresh && st.sim_total > 0) {
+			cap.textContent = M.translate('SIM 存储') + ': ' + st.sim_used + '/' + st.sim_total +
+				(st.sim_used >= st.sim_total ? ' · ' + M.translate('SIM 存储已满；自动归档尚未释放空间，请检查短信服务。') : '');
+			cap.style.color = st.sim_used >= st.sim_total ? 'var(--error,#c93636)' : '';
+		}
 		var box = this.Q('sms-convs');
 		if (!peers.length) {
 			box.innerHTML = '<div class="mud-note" style="margin:6px">' + M.esc(M.translate('池子是空的：收到/发出的短信会出现在这里，或点「从 SIM 同步」。')) + '</div>';

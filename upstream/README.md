@@ -37,6 +37,38 @@ The build stops on anything that drifts silently: a patch that neither applies n
 Kconfig does not take (unless listed in `config-ignored.txt`), a port edit whose anchor moved, or a module whose
 vermagic does not match the kernel. `tools/make-release.sh` packages the same bundle as `mu300-kernel-6.18.tar.gz`.
 
+### KVM and container kernel support
+
+The shared 6.18/7.2 configuration includes the KVM/container subset of upstream
+commits `59e17d5` and `765da29`: built-in KVM, `/proc/config.gz`, namespace,
+seccomp and cgroup controllers; on-demand vhost-net/vsock, bridge netfilter,
+IPVS, VXLAN/IPvlan, binfmt_misc and FUSE modules. Existing OverlayFS, veth,
+bridge and nftables remain built in. Use the nftables/iptables-nft backend,
+not iptables-legacy. No Docker/QEMU daemon is installed or enabled by this
+kernel change; userspace runtimes are separate and must be installed before use.
+Do not expose an unauthenticated Docker TCP socket.
+
+`build-modules.sh` now installs **in-tree modules as well as vendor modules**,
+stripped and flat under `out/modules`. Only `module-order.txt` goes into the
+early boot ramdisk; optional container/VM drivers are not loaded at boot.
+Partial builds remove previously collected in-tree modules and reject module
+name collisions (including `-`/`_` aliases). The unrelated upstream USB/Wi-Fi,
+RAID, VPN and network-filesystem additions are deliberately not part of this port.
+
+The output also carries `kernel.config`, `kernel.sha256`, `modules.in-tree`
+and `modules.sha256`. `check-container-support.py` verifies the **built** config,
+Image and complete module set before TF/Magisk, generic kernel bundle or
+mainline rootfs assembly. Old output directories lacking this evidence need a
+fresh `build.sh` followed by `build-modules.sh`; copying a new fragment next to
+an old Image is not sufficient. Both commands must use the same `KV`/`OUTDIR`.
+
+After installing and rebooting into a rebuilt kernel, runtime acceptance still
+requires `/dev/kvm`, a successful KVM VM/vCPU run, cgroup controllers mounted
+by the host, and a Docker container with working networking and resource limits.
+Upstream records successful KVM execution on its F50; config/build checks alone
+do not certify the current device or a running Docker service. This feature
+cannot be hot-applied to an already running kernel without KVM.
+
 The bring-up path of old (hand-built image, `init-bringup`, `boot/flash-trial.sh`) still works for experiments:
 ```sh
 python3 upstream/wrap-image.py upstream/out/Image upstream/out/Image.lk

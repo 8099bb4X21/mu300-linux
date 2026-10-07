@@ -227,21 +227,30 @@ esc_ml() {  # multi-line text -> one JSON string
 }
 
 m_sms_list() {
-    local page out
+    local page out sms_store sms_used sms_total sms_seen
     page=$(inp '@.page'); case "$page" in ''|*[!0-9]*) page=1 ;; esac
     out=$("$SMS" list "$page" 2>/dev/null) || out=''
     [ -n "$out" ] || { printf '{"error":"mu300-sms 不可用（短信服务没装或没起来）"}\n'; return; }
+    if [ -r "$MU300_SMS_POOL/storage" ]; then
+        read -r sms_store sms_used sms_total sms_seen < "$MU300_SMS_POOL/storage"
+    fi
+    case ${sms_used:-} in ''|*[!0-9]*) sms_used= ;; esac
+    case ${sms_total:-} in ''|*[!0-9]*) sms_total= ;; esac
+    case ${sms_seen:-} in ''|*[!0-9]*) sms_seen= ;; esac
     # first line "pool: N message(s), U unread - page P/T (10 per page)",
     # then fixed-width rows (see mu300-sms cmd_list); parse by column position
-    printf '%s\n' "$out" | awk '
+    printf '%s\n' "$out" | awk -v sms_used="$sms_used" -v sms_total="$sms_total" -v sms_seen="$sms_seen" '
         NR == 1 {
             total = $0; sub(/^pool: /, "", total); sub(/ message.*/, "", total)
             unread = $0; sub(/^pool: [0-9]+ message\(s\), /, "", unread); sub(/ unread.*/, "", unread)
             pg = $0; sub(/.*page /, "", pg); sub(/\/.*/, "", pg)
             pgs = $0; sub(/.*page [0-9]+\//, "", pgs); sub(/ \(.*/, "", pgs)
-            printf "{\"total\":%s,\"unread\":%s,\"page\":%s,\"pages\":%s,\"msgs\":[",
+            printf "{\"total\":%s,\"unread\":%s,\"page\":%s,\"pages\":%s,\"sim_used\":%s,\"sim_total\":%s,\"sim_seen\":%s,\"msgs\":[",
                 (total ~ /^[0-9]+$/ ? total : 0), (unread ~ /^[0-9]+$/ ? unread : 0),
-                (pg ~ /^[0-9]+$/ ? pg : 1), (pgs ~ /^[0-9]+$/ ? pgs : 1)
+                (pg ~ /^[0-9]+$/ ? pg : 1), (pgs ~ /^[0-9]+$/ ? pgs : 1),
+                (sms_used ~ /^[0-9]+$/ ? sms_used : -1),
+                (sms_total ~ /^[0-9]+$/ ? sms_total : 0),
+                (sms_seen ~ /^[0-9]+$/ ? sms_seen : 0)
             next
         }
         {
@@ -294,9 +303,17 @@ m_sms_delete() {
     sim=$(inp '@.sim')
     case "$id" in all|[0-9][0-9]*) ;; *) printf '{"ok":0,"error":"bad id"}\n'; return ;; esac
     # sim=1 also removes the message from the SIM storage (mu300-sms delete --sim)
-    [ "$sim" = 1 ] && "$SMS" delete "$id" --sim >/dev/null 2>&1 ||
-        "$SMS" delete "$id" >/dev/null 2>&1
-    printf '{"ok":1}\n'
+    local out
+    if [ "$sim" = 1 ]; then
+        out=$("$SMS" delete "$id" --sim 2>&1)
+    else
+        out=$("$SMS" delete "$id" 2>&1)
+    fi
+    if [ $? = 0 ]; then
+        printf '{"ok":1}\n'
+    else
+        printf '{"ok":0,"error":"%s"}\n' "$(esc_ml "$(printf '%s\n' "$out" | tail -n1)")"
+    fi
 }
 
 m_sms_sync() {
@@ -326,6 +343,12 @@ do_list() {
 	"sms_send": { "num": "String", "text": "String" },
 	"sms_delete": { "id": "String", "sim": "String" },
 	"sms_sync": { },
+	"forward_get": { },
+	"forward_status": { },
+	"forward_set": { "payload": "String" },
+	"forward_test": { },
+	"traffic_get": { },
+	"traffic_set": { "payload": "String" },
 	"usb_get": { },
 	"usb_set": { "kind": "String", "value": "String", "scope": "String", "auto": "String" },
 	"usb_net_list": { },
@@ -375,6 +398,23 @@ call)
         sms_send)   run_m sms_send   'm_sms_send' ;;
         sms_delete) run_m sms_delete 'm_sms_delete' ;;
         sms_sync)   run_m sms_sync   'm_sms_sync' ;;
+        forward_get) "$DASH/sms-forward" get ;;
+        forward_status) "$DASH/sms-forward" status ;;
+        forward_set)
+            payload=$(inp '@.payload')
+            printf '%s' "$payload" | "$DASH/sms-forward" set
+            ;;
+        forward_test)
+            # Delivery can take 25 s and must not tie up the LuCI RPC request.
+            setsid "$DASH/sms-forward" test-run >/dev/null 2>&1 &
+            printf '{"ok":1,"started":1}\n'
+            ;;
+        traffic_get)
+            ubus -t 3 call unisoc.traffic get 2>/dev/null || printf '{"error":"traffic_unavailable"}\n'
+            ;;
+        traffic_set)
+            ubus -t 5 call unisoc.traffic set "$INPUT" 2>/dev/null || printf '{"ok":0,"error":"traffic_unavailable"}\n'
+            ;;
         usb_get)    run_m usb_get    '"$DASH/device-usb" get' ;;
         usb_set)
             kind=$(inp '@.kind'); value=$(inp '@.value'); scope=$(inp '@.scope'); auto=$(inp '@.auto')

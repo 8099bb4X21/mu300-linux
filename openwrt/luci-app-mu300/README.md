@@ -34,9 +34,81 @@ The SMS page uses `sms_command`, whose CLI contract is the existing
 `mu300-sms` interface: `list`, `show`, `send`, `delete` and `sync`. This keeps
 SIM storage details out of LuCI and lets each firmware supply its own adapter.
 
+## SMS forwarding
+
+The separate SMS forwarding page offers HTTPS webhook, DingTalk, TLS-verified
+SMTP and local-SIM SMS destinations, plus optional device information, a device
+note, phone/keyword blocklists, power notifications and a confirmed test send.
+The feature is off by default. Its procd worker reads the local SMS pool only;
+it does not open an AT port, invoke a SIM sync or delay boot. On first enable or
+channel change it records the current pool ID before accepting new messages.
+It stores each message's progress before delivery, so a restart or failed
+delivery cannot replay old SMS. Blocked SMS are marked processed as well.
+
+The adapter records `source: direct` for live `+CMT` delivery and `source: sim`
+for SIM imports. `received` is the local insertion time, not proof of a new SMS.
+SIM imports (including legacy records without `source`) are forwarded only if
+their original `scts` is at or after the enable/channel-change barrier. This
+retains delayed synchronization of new messages without mailing pre-enable
+SIM history. SCTS must include its UTC offset: AT `yy/mm/dd,hh:mm:ss+qq`
+(quarter-hours), or PDU `YYYY-MM-DD hh:mm:ss+hh:mm`. Unknown dates and undecoded
+SIM PDUs remain in the inbox but are not automatically forwarded. Direct
+delivery uses its local insertion time, allowing delayed SMSC delivery.
+This does not change transport failures: failed SMTP/webhook submissions are
+reported but are not automatically retried.
+
+The template language (Chinese, English or Turkish) is saved independently of
+the browser session and used for message subjects, generated text, device-info
+labels, tests and power notifications. Until saved, the editor offers the current
+UI language; older configurations keep Chinese output. Original SMS bodies,
+sender IDs, device notes and webhook JSON keys are never translated. SMTP
+subjects use UTF-8 RFC 2047 encoding.
+
+Private settings and replay state are in
+`/etc/unisoc-modem/forward/` (0700 directory, 0600 files); passwords never
+appear in the editor response or routine status polling. The package requires
+`curl`, `msmtp`, a CA bundle and `openssl-util` for the TLS destinations. The source-tree
+TF rootfs builder installs those tools explicitly. The SMS adapter must expose
+a persistent `msg/` pool with the `next_id` and message-header format used by
+`mu300-sms`; a different firmware can supply that adapter via
+`unisoc_modem.main.sms_pool` and `sms_command`.
+
+Power notifications are selectable only if a real `battery` power-supply
+reports presence, capacity and charge state. Battery-less F50 builds leave
+this option unavailable rather than forwarding the SC27xx fuel gauge's
+unreliable phantom reading. The local SMS path is limited to one 70-unit
+UCS-2 part by the existing MU300 adapter. There is no daily forwarding quota.
+
 Network interface and state paths are also configured in the same UCI section;
 none of the web code requires `sipa_eth0`, `wan`, `br-lan` or `/opt/mu300` from
 the host firmware.
+
+## Data plan accounting
+
+The data-plan page records the selected cellular WAN interface's RX/TX byte
+counters in an independent ucode/uloop worker. It samples every ten seconds
+without opening AT channels or running a shell per sample. The dashboard reads
+the worker's atomic RAM snapshot, so its refresh rate does not drive accounting.
+The interface follows the existing adapter settings and netifd by default; a
+device override is available for other firmware layouts.
+
+Settings include a plan name, monthly-cycle and daily-reference allowances in
+decimal GB, RX/TX/combined accounting, and a monthly reset day from 1 to 31.
+Short months clamp the reset to their last day, in the device timezone. A usage
+adjustment can account for traffic consumed before installing the plugin; it
+expires at the next cycle and does not alter measured day/month history. Quotas
+display usage warnings only and do not disconnect the network.
+
+The worker retains 93 daily and 24 calendar-month buckets, showing the latest
+31 days and 12 months. It checkpoints to `/etc/unisoc-modem/traffic/state.json`
+every 60 seconds and at a clean stop; abrupt power loss can lose recent unsaved
+samples. Package upgrades leave the database intact, and a sysupgrade keep rule
+includes it. Initial activation establishes a baseline rather than inventing
+earlier daily history. Counter resets and interface recreation are handled;
+statistics are local estimates and may differ from carrier billing.
+
+Accounting boundary tests can run on OpenWrt with:
+`TZ=UTC0 ucode -L /usr/libexec/unisoc-modem tests/traffic_core.uc`.
 
 ## Persistent locks
 

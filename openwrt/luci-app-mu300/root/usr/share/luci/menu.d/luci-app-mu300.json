@@ -46,9 +46,16 @@
 		}
 	},
 
+	"admin/modem/forward": {
+		"title": "短信转发",
+		"order": 3,
+		"action": { "type": "view", "path": "mu300/forward" },
+		"depends": { "acl": [ "luci-app-mu300" ] }
+	},
+
 	"admin/modem/at": {
 		"title": "AT 终端",
-		"order": 3,
+		"order": 4,
 		"action": {
 			"type": "view",
 			"path": "mu300/at"
@@ -60,7 +67,7 @@
 
 	"admin/modem/settings": {
 		"title": "适配设置",
-		"order": 5,
+		"order": 7,
 		"action": {
 			"type": "view",
 			"path": "mu300/settings"
@@ -71,8 +78,14 @@
 	},
 	"admin/modem/device": {
 		"title": "设备管理",
-		"order": 4,
+		"order": 6,
 		"action": { "type": "view", "path": "mu300/device" },
+		"depends": { "acl": [ "luci-app-mu300" ] }
+	},
+	"admin/modem/traffic": {
+		"title": "流量池",
+		"order": 5,
+		"action": { "type": "view", "path": "mu300/traffic" },
 		"depends": { "acl": [ "luci-app-mu300" ] }
 	}
 }

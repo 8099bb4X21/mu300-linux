@@ -25,6 +25,12 @@ var callSmsShow = rpc.declare({ object: 'mu300dash', method: 'sms_show', params:
 var callSmsSend = rpc.declare({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
 var callSmsDel  = rpc.declare({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
 var callSmsSync = rpc.declare({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
+var callForwardGet = rpc.declare({ object: 'mu300dash', method: 'forward_get', expect: { '': {} } });
+var callForwardStatus = rpc.declare({ object: 'mu300dash', method: 'forward_status', expect: { '': {} } });
+var callForwardSet = rpc.declare({ object: 'mu300dash', method: 'forward_set', params: [ 'payload' ], expect: { '': {} } });
+var callForwardTest = rpc.declare({ object: 'mu300dash', method: 'forward_test', expect: { '': {} } });
+var callTrafficGet = rpc.declare({ object: 'mu300dash', method: 'traffic_get', expect: { '': {} } });
+var callTrafficSet = rpc.declare({ object: 'mu300dash', method: 'traffic_set', params: [ 'payload' ], expect: { '': {} } });
 var callUsbGet = rpc.declare({ object: 'mu300dash', method: 'usb_get', expect: { '': {} } });
 var callUsbSet = rpc.declare({ object: 'mu300dash', method: 'usb_set', params: [ 'kind', 'value', 'scope', 'auto' ], expect: { '': {} } });
 var callUsbNetList = rpc.declare({ object: 'mu300dash', method: 'usb_net_list', expect: { '': {} } });
@@ -34,6 +40,125 @@ var callUsbNetAdd = rpc.declare({ object: 'mu300dash', method: 'usb_net_add', pa
  * standalone package works in any OpenWrt buildroot without po2lmo or extra
  * language packages. Chinese remains the source/fallback language. */
 var DASH_I18N = {
+	'本机号码': ['Phone number', 'Telefon numarası'],
+	'流量池': ['Data plan', 'Veri paketi'],
+	'今日流量': ['Today’s data', 'Bugünkü veri'],
+	'当月流量': ['This month’s data', 'Bu ayki veri'],
+	'自然月统计': ['Calendar-month usage', 'Takvim ayı kullanımı'],
+	'套餐周期已用': ['Used this billing cycle', 'Bu dönemde kullanılan'],
+	'套餐剩余': ['Plan remaining', 'Pakette kalan'],
+	'套餐与流量池': ['Plan and data allowance', 'Paket ve veri kotası'],
+	'套餐名称': ['Plan name', 'Paket adı'],
+	'每周期额度（GB）': ['Allowance per cycle (GB)', 'Dönem kotası (GB)'],
+	'每日参考额度（GB）': ['Daily reference allowance (GB)', 'Günlük referans kotası (GB)'],
+	'每月重置日（1–31）': ['Monthly reset day (1–31)', 'Aylık sıfırlama günü (1–31)'],
+	'套餐计量方式': ['Plan accounting', 'Paket hesaplama yöntemi'],
+	'上下行合计': ['Download + upload', 'İndirme + yükleme'],
+	'仅下行': ['Download only', 'Yalnızca indirme'],
+	'仅上行': ['Upload only', 'Yalnızca yükleme'],
+	'额度为 0 表示不限量；1 GB = 1000 MB。重置日在设备当地时间零点生效，短月份使用当月最后一天。': ['Set 0 for unlimited; 1 GB = 1000 MB. Reset takes place at midnight in the device timezone; shorter months use their last day.', 'Sınırsız için 0 girin; 1 GB = 1000 MB. Sıfırlama cihazın yerel saatine göre gece yarısı yapılır; kısa aylarda ayın son günü kullanılır.'],
+	'统计网卡': ['Accounting interface', 'İstatistik arayüzü'],
+	'自动使用蜂窝 WAN 网卡': ['Use the cellular WAN interface automatically', 'Hücresel WAN arayüzünü otomatik kullan'],
+	'校准本周期已用（GB，可选）': ['Adjust used data this cycle (GB, optional)', 'Bu dönem kullanılan veriyi düzelt (GB, isteğe bağlı)'],
+	'留空保持现有统计': ['Leave blank to keep existing usage', 'Mevcut kullanımı korumak için boş bırakın'],
+	'校准只调整当前套餐周期，不修改每日和自然月历史；下个周期自动恢复实际统计。': ['Adjustments affect only the current billing cycle, not daily or calendar-month history. The next cycle uses measured data again.', 'Düzeltme yalnızca mevcut paket dönemini etkiler; günlük ve takvim ayı geçmişi değişmez. Sonraki dönemde ölçülen veri kullanılır.'],
+	'最近每日用量': ['Recent daily usage', 'Son günlük kullanımlar'],
+	'每月用量历史': ['Monthly usage history', 'Aylık kullanım geçmişi'],
+	'日期': ['Date', 'Tarih'],
+	'月份': ['Month', 'Ay'],
+	'下行': ['Download', 'İndirme'],
+	'上行': ['Upload', 'Yükleme'],
+	'合计': ['Total', 'Toplam'],
+	'从启用统计时开始记录；统计约每 10 秒更新、每 60 秒保存。突然断电可能损失最近未保存的记录。': ['Recording starts when accounting is enabled. Usage updates about every 10 seconds and is saved every 60 seconds. Sudden power loss may lose recent unsaved usage.', 'Kayıt, istatistik hizmeti açıldığında başlar. Kullanım yaklaşık 10 saniyede güncellenir, 60 saniyede kaydedilir. Ani güç kesintisinde son kaydedilmemiş veriler kaybolabilir.'],
+	'本地网卡统计供参考，计费以运营商为准。额度用于显示和提醒，不会自动断网。': ['Local interface statistics are an estimate; carrier billing takes precedence. Allowances display warnings and never disconnect the network.', 'Yerel arayüz istatistikleri tahminidir; operatörün hesabı esas alınır. Kotalar uyarı gösterir, ağı otomatik kesmez.'],
+	'不限量': ['Unlimited', 'Sınırsız'],
+	'未设置套餐名称': ['No plan name set', 'Paket adı ayarlanmadı'],
+	'每周期额度：': ['Cycle allowance: ', 'Dönem kotası: '],
+	'下次重置：': ['Next reset: ', 'Sonraki sıfırlama: '],
+	'每日参考额度：': ['Daily reference allowance: ', 'Günlük referans kotası: '],
+	'更新于：': ['Updated: ', 'Güncelleme: '],
+	'流量统计服务暂不可用': ['Data accounting service is unavailable', 'Veri istatistik hizmeti kullanılamıyor'],
+	'统计网卡暂不可用': ['Accounting interface is unavailable', 'İstatistik arayüzü kullanılamıyor'],
+	'系统时间尚未同步': ['System clock is not synchronized yet', 'Sistem saati henüz eşitlenmedi'],
+	'统计数据保存失败': ['Failed to save usage data', 'Kullanım verileri kaydedilemedi'],
+	'已达到套餐额度': ['Plan allowance reached', 'Paket kotasına ulaşıldı'],
+	'已达到每日参考额度': ['Daily reference allowance reached', 'Günlük referans kotasına ulaşıldı'],
+	'暂无统计记录': ['No usage records yet', 'Henüz kullanım kaydı yok'],
+	'校准本周期已用流量？': ['Adjust this cycle’s used data?', 'Bu dönemin kullanılan verisi düzeltilecek mi?'],
+	'这会将当前套餐周期已用值调整为输入值，每日和自然月记录不变。': ['This sets current cycle usage to the entered value. Daily and calendar-month records stay unchanged.', 'Mevcut dönem kullanımı girilen değere ayarlanır. Günlük ve takvim ayı kayıtları değişmez.'],
+	'正在保存流量池设置…': ['Saving data plan settings…', 'Veri paketi ayarları kaydediliyor…'],
+	'短信转发': ['SMS forwarding', 'SMS yönlendirme'],
+	'开启短信转发': ['Enable SMS forwarding', 'SMS yönlendirmeyi aç'],
+	'转发已开启': ['Forwarding enabled', 'Yönlendirme açık'],
+	'转发未开启': ['Forwarding disabled', 'Yönlendirme kapalı'],
+	'转发方式': ['Forwarding method', 'Yönlendirme yöntemi'],
+	'模板语言': ['Template language', 'Şablon dili'],
+	'简体中文': ['Simplified Chinese', 'Basitleştirilmiş Çince'],
+	'保存后用于转发标题、提示文字和电源通知；短信原文及设备备注保持不变。': ['After saving, this language is used for forwarding titles, labels, and power notifications. Original SMS text and device notes stay unchanged.', 'Kaydettikten sonra yönlendirme başlıkları, etiketler ve güç bildirimleri bu dilde gönderilir. SMS metni ve cihaz notları değiştirilmez.'],
+	'钉钉机器人': ['DingTalk bot', 'DingTalk botu'],
+	'本机短信': ['Device SMS', 'Cihaz SMS’i'],
+	'邮件 SMTP': ['Email SMTP', 'E-posta SMTP'],
+	'HTTPS 地址': ['HTTPS address', 'HTTPS adresi'],
+	'以固定 JSON 格式发送，不执行自定义命令。': ['Sends a fixed JSON payload; no custom commands are run.', 'Sabit bir JSON gönderir; özel komut çalıştırılmaz.'],
+	'机器人 Webhook 地址': ['Bot webhook URL', 'Bot webhook adresi'],
+	'加签密钥 · 留空保留': ['Signing secret · leave blank to keep', 'İmza anahtarı · korumak için boş bırakın'],
+	'清除加签密钥': ['Clear signing secret', 'İmza anahtarını sil'],
+	'附带设备信息': ['Include device information', 'Cihaz bilgisini ekle'],
+	'SMTP 服务器域名': ['SMTP server domain', 'SMTP sunucu alan adı'],
+	'端口 · 465 / 587': ['Port · 465 / 587', 'Bağlantı noktası · 465 / 587'],
+	'发件邮箱': ['Sender email', 'Gönderen e-posta'],
+	'收件邮箱': ['Recipient email', 'Alıcı e-posta'],
+	'授权码 / 密码 · 留空保留': ['App password / password · leave blank to keep', 'Uygulama şifresi / şifre · korumak için boş bırakın'],
+	'已配置，留空保留': ['Configured; leave blank to keep', 'Yapılandırıldı; korumak için boş bırakın'],
+	'请输入授权码': ['Enter an app password', 'Uygulama şifresini girin'],
+	'可选': ['Optional', 'İsteğe bağlı'],
+	'清除邮件配置': ['Clear email configuration', 'E-posta yapılandırmasını sil'],
+	'使用邮箱提供的 SMTP 授权码；始终验证 TLS 证书。': ['Use your email provider’s SMTP app password; the TLS certificate is always verified.', 'E-posta sağlayıcınızın SMTP uygulama şifresini kullanın; TLS sertifikası her zaman doğrulanır.'],
+	'短信接收号码 · 每行一个，最多 3 个': ['SMS recipients · one per line, up to 3', 'SMS alıcıları · satır başına bir, en fazla 3'],
+	'经本机 SIM 转发，可能产生短信费用；每条最多 70 个 UCS-2 单元，不限制每日转发条数。': ['Forwarding uses the device SIM and may incur SMS charges; up to 70 UCS-2 units per message, with no daily forwarding limit.', 'Yönlendirme cihazın SIM kartını kullanır ve ücret doğurabilir; mesaj başına en fazla 70 UCS-2 birimi, günlük yönlendirme sınırı yoktur.'],
+	'电源通知': ['Power notifications', 'Güç bildirimleri'],
+	'电源状态通知': ['Power status notifications', 'Güç durumu bildirimleri'],
+	'充电状态变化，或电量跨过 5%、20%、40%、60%、80%、100% 时通知。': ['Notify when charging status changes or battery level crosses 5%, 20%, 40%, 60%, 80%, or 100%.', 'Şarj durumu değiştiğinde veya pil seviyesi %5, %20, %40, %60, %80 ya da %100 eşiğini geçtiğinde bildir.'],
+	'设备暂未提供有效电池状态': ['No valid battery status is available on this device', 'Bu cihazda geçerli pil durumu yok'],
+	'设备备注': ['Device note', 'Cihaz notu'],
+	'黑名单': ['Blocklists', 'Engelleme listeleri'],
+	'号码黑名单 · 每行一个，最多 64 个': ['Number blocklist · one per line, up to 64', 'Numara engelleme listesi · satır başına bir, en fazla 64'],
+	'关键词黑名单 · 每行一个，最多 32 个': ['Keyword blocklist · one per line, up to 32', 'Anahtar kelime engelleme listesi · satır başına bir, en fazla 32'],
+	'命中的新短信只记为已处理，不会转发；清空规则后不会补发。规则不影响电源通知。': ['Matching new SMS are marked processed and not forwarded; clearing rules will not resend them. Power notifications are unaffected.', 'Eşleşen yeni SMS’ler işlenmiş sayılır ve yönlendirilmez; kurallar silinince tekrar gönderilmez. Güç bildirimleri etkilenmez.'],
+	'测试与状态': ['Test and status', 'Test ve durum'],
+	'设备独立执行，关闭页面仍生效；仅转发新短信，失败不自动重发。': ['Runs on the device even with this page closed; only new SMS are forwarded, and failed deliveries are not retried.', 'Sayfa kapalıyken de cihazda çalışır; yalnızca yeni SMS’ler yönlendirilir ve başarısız teslimatlar yeniden denenmez.'],
+	'保存设置': ['Save settings', 'Ayarları kaydet'],
+	'发送测试消息': ['Send test message', 'Test mesajı gönder'],
+	'刷新状态': ['Refresh status', 'Durumu yenile'],
+	'最近转发：': ['Last forwarding: ', 'Son yönlendirme: '],
+	'最近电源通知：': ['Last power notice: ', 'Son güç bildirimi: '],
+	'暂无投递': ['No delivery yet', 'Henüz teslimat yok'],
+	'发送成功': ['Sent successfully', 'Başarıyla gönderildi'],
+	'已拦截向原发件人转发': ['Forwarding to original sender blocked', 'Asıl gönderene yönlendirme engellendi'],
+	'短信过长，未发送': ['SMS too long; not sent', 'SMS çok uzun; gönderilmedi'],
+	'设备保存失败': ['Device storage failed', 'Cihaza kaydedilemedi'],
+	'短信服务暂不可用': ['SMS service temporarily unavailable', 'SMS hizmeti geçici olarak kullanılamıyor'],
+	'配置无效': ['Invalid configuration', 'Geçersiz yapılandırma'],
+	'目标地址无效': ['Invalid destination', 'Geçersiz hedef adresi'],
+	'投递失败，请检查配置和设备网络': ['Delivery failed; check the settings and device network', 'Teslimat başarısız; ayarları ve cihaz ağını kontrol edin'],
+	'邮箱服务器拒绝登录，请检查授权码': ['SMTP login rejected; check the app password', 'SMTP girişi reddedildi; uygulama şifresini kontrol edin'],
+	'读取失败，请刷新页面': ['Loading failed; refresh the page', 'Yükleme başarısız; sayfayı yenileyin'],
+	'号码无效、重复或超过数量上限': ['Invalid, duplicate or too many numbers', 'Geçersiz, yinelenen veya fazla sayıda numara'],
+	'关键词无效、重复或超过数量上限': ['Invalid, duplicate or too many keywords', 'Geçersiz, yinelenen veya fazla sayıda anahtar kelime'],
+	'请先配置当前转发渠道': ['Configure the selected forwarding channel first', 'Önce seçilen yönlendirme kanalını yapılandırın'],
+	'保存短信转发设置？': ['Save SMS forwarding settings?', 'SMS yönlendirme ayarları kaydedilsin mi?'],
+	'开启后只处理新收到的短信；历史短信不会补发。': ['Only newly received SMS will be processed; old messages will not be forwarded.', 'Yalnızca yeni alınan SMS’ler işlenecek; eski mesajlar yönlendirilmeyecek.'],
+	'正在保存短信转发设置…': ['Saving SMS forwarding settings…', 'SMS yönlendirme ayarları kaydediliyor…'],
+	'保存失败': ['Save failed', 'Kaydetme başarısız'],
+	'已保存': ['Saved', 'Kaydedildi'],
+	'请先保存修改再测试': ['Save changes before testing', 'Testten önce değişiklikleri kaydedin'],
+	'请先开启并保存短信转发': ['Enable and save forwarding first', 'Önce yönlendirmeyi açıp kaydedin'],
+	'将使用本机 SIM 向已保存号码发送，可能产生短信费用。': ['The device SIM will send to the saved numbers; SMS charges may apply.', 'Cihazın SIM kartı kayıtlı numaralara gönderecek; SMS ücreti doğabilir.'],
+	'将向当前已保存渠道发送一条固定测试消息。': ['A fixed test message will be sent to the saved channel.', 'Kayıtlı kanala sabit bir test mesajı gönderilecek.'],
+	'发送测试消息？': ['Send a test message?', 'Test mesajı gönderilsin mi?'],
+	'测试已开始，请稍后刷新状态': ['Test started; refresh status shortly', 'Test başladı; kısa süre sonra durumu yenileyin'],
+	'测试失败：': ['Test failed: ', 'Test başarısız: '],
+	'未知错误': ['Unknown error', 'Bilinmeyen hata'],
 	'设备管理': ['Device management', 'Cihaz yönetimi'],
 	'USB 角色': ['USB role', 'USB rolü'],
 	'当前角色': ['Current role', 'Geçerli rol'],
@@ -332,6 +457,8 @@ var DASH_I18N = {
 	'收件人：号码，如 10086 或 +86...': ['Recipient: number, e.g. 10086 or +86...', 'Alıcı: numara, ör. 10086 veya +86...'],
 	'刷新': ['Refresh', 'Yenile'],
 	'从 SIM 同步': ['Sync from SIM', 'SIM’den eşitle'],
+	'SIM 存储': ['SIM storage', 'SIM depolama'],
+	'SIM 存储已满；自动归档尚未释放空间，请检查短信服务。': ['SIM storage is full; automatic archiving has not freed space. Check the SMS service.', 'SIM depolaması dolu; otomatik arşivleme henüz yer açmadı. SMS hizmetini kontrol edin.'],
 	'清空本地池': ['Clear local pool', 'Yerel havuzu temizle'],
 	'加载中': ['Loading', 'Yükleniyor'],
 	'选择左侧会话，或直接在下方输入号码发送。': ['Select a conversation on the left, or enter a number below to send.', 'Soldan bir görüşme seçin veya göndermek için aşağıya bir numara girin.'],
@@ -515,6 +642,16 @@ function fmtBytes(b) {
 	while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
 	return (b >= 100 ? b.toFixed(0) : b.toFixed(1)) + ' ' + u[i];
 }
+// Traffic plans use decimal GB; keep memory/rate formatting unchanged.
+function fmtTrafficBytes(b) {
+	if (b == null || b === '' || !Number.isFinite(Number(b)) || Number(b) < 0) return '--';
+	b = Number(b);
+	var u = [ 'B', 'KB', 'MB', 'GB', 'TB' ], i = 0;
+	while (b >= 1000 && i < u.length - 1) { b /= 1000; i++; }
+	var value = Number(b.toFixed(i === 0 ? 0 : 2));
+	if (value >= 1000 && i < u.length - 1) { value = 1; i++; }
+	return value + ' ' + u[i];
+}
 function fmtRate(bps) {
 	if (bps == null || isNaN(bps) || bps < 0) return '--';
 	var u = [ 'B/s', 'KB/s', 'MB/s', 'GB/s' ], i = 0;
@@ -547,6 +684,10 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-sec>h3{margin:16px 0 10px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
 .mud-sec>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
 .mud-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 28px}
+.mud-client-cols{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px 28px;margin-top:16px;align-items:start}
+.mud-client-cols>div{min-width:0}
+.mud-client-cols .mud-cli .t{flex-wrap:wrap;overflow-wrap:anywhere}
+.mud-client-cols .mud-cli .s{overflow-wrap:anywhere}
 .mud-body>.mud-sec+.mud-sec{border-top:1px dashed color-mix(in oklab,var(--hairline,var(--border,#ddd)) 60%,transparent);margin-top:14px;padding-top:2px}
 /* 首屏骨架：卡片正常占位，只让待填字段呼吸；第一份快照到达后停止。 */
 @keyframes mudpulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -720,21 +861,26 @@ function set(id, text, color) {
 }
 function spark(el, arr, min, max, win) {
 	if (!el || !arr || arr.length < 2) return;
-	var w = 100, h = 34, pts = [];
+	var w = 100, h = 34, padX = 1, padY = 3, baseY = h - padY, pts = [];
 	for (var i = 0; i < arr.length; i++) {
-		pts.push([ i / (win - 1) * w,
-			h - Math.max(0, Math.min(1, (arr[i] - min) / (max - min || 1))) * (h - 3) - 1.5 ]);
+		pts.push([ padX + i / (win - 1) * (w - 2 * padX),
+			baseY - Math.max(0, Math.min(1, (arr[i] - min) / (max - min || 1))) * (h - 2 * padY) ]);
 	}
 	/* Catmull-Rom 转三次贝塞尔：折线变平滑曲线 */
 	var d = 'M' + pts[0][0].toFixed(1) + ',' + pts[0][1].toFixed(1);
 	for (var i = 0; i < pts.length - 1; i++) {
 		var p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
-		d += 'C' + (p1[0] + (p2[0] - p0[0]) / 6).toFixed(1) + ',' + (p1[1] + (p2[1] - p0[1]) / 6).toFixed(1) +
-			' ' + (p2[0] - (p3[0] - p1[0]) / 6).toFixed(1) + ',' + (p2[1] - (p3[1] - p1[1]) / 6).toFixed(1) +
+		// Catmull-Rom can overshoot even when every sample is inside the SVG.
+		// Bound controls to their segment and leave room for the stroke itself.
+		var lo = Math.min(p1[1], p2[1]), hi = Math.max(p1[1], p2[1]);
+		var c1y = Math.max(lo, Math.min(hi, p1[1] + (p2[1] - p0[1]) / 6));
+		var c2y = Math.max(lo, Math.min(hi, p2[1] - (p3[1] - p1[1]) / 6));
+		d += 'C' + (p1[0] + (p2[0] - p0[0]) / 6).toFixed(1) + ',' + c1y.toFixed(1) +
+			' ' + (p2[0] - (p3[0] - p1[0]) / 6).toFixed(1) + ',' + c2y.toFixed(1) +
 			' ' + p2[0].toFixed(1) + ',' + p2[1].toFixed(1);
 	}
 	var last = pts.length - 1;
-	var area = d + ' L' + pts[last][0].toFixed(1) + ',' + h + ' L' + pts[0][0].toFixed(1) + ',' + h + ' Z';
+	var area = d + ' L' + pts[last][0].toFixed(1) + ',' + baseY + ' L' + pts[0][0].toFixed(1) + ',' + baseY + ' Z';
 	var gid = 'mudg-' + (el.id || Math.floor(Math.random() * 1e6));
 	el.innerHTML = '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
 		'<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
@@ -760,7 +906,11 @@ function neighborRows(c, lockedCell) {
 		var l = qLabel(n.rsrp, n.rsrq, n.sinr);
 		var key = n.rat + ':' + n.arfcn + ',' + n.pci;
 		var isLocked = lk.split('|').indexOf(key) >= 0;
-		return '<tr><td>' + (n.rat == 'nr' ? 'NR n' + esc(n.band) : 'LTE B' + esc(n.band)) + '</td>' +
+		var nrBand = n.band != null && n.band !== 0 ? 'n' + esc(n.band) :
+			(Array.isArray(n.band_candidates) && n.band_candidates.length ?
+				n.band_candidates.map(function(b) { return 'n' + esc(b); }).join('/') : '--');
+		var lteBand = n.band != null && n.band !== 0 ? 'B' + esc(n.band) : '--';
+		return '<tr><td>' + (n.rat == 'nr' ? 'NR ' + nrBand : 'LTE ' + lteBand) + '</td>' +
 			'<td>' + esc(n.pci != null ? n.pci : '--') + '</td>' +
 			'<td>' + esc(n.arfcn != null ? n.arfcn : '--') + '</td>' +
 			'<td style="color:' + qCol(l) + '">' + (n.rsrp != null ? n.rsrp.toFixed(1) : '--') + '</td>' +
@@ -986,10 +1136,13 @@ return baseclass.extend({
 	callLockGet: callLockGet, callLockFresh: callLockFresh, callLockSet: callLockSet,
 	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
+	callForwardGet: callForwardGet, callForwardStatus: callForwardStatus,
+	callForwardSet: callForwardSet, callForwardTest: callForwardTest,
+	callTrafficGet: callTrafficGet, callTrafficSet: callTrafficSet,
 	callUsbGet: callUsbGet, callUsbSet: callUsbSet,
 	callUsbNetList: callUsbNetList, callUsbNetAdd: callUsbNetAdd,
 	carrierName: carrierName, qLabel: qLabel, qCol: qCol, qScore: qScore,
-	esc: esc, fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, PLMN_CN: PLMN_CN,
+	esc: esc, fmtBytes: fmtBytes, fmtTrafficBytes: fmtTrafficBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, PLMN_CN: PLMN_CN,
 	uiLanguage: uiLanguage, translate: translate, localize: localize, localizeMenu: localizeMenu,
 	injectCss: injectCss, v: v, set: set, spark: spark, neighborRows: neighborRows,
 	toast: toast, busy: busy, confirmBox: confirmBox, alertBox: alertBox, choiceBox: choiceBox,

@@ -15,6 +15,12 @@ msgstr "Ağ kilitleri"
 msgid "短信"
 msgstr "SMS"
 
+msgid "短信转发"
+msgstr "SMS yönlendirme"
+
+msgid "流量池"
+msgstr "Veri paketi"
+
 msgid "AT 终端"
 msgstr "AT terminali"
 

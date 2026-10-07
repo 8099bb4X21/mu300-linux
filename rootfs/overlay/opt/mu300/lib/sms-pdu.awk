@@ -121,14 +121,19 @@ function bcd_decode(h, off, digits,    i, b, lo, hi, out) {
     }
     return out
 }
-function ts_decode(h, off,    i, b, d, p) {
+function ts_decode(h, off,    i, b, d, p, quarters, sign) {
     d = ""
     for (i = 0; i < 6; i++) {
         b = byteat(h, off + i)
         d = d substr("0123456789", b_and(b, 15) + 1, 1) substr("0123456789", b_rshift(b, 4) + 1, 1)
         if (i == 2) d = d " "; else if (i < 2) d = d "-"; else if (i < 5) d = d ":"
     }
-    return "20" d
+    # TP-SCTS carries a signed quarter-hour UTC offset in swapped BCD.
+    # Do not discard it: the host timezone need not match the SIM network.
+    b = byteat(h, off + 6)
+    sign = b_and(b, 8) ? "-" : "+"
+    quarters = b_and(b, 7) * 10 + b_rshift(b, 4)
+    return "20" d sprintf("%s%02d:%02d", sign, int(quarters / 4), (quarters % 4) * 15)
 }
 function esc_field(s) { gsub(/\t/, " ", s); gsub(/\n/, " ", s); gsub(/\r/, "", s); return s }
 
