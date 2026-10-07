@@ -28,9 +28,11 @@
 # kills the channel until the next reboot (V50 archive; blacklisted in the rpcd
 # AT terminal too).
 #
-# SIM/module identity (IMEI/IMSI/ICCID/phone number/model/firmware) changes only when the SIM
+# SIM/module identity (IMEI/IMSI/ICCID/model/firmware) changes only when the SIM
 # or the firmware changes, so it lives in the configured state directory and is re-read
 # once per boot and at most every 6 hours thereafter, never inside a page request.
+# The own number can become available later through IMS. Query it on every
+# full round, not from the persistent identity cache or the fast signal tier.
 
 # Two rounds share this script:
 #   mu300-dash-cell          full: everything below, ~11 commands, neighbours included
@@ -394,7 +396,7 @@ if [ "$MODE" = full ]; then
     [ -s "$IDENT" ] && IDENT_AGE=$(( $(now) - $(date -r "$IDENT" +%s 2>/dev/null || echo 0) ))
     if [ "$IDENT_AGE" -ge 0 ] && [ "$IDENT_AGE" -le "$IDENT_MAXAGE" ] &&
        [ -n "$BOOT_ID" ] && grep -Fq "\"boot_id\":\"$BOOT_ID\"" "$IDENT" &&
-       grep -q '"msisdn"[[:space:]]*:' "$IDENT"; then
+       ! grep -q '"msisdn"[[:space:]]*:' "$IDENT"; then
         IDENT_JSON=$(cat "$IDENT" 2>/dev/null || echo null)
     else
         i_mfg=$(at 'AT+CGMI' 2 | grep -v '^OK' | head -n1)
@@ -404,21 +406,30 @@ if [ "$MODE" = full ]; then
         i_imsi=$(at 'AT+CIMI' 2 | tr -cd '0-9' | cut -c1-15)
         i_iccid=$(at 'AT+CCID' 2 | tr -cd '0-9' | cut -c1-20)
         if [ -n "$i_imei$i_imsi$i_iccid" ]; then
-            # Keep this optional query out of the live signal polling path.
-            # Cache a null too, so a SIM without a number is not queried again
-            # on every full refresh. Older identity caches migrate once.
-            i_msisdn=$(at 'AT+CNUM' 2 | cnum_number)
-            i_msisdn_source=sim
-            if [ -z "$i_msisdn" ]; then
-                i_msisdn=$(at 'AT+SPPAURI?' 2 | ims_number)
-                i_msisdn_source=ims
-            fi
-            [ -n "$i_msisdn" ] || i_msisdn_source=
-            IDENT_JSON=$(printf '{"ts":%d,"boot_id":%s,"mfg":%s,"model":%s,"fw":%s,"imei":%s,"imsi":%s,"iccid":%s,"msisdn":%s,"msisdn_source":%s}' \
-                "$(now)" "$(qs "$BOOT_ID")" "$(qs "$i_mfg")" "$(qs "$i_model")" "$(qs "$i_fw")" "$(qs "$i_imei")" "$(qs "$i_imsi")" "$(qs "$i_iccid")" "$(qs "$i_msisdn")" "$(qs "$i_msisdn_source")")
+            # Persist static identity only; legacy caches with an own-number
+            # field are rebuilt once so they cannot leak a stale number.
+            IDENT_JSON=$(printf '{"ts":%d,"boot_id":%s,"mfg":%s,"model":%s,"fw":%s,"imei":%s,"imsi":%s,"iccid":%s}' \
+                "$(now)" "$(qs "$BOOT_ID")" "$(qs "$i_mfg")" "$(qs "$i_model")" "$(qs "$i_fw")" "$(qs "$i_imei")" "$(qs "$i_imsi")" "$(qs "$i_iccid")")
             printf '%s\n' "$IDENT_JSON" > "$IDENT.part" 2>/dev/null && mv "$IDENT.part" "$IDENT"
-        elif [ -s "$IDENT" ]; then IDENT_JSON=$(cat "$IDENT"); fi
+        elif [ -s "$IDENT" ] && ! grep -q '"msisdn"[[:space:]]*:' "$IDENT"; then
+            IDENT_JSON=$(cat "$IDENT")
+        fi
     fi
+    # Fresh lookup, even after an empty startup response. Use the existing
+    # serialized AT adapter; no new worker, disk write or fast-tier query.
+    i_msisdn=$(at 'AT+CNUM' 2 | cnum_number)
+    i_msisdn_source=sim
+    if [ -z "$i_msisdn" ]; then
+        i_msisdn=$(at 'AT+SPPAURI?' 2 | ims_number)
+        i_msisdn_source=ims
+    fi
+    [ -n "$i_msisdn" ] || i_msisdn_source=
+    case "$IDENT_JSON" in
+        null|'{}') IDENT_JSON='{' ;;
+        *) IDENT_JSON="${IDENT_JSON%?}," ;;
+    esac
+    IDENT_JSON=$(printf '%s"msisdn":%s,"msisdn_source":%s}' \
+        "$IDENT_JSON" "$(qs "$i_msisdn")" "$(qs "$i_msisdn_source")")
 fi
 
 # "no answer at all" is a modem/daemon problem, not "no signal".

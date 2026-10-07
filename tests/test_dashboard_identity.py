@@ -1,5 +1,6 @@
-"""Optional own-number lookup stays in the infrequent SIM identity tier."""
+"""Own-number lookup is fresh on full rounds, while static identity stays cached."""
 import json
+from pathlib import Path
 
 from helpers import ShellTest, TOP
 
@@ -45,7 +46,7 @@ class DashboardIdentity(ShellTest):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
 
-    def test_empty_number_is_cached_and_old_cache_migrates_once(self):
+    def test_empty_number_retries_without_requerying_static_identity(self):
         self.stub('uci', 'exit 1')
         self.stub('fake-at', '''printf '%s\\n' "$*" >> "$STUBLOG/at-commands"
 case "$*" in
@@ -65,10 +66,11 @@ esac''')
                 result = self.script(shell, CELL, mode, **env)
                 self.assertEqual(result.returncode, 0, result.stderr)
             cached = json.loads((ident / 'sim.json').read_text())
-            self.assertIn('msisdn', cached)
-            self.assertIsNone(cached['msisdn'])
-            self.assertEqual(log.read_text().count('AT+CNUM'), 1)
-            self.assertEqual(log.read_text().count('AT+SPPAURI?'), 1)
+            self.assertNotIn('msisdn', cached)
+            self.assertNotIn('msisdn_source', cached)
+            self.assertEqual(log.read_text().count('AT+CNUM'), 2)
+            self.assertEqual(log.read_text().count('AT+SPPAURI?'), 2)
+            self.assertEqual(log.read_text().count('AT+CIMI'), 1)
             data = json.loads((self.tmp / f'cache-{i}' / 'cell.json').read_text())
             self.assertIsNone(data['ident']['msisdn'])
 
@@ -95,19 +97,66 @@ esac''')
             result = self.script(shell, CELL, 'full', **env)
             self.assertEqual(result.returncode, 0, result.stderr)
             cached = json.loads(cache.read_text())
-            self.assertEqual(cached['msisdn'], '+8613800000000')
-            self.assertEqual(cached['msisdn_source'], 'ims')
+            data = json.loads((env['MU300_DASH_DIR'] / 'cell.json').read_text())
+            self.assertEqual(data['ident']['msisdn'], '+8613800000000')
+            self.assertEqual(data['ident']['msisdn_source'], 'ims')
+            self.assertNotIn('msisdn', cached)
             self.assertNotEqual(cached['boot_id'], 'previous-boot')
-            # Same boot serves the cache; no extra IMS request per refresh.
+            # Same boot reuses static identity, but always queries the number.
             result = self.script(shell, CELL, 'full', **env)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(log.read_text().count('AT+SPPAURI?'), 1)
+            self.assertEqual(log.read_text().count('AT+SPPAURI?'), 2)
+            self.assertEqual(log.read_text().count('AT+CIMI'), 1)
             cached['boot_id'] = 'previous-boot'
             cache.write_text(json.dumps(cached))
             env['CNUM_REPLY'] = '+CNUM: "","+905551234567",145\nOK'
             result = self.script(shell, CELL, 'full', **env)
             self.assertEqual(result.returncode, 0, result.stderr)
             cached = json.loads(cache.read_text())
-            self.assertEqual(cached['msisdn'], '+905551234567')
-            self.assertEqual(cached['msisdn_source'], 'sim')
-            self.assertEqual(log.read_text().count('AT+SPPAURI?'), 1)
+            data = json.loads((env['MU300_DASH_DIR'] / 'cell.json').read_text())
+            self.assertEqual(data['ident']['msisdn'], '+905551234567')
+            self.assertEqual(data['ident']['msisdn_source'], 'sim')
+            self.assertNotIn('msisdn', cached)
+            self.assertEqual(log.read_text().count('AT+SPPAURI?'), 2)
+            self.assertEqual(log.read_text().count('AT+CIMI'), 2)
+
+    def test_live_number_recovers_after_startup_and_never_reuses_old_value(self):
+        self.stub('uci', 'exit 1')
+        self.stub('fake-at', '''printf '%s\\n' "$*" >> "$STUBLOG/at-commands"
+case "$*" in
+  *AT+CFUN?*) printf '+CFUN: 1\\nOK\\n' ;;
+  *AT+CIMI*) printf '460011234567890\\nOK\\n' ;;
+  *AT+CNUM*) printf '%s\\n' "$CNUM_REPLY" ;;
+  *AT+SPPAURI?*) printf '%s\\n' "$IMS_REPLY" ;;
+  *) printf 'OK\\n' ;;
+esac''')
+        for i, shell in enumerate(self.each_shell()):
+            ident = self.tmp / f'live-ident-{i}'
+            ident.mkdir()
+            cache = ident / 'sim.json'
+            # A fresh legacy cache containing a stale number must migrate too.
+            boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+            cache.write_text(json.dumps({'msisdn': '+905550000000', 'boot_id': boot}, separators=(',', ':')))
+            log = self.tmp / 'at-commands'
+            log.unlink(missing_ok=True)
+            env = dict(MU300_AT=self.stubs / 'fake-at', MU300_DASH_IDENT_DIR=ident,
+                       MU300_DASH_DIR=self.tmp / f'live-cache-{i}', MU300_DASH_POOL_DIR=self.tmp / f'live-pool-{i}')
+            previous = None
+            for cnum, ims, number, source in [
+                ('ERROR', 'OK', None, None),
+                ('ERROR', '+SPPAURI: tel:+8613800000000\nOK', '+8613800000000', 'ims'),
+                ('+CNUM: "","+905551234567",145\nOK', 'ERROR', '+905551234567', 'sim'),
+                ('ERROR', 'ERROR', None, None),
+            ]:
+                result = self.script(shell, CELL, 'full', CNUM_REPLY=cnum, IMS_REPLY=ims, **env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                data = json.loads((env['MU300_DASH_DIR'] / 'cell.json').read_text())
+                self.assertEqual(data['ident']['msisdn'], number)
+                self.assertEqual(data['ident']['msisdn_source'], source)
+                self.assertNotIn('msisdn', json.loads(cache.read_text()))
+                if previous is not None:
+                    self.assertEqual((cache.read_bytes(), cache.stat().st_mtime_ns), previous)
+                previous = (cache.read_bytes(), cache.stat().st_mtime_ns)
+            self.assertEqual(log.read_text().count('AT+CIMI'), 1)
+            self.assertEqual(log.read_text().count('AT+CNUM'), 4)
+            self.assertEqual(log.read_text().count('AT+SPPAURI?'), 3)

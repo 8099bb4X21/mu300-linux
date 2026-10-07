@@ -17,6 +17,13 @@ The package does not start or own the modem. Platform-specific access is behind
 small command adapters, so the LuCI and RPC code does not need to change for a
 different Unisoc OpenWrt firmware.
 
+The own-number field is queried on every full cellular collection (normally
+every five seconds while the dashboard is active), first with CNUM and then
+with the IMS public identity if needed. It is not stored in the six-hour static
+SIM identity cache: a missing startup value can recover on the next full
+round. The existing serialized AT adapter is used; fast signal-only rounds
+never query the number and no additional polling worker is started.
+
 ## AT adapters
 
 Configure `/etc/config/unisoc_modem`:
