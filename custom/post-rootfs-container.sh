@@ -22,18 +22,24 @@ uci set luci.main.lang='zh_cn'
 uci -q get luci.languages >/dev/null 2>&1 || uci set luci.languages='internal'
 uci -q get luci.languages.zh_cn >/dev/null 2>&1 || uci set luci.languages.zh_cn='简体中文 (Simplified Chinese)'
 uci commit luci
-[ -s /etc/config/system ] || printf 'config system\n' > /etc/config/system
-uci set system.@system[0].timezone='CST-8'
-uci set system.@system[0].zonename='Asia/Shanghai'
-uci commit system
+# aurora 导航默认侧边栏（kano/aurora 默认下拉）
+if uci -q get aurora.theme >/dev/null 2>&1; then
+    uci set aurora.theme.nav_type='sidebar'
+    uci commit aurora
+fi
+# 时区/NTP 走 uci-defaults（95-own-defaults），在 90-mu300 首启之后生效，
+# 避免被 kano 的伊斯坦布尔默认覆盖。
+cp /in/custom/95-own-defaults /etc/uci-defaults/95-own-defaults
+chmod 0755 /etc/uci-defaults/95-own-defaults
 # fork default root password (kano's installer manages none): only when empty
 [ -s /etc/shadow ] || { echo "no /etc/shadow to preseed" >&2; exit 1; }
 command -v openssl >/dev/null || { echo "no openssl for password hash" >&2; exit 1; }
 PWHASH=$(openssl passwd -6 -salt ownfork password)
 sed -i "s|^root::|root:$PWHASH:|;s|^root:[!*]:|root:$PWHASH:|" /etc/shadow
 grep -q '^root:\$6\$ownfork\$' /etc/shadow || { echo "root password not set" >&2; exit 1; }
-# enable ksmbd + wsdd2 (rc.common enable needs ubus: link rc.d directly)
-for s in ksmbd wsdd2; do
+# enable ksmbd + wsdd2 + sysntpd (rc.common enable needs ubus: link rc.d directly)
+for s in ksmbd wsdd2 sysntpd; do
+    [ -e /etc/init.d/$s ] || continue
     n=$(sed -n "s/^START=//p" /etc/init.d/$s)
     ln -sf ../init.d/$s /etc/rc.d/S$n$s
 done

@@ -22,5 +22,9 @@ fragment 挂载覆盖合并，kano 的配置文件一个字不动，它自带的
 - wsdd2 预装：TF 包烘焙时装好（`custom/post-rootfs.sh`，跑在
   `tools/build-openwrt-tf-magisk.sh` 的 `MU300_POST_ROOTFS` 钩子上，
   该钩子是本 fork 对 kano 脚本唯一的 3 行改动）。
-- 中文/时区/默认密码：同上，在烘焙里一次写好（kano 安装器不管密码；
-  密码只在全新安装生效，更新保留旧密码）。
+- 中文/默认密码：烘焙里写死（kano 安装器不管密码；密码只在全新安装
+  生效，更新保留旧密码）。
+- 时区东八区 / NTP 默认开启 / Aurora 侧边栏：时区、NTP 走
+  `custom/95-own-defaults`（uci-defaults，编号在 kano 的 90-mu300 之后，
+  首启把伊斯坦布尔默认改回东八区 + 配阿里云/pool NTP；marker 保证
+  sysupgrade 不覆盖用户已改的），Aurora 侧边栏在烘焙里直接 set。

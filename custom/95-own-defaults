@@ -1,0 +1,30 @@
+#!/bin/sh
+# own: fork 默认值，只在全新安装首启生效。
+# marker（system.own_defaults）写在 /etc/config 里，系统升级会保留它，
+# 所以之后的 sysupgrade 不会覆盖用户自己改的时区/NTP。
+[ "$(uci -q get system.own_defaults.enabled)" = 1 ] && exit 0
+
+# 时区：东八区。kano 的 90-mu300 默认伊斯坦布尔(GMT+3)，本脚本编号靠后，
+# 在它之后执行，把默认改回中国时区。
+uci -q batch <<UCI
+set system.@system[0].zonename='Asia/Shanghai'
+set system.@system[0].timezone='CST-8'
+UCI
+
+# NTP：默认开启客户端对时（参考 TR3000）。
+uci -q batch <<UCI
+delete system.ntp
+set system.ntp=timeserver
+set system.ntp.enabled='1'
+set system.ntp.enable_server='0'
+add_list system.ntp.server='ntp.aliyun.com'
+add_list system.ntp.server='0.openwrt.pool.ntp.org'
+UCI
+
+# 标记最后写，半途失败下次首启仍会补全。
+uci -q batch <<UCI
+set system.own_defaults=own_defaults
+set system.own_defaults.enabled='1'
+UCI
+uci commit system
+exit 0
