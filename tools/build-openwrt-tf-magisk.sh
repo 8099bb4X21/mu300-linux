@@ -131,3 +131,20 @@ with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9
             z.write(p, os.path.relpath(p, src).replace(os.sep, '/'))
 PY
 echo "built $OUT (kernel $rel)"
+# own: sysupgrade twin (same payloads; the marker flips the installer to keep
+# data instead of formatting, and the name tells the two apart in Magisk)
+SYSOUT=${OUT%.zip}-sysupgrade.zip
+touch "$STAGE/sysupgrade"
+sed -i 's/^name=MU300 Linux OpenWrt TF deployer$/name=MU300 Linux OpenWrt TF deployer (sysupgrade)/' "$STAGE/module.prop"
+rm -f "$SYSOUT"
+python3 - "$STAGE" "$SYSOUT" <<'PY'
+import os, sys, zipfile
+src, out = map(os.path.abspath, sys.argv[1:])
+with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    for root, dirs, files in os.walk(src):
+        dirs.sort()
+        for name in sorted(files):
+            p = os.path.join(root, name)
+            z.write(p, os.path.relpath(p, src).replace(os.sep, '/'))
+PY
+echo "built $SYSOUT (kernel $rel, sysupgrade)"

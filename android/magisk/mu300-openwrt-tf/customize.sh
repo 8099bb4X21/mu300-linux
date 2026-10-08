@@ -25,13 +25,17 @@ bootdev=/dev/block/by-name/boot_$linux_slot
 R=/dev/block/mmcblk1p1
 [ -b "$R" ] || R=/dev/block/mmcblk1
 [ -b "$R" ] || ui_fail "! 未找到 TF 卡" "! TF card was not found"
+# own: sysupgrade flavor (marker file in the package) keeps settings and data
+# instead of formatting. A missing install errors out cleanly.
+FORMAT=1; UPDATE=0
+if [ -e "$MODPATH/sysupgrade" ]; then FORMAT=0; UPDATE=1; fi
 cat > "$MODPATH/mu300-install.env" <<EOF
 SD_MODE=1
 SD_DEV=$R
-FORMAT=1
+FORMAT=$FORMAT
 OSES="openwrt"
 WIPE_LEGACY=0
-UPDATE=0
+UPDATE=$UPDATE
 BOOT_OS=openwrt
 DEFAULT_LINUX=1
 BOOT_ATTEMPTS=5

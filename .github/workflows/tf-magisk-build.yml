@@ -1,10 +1,9 @@
 name: TF Magisk zips
 
-# Full TF-card Magisk zips (OpenWrt, kernels 6.18 + 7.2) the kano way:
-# vendor 5.4 modules, mainline kernel (+ our ksmbd fragment), rootfs
-# (+ our post-process), boot image, staged zip. kano cuts no releases,
-# so this triggers on SOURCE changes; inputs come from our private
-# device-inputs repo (firmware, dumps, android subset).
+# Full TF-card Magisk zips (OpenWrt, kernels 6.18 + 7.2) the kano way,
+# each in two flavors: factory (fresh install) and sysupgrade (keep data).
+# One release holds all four zips. kano cuts no releases, so this triggers
+# on SOURCE changes; inputs come from our private device-inputs repo.
 on:
   push:
     branches: [tf-7.2]
@@ -17,7 +16,52 @@ permissions:
   contents: write
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+      tag: ${{ steps.check.outputs.tag }}
+      kv618: 6.18.54
+      kv72: ${{ steps.check.outputs.kv72 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tf-7.2
+          fetch-depth: 0
+      - name: Versions and skip check
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUTS_SSH_KEY: ${{ secrets.INPUTS_SSH_KEY }}
+        run: |
+          KV72=$(curl -fsSL https://www.kernel.org/releases.json | python3 -c 'import json,sys;r=json.load(sys.stdin)["releases"];print(next(x["version"] for x in r if x["version"].startswith("7.2.")))')
+          echo "$KV72" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad 7.2 version: $KV72"; exit 1; }
+          echo "kv72=$KV72" >> "$GITHUB_OUTPUT"
+          HEAD_SHA=$(git rev-parse HEAD)
+          mkdir -p ~/.ssh
+          echo "$INPUTS_SSH_KEY" > ~/.ssh/inputs_key
+          chmod 600 ~/.ssh/inputs_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/inputs_key -o StrictHostKeyChecking=no"
+          INPUTS_SHA=$(git ls-remote git@github.com:8099bb4X21/mu300-device-inputs.git HEAD | cut -f1)
+          rm -f ~/.ssh/inputs_key
+          [ -n "$INPUTS_SHA" ] || { echo "cannot reach inputs repo"; exit 1; }
+          DATE=$(date -u +%Y%m%d)
+          SHORT=$(echo "$HEAD_SHA" | cut -c1-7)
+          TAG="own-tf-${DATE}-${SHORT}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "inputs_sha=$INPUTS_SHA" >> "$GITHUB_OUTPUT"
+          echo "kv72_full=$KV72" >> "$GITHUB_OUTPUT"
+          SKIP=
+          for t in $(gh release list --limit 100 --json tagName -q '.[].tagName | select(startswith("own-tf-"))'); do
+            body=$(gh release view "$t" --json body -q .body)
+            case "$body" in *"$HEAD_SHA"*"$INPUTS_SHA"*"$KV72"*) SKIP="$t"; break;; esac
+          done
+          if [ -n "$SKIP" ]; then echo "up to date: $SKIP"; echo "skip=yes" >> "$GITHUB_OUTPUT"; fi
+
   build:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'yes'
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
@@ -25,6 +69,8 @@ jobs:
         line: ['6.18', '7.2']
     env:
       UPSTREAM_REPO: kanoqwq/mu300-linux
+      KV: ${{ matrix.line == '6.18' && '6.18.54' || needs.resolve.outputs.kv72 }}
+      OUTDIR: ${{ matrix.line == '6.18' && 'out' || 'out-7.2' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,35 +89,7 @@ jobs:
           rm -f ~/.ssh/inputs_key
           ls device-inputs/
 
-      - name: Resolve versions and skip check
-        id: skip
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ matrix.line }}" = 6.18 ]; then
-            KV=6.18.54
-            OUTDIR=out
-          else
-            KV=$(curl -fsSL https://www.kernel.org/releases.json | python3 -c 'import json,sys;r=json.load(sys.stdin)["releases"];print(next(x["version"] for x in r if x["version"].startswith("7.2.")))')
-            OUTDIR=out-7.2
-          fi
-          echo "$KV" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad KV: $KV"; exit 1; }
-          echo "KV=$KV" >> "$GITHUB_ENV"
-          echo "OUTDIR=$OUTDIR" >> "$GITHUB_ENV"
-          echo "LINE=${{ matrix.line }}" >> "$GITHUB_ENV"
-          HEAD_SHA=$(git rev-parse HEAD)
-          echo "HEAD_SHA=$HEAD_SHA" >> "$GITHUB_ENV"
-          INPUTS_SHA=$(git -C device-inputs rev-parse HEAD)
-          echo "INPUTS_SHA=$INPUTS_SHA" >> "$GITHUB_ENV"
-          SKIP=
-          for t in $(gh release list --limit 100 --json tagName -q '.[].tagName | select(startswith("own-tf-"))'); do
-            body=$(gh release view "$t" --json body -q .body)
-            case "$body" in *"$KV"*"$HEAD_SHA"*"$INPUTS_SHA"*) SKIP="$t"; break;; esac
-          done
-          if [ -n "$SKIP" ]; then echo "up to date: $SKIP"; echo "skip=yes" >> "$GITHUB_OUTPUT"; fi
-
       - name: Static tools (busybox, logdw, bt-init, keys)
-        if: steps.skip.outputs.skip != 'yes'
         run: |
           mkdir -p work/tools/logdw work/tools/bt-init work/tools/keys
           sudo apt-get update -qq
@@ -93,7 +111,6 @@ jobs:
           cp -r device-inputs/dumps device-inputs/firmware device-inputs/android-subset work/
 
       - name: Vendor 5.4 modules
-        if: steps.skip.outputs.skip != 'yes'
         run: |
           MU300_KERNEL_OUT="$PWD/work/out" sh kernel/build-all.sh
           for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
@@ -101,7 +118,6 @@ jobs:
           done
 
       - name: Mainline kernel and modules (+ ksmbd fragment)
-        if: steps.skip.outputs.skip != 'yes'
         run: |
           docker build -t mu300-mainline-build upstream/
           docker volume rm -f tf-mainline >/dev/null 2>&1 || true
@@ -115,29 +131,46 @@ jobs:
             mu300-mainline-build bash /work/build-modules.sh > /dev/null
           test -s "upstream/$OUTDIR/modules/ksmbd.ko" || { echo "ksmbd.ko was not built" >&2; exit 1; }
 
-      - name: TF Magisk zip
-        if: steps.skip.outputs.skip != 'yes'
+      - name: TF Magisk zips (factory + sysupgrade)
         run: |
           mkdir -p out-tf
           DATE=$(date -u +%Y%m%d)
-          echo "ZIPDATE=$DATE" >> "$GITHUB_ENV"
           MU300_KERNEL="${{ matrix.line }}" MU300_INPUTS="$PWD/work" \
             MU300_POST_ROOTFS="$PWD/custom/post-rootfs.sh" \
             sh tools/build-openwrt-tf-magisk.sh "out-tf/mu300-linux-openwrt-tf-${{ matrix.line }}-$DATE.zip"
           ls -la out-tf/
 
-      - name: Publish release
-        if: steps.skip.outputs.skip != 'yes'
+      - name: Upload zips
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-${{ matrix.line }}
+          path: out-tf/*.zip
+          retention-days: 1
+
+  publish:
+    needs: [resolve, build]
+    if: needs.resolve.outputs.skip != 'yes'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect all zips
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Create single release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          SHORT=$(echo "$HEAD_SHA" | cut -c1-7)
-          TAG="own-tf-${{ matrix.line }}-${ZIPDATE}-${SHORT}"
-          (cd out-tf && sha256sum *.zip > SHA256SUMS)
-          cat out-tf/SHA256SUMS
-          gh release create "$TAG" --title "own TF ${{ matrix.line }} ($ZIPDATE)" --notes "kernel: $KV
-          kano state: $HEAD_SHA
-          device inputs: $INPUTS_SHA
-          baked: wsdd2, ksmbd (+tr/zh-cn), aurora/zh_cn/CST-8 defaults, root password preseed, no preset shares
-          flash from Magisk (TF card is formatted)" \
-            out-tf/*.zip out-tf/SHA256SUMS
+          ls -la assets/
+          (cd assets && sha256sum *.zip > SHA256SUMS)
+          cat assets/SHA256SUMS
+          gh release create "${{ needs.resolve.outputs.tag }}" --title "自用 TF 卡包 (${{ needs.resolve.outputs.tag }})" --notes "基于 kano clean-tf-7.2，6.18 + 7.2 双内核，一次发版四个包。
+          和上游的区别：
+          - 内核多编了 ksmbd 模块（两个内核都有），配合预装的 ksmbd 用户态
+          - 预装 wsdd2（Windows 网络发现）
+          - LuCI 默认中文、Aurora 主题、时区东八区
+          - root 默认密码 password（kano 原版不设密码）
+          - 无预置共享，自己在 LuCI 里建
+          - 普通版：格卡全新安装；sysupgrade 版：保留数据升级（卡里没系统会直接报错退出，不会乱写）
+          刷机：Magisk 里选对应内核的包；切内核要重刷对应包。" \
+            assets/*.zip assets/SHA256SUMS
