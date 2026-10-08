@@ -1,0 +1,5 @@
+# own: ksmbd in-kernel SMB server as a module (in mainline since 5.15).
+# Merged AFTER kano's mu300-mainline.config by our CI (shadow mount, so
+# kano's file is never edited and daily merges stay clean); kano's own
+# build.sh verifies every merged line was actually taken.
+CONFIG_SMB_SERVER=m

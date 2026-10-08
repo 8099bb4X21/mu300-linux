@@ -1,0 +1,30 @@
+name: Sync kano
+
+# Daily: merge kanoqwq/mu300-linux clean-tf-7.2 into our tracking branch.
+# Custom files live where kano never goes (custom/, our workflows):
+# a red run means a real conflict to fix by hand, never a silent loss.
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tf-7.2
+          fetch-depth: 0
+      - name: Merge kano/clean-tf-7.2
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add kano https://github.com/kanoqwq/mu300-linux.git 2>/dev/null || true
+          git fetch kano clean-tf-7.2
+          git checkout tf-7.2
+          git merge --no-edit kano/clean-tf-7.2 || { echo 'CONFLICT - fix manually'; exit 1; }
+          git push origin tf-7.2
