@@ -246,4 +246,5 @@ ls -la /out/$OUT'
 if [ -d "$MAINLINE/modules" ]; then
     python3 "$TOP/upstream/check-container-support.py" "$MAINLINE" --rootfs "$TOP/openwrt/$(basename "$OUT")"
 fi
-rm -rf "$REGDB"
+# own: the regdb files above were written by docker as root (see kernel/build-all.sh)
+rm -rf "$REGDB" 2>/dev/null || sudo -n rm -rf "$REGDB" 2>/dev/null || true

@@ -17,7 +17,9 @@ MODULES_REV=4381465ccaf87fcf3215b9cd42f4a685df40e5e0
 docker build -q -t mu300-kbuild "$TOP/kernel" >/dev/null
 docker volume create "$VOL" >/dev/null
 W=$(mktemp -d)
-trap 'rm -rf "$W"' EXIT
+# own: the docker build leaves root-owned files behind, which plain rm cannot
+# remove on Linux CI (Docker Desktop maps uids, so macOS never notices)
+trap 'rm -rf "$W" 2>/dev/null || sudo -n rm -rf "$W" 2>/dev/null || true' EXIT
 # build-linux.sh writes its logs next to the config: give it a scratch copy of kernel/
 cp -R "$TOP/kernel/." "$W/"
 cp "$TOP/kernel/f50-stock-B09.config" "$W/device.config"
