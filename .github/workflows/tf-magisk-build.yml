@@ -23,6 +23,7 @@ jobs:
     outputs:
       skip: ${{ steps.check.outputs.skip }}
       tag: ${{ steps.check.outputs.tag }}
+      kv618: ${{ steps.check.outputs.kv618 }}
       kv72: ${{ steps.check.outputs.kv72 }}
       head_sha: ${{ steps.check.outputs.head_sha }}
       inputs_sha: ${{ steps.check.outputs.inputs_sha }}
@@ -37,8 +38,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUTS_SSH_KEY: ${{ secrets.INPUTS_SSH_KEY }}
         run: |
+          KV618=6.18.54
           KV72=$(curl -fsSL https://www.kernel.org/releases.json | python3 -c 'import json,sys;r=json.load(sys.stdin)["releases"];print(next(x["version"] for x in r if x["version"].startswith("7.2.")))')
           echo "$KV72" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad 7.2 version: $KV72"; exit 1; }
+          echo "kv618=$KV618" >> "$GITHUB_OUTPUT"
           echo "kv72=$KV72" >> "$GITHUB_OUTPUT"
           HEAD_SHA=$(git rev-parse HEAD)
           mkdir -p ~/.ssh
@@ -58,7 +61,7 @@ jobs:
             body=$(gh release view "$t" --json body -q .body)
             printf '%s' "$body" | grep -qFx "base: $HEAD_SHA" || continue
             printf '%s' "$body" | grep -qFx "inputs: $INPUTS_SHA" || continue
-            printf '%s' "$body" | grep -qFx "kernels: 6.18.54 $KV72" || continue
+            printf '%s' "$body" | grep -qFx "kernels: $KV618 $KV72" || continue
             SKIP="$t"; break
           done
           if [ -n "$SKIP" ]; then echo "up to date: $SKIP"; echo "skip=yes" >> "$GITHUB_OUTPUT"; fi
@@ -70,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: tf-7.2
+          ref: ${{ needs.resolve.outputs.head_sha }}
           fetch-depth: 1
 
       - name: Compute cache key
@@ -129,12 +132,12 @@ jobs:
         line: ['6.18', '7.2']
     env:
       UPSTREAM_REPO: kanoqwq/mu300-linux
-      KV: ${{ matrix.line == '6.18' && '6.18.54' || needs.resolve.outputs.kv72 }}
+      KV: ${{ matrix.line == '6.18' && needs.resolve.outputs.kv618 || needs.resolve.outputs.kv72 }}
       OUTDIR: ${{ matrix.line == '6.18' && 'out' || 'out-7.2' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: tf-7.2
+          ref: ${{ needs.resolve.outputs.head_sha }}
           fetch-depth: 1
 
       - name: Fetch device inputs (private)
@@ -224,7 +227,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve.outputs.head_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Collect all zips
         uses: actions/download-artifact@v4
         with:
@@ -243,7 +246,7 @@ jobs:
             echo "---"
             echo "base: ${{ needs.resolve.outputs.head_sha }}"
             echo "inputs: ${{ needs.resolve.outputs.inputs_sha }}"
-            echo "kernels: 6.18.54 ${{ needs.resolve.outputs.kv72 }}"
+            echo "kernels: ${{ needs.resolve.outputs.kv618 }} ${{ needs.resolve.outputs.kv72 }}"
           } >> NOTES.md
           gh release create "${{ needs.resolve.outputs.tag }}" --title "自用 TF 卡包 (${{ needs.resolve.outputs.tag }})" --notes-file NOTES.md \
             assets/*.zip assets/SHA256SUMS
