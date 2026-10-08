@@ -40,10 +40,7 @@ jobs:
             KV=6.18.54
             OUTDIR=out
           else
-            KV=$(curl -fsSL https://www.kernel.org/releases.json | python3 -c '
-            import json, sys
-            r = json.load(sys.stdin)["releases"]
-            print(next(x["version"] for x in r if x["version"].startswith("7.2.")))')
+            KV=$(curl -fsSL https://www.kernel.org/releases.json | python3 -c 'import json,sys;r=json.load(sys.stdin)["releases"];print(next(x["version"] for x in r if x["version"].startswith("7.2.")))')
             OUTDIR=out-7.2
           fi
           echo "$KV" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad KV: $KV"; exit 1; }
