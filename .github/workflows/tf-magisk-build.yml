@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: tf-7.2
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Versions and skip check
         id: check
         env:
@@ -72,13 +72,46 @@ jobs:
         with:
           ref: tf-7.2
           fetch-depth: 1
-      - name: Vendor 5.4 modules
+
+      - name: Compute cache key
+        id: key
+        run: |
+          # tree hash of kernel/ covers every input that decides the 5.4 build:
+          # scripts, patches, configs, Dockerfile and the pinned KERNEL/MODULES revs
+          k="vendor54-$(git ls-tree -r HEAD kernel | git hash-object --stdin)"
+          echo "key=$k" >> "$GITHUB_OUTPUT"
+          echo "key=$k"
+
+      - name: Restore 5.4 modules
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: work/out/modules
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Build 5.4 modules (cache miss)
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           MU300_KERNEL_OUT="$PWD/work/out" sh kernel/build-all.sh
+
+      - name: Verify 5.4 modules
+        run: |
           for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
-            [ -s "work/out/modules/$f" ] || { echo "missing 5.4 module $f" >&2; exit 1; }
+            [ -s "work/out/modules/$f" ] || { echo "missing/empty 5.4 module $f" >&2; exit 1; }
           done
-          tar -czf vendor54-modules.tar.gz -C work/out modules
+          n=$(ls work/out/modules/*.ko 2>/dev/null | wc -l)
+          [ "$n" -ge 20 ] || { echo "too few modules: $n" >&2; exit 1; }
+
+      - name: Save 5.4 modules (cache miss)
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: work/out/modules
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Package modules
+        run: tar -czf vendor54-modules.tar.gz -C work/out modules
+
       - name: Upload modules
         uses: actions/upload-artifact@v4
         with:
@@ -102,7 +135,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: tf-7.2
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Fetch device inputs (private)
         env:

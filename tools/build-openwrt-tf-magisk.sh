@@ -136,6 +136,7 @@ echo "built $OUT (kernel $rel)"
 SYSOUT=${OUT%.zip}-sysupgrade.zip
 touch "$STAGE/sysupgrade"
 sed -i 's/^name=MU300 Linux OpenWrt TF deployer$/name=MU300 Linux OpenWrt TF deployer (sysupgrade)/' "$STAGE/module.prop"
+sed -i 's/^version=\(.*\)$/version=\1-sysupgrade/' "$STAGE/module.prop"
 rm -f "$SYSOUT"
 python3 - "$STAGE" "$SYSOUT" <<'PY'
 import os, sys, zipfile
