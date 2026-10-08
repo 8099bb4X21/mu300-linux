@@ -18,7 +18,8 @@ set system.ntp=timeserver
 set system.ntp.enabled='1'
 set system.ntp.enable_server='0'
 add_list system.ntp.server='ntp.aliyun.com'
-add_list system.ntp.server='0.openwrt.pool.ntp.org'
+add_list system.ntp.server='ntp.tencent.com'
+add_list system.ntp.server='ntp.ntsc.ac.cn'
 UCI
 
 # 标记最后写，半途失败下次首启仍会补全。
