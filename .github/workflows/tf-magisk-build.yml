@@ -2,8 +2,10 @@ name: TF Magisk zips
 
 # Full TF-card Magisk zips (OpenWrt, kernels 6.18 + 7.2) the kano way,
 # each in two flavors: factory (fresh install) and sysupgrade (keep data).
-# One release holds all four zips. kano cuts no releases, so this triggers
-# on SOURCE changes; inputs come from our private device-inputs repo.
+# Flow: resolve (versions + skip check) -> vendor54 (5.4 modules, once) +
+# build matrix (mainline, rootfs, zips) -> publish (one release, 4 zips).
+# kano cuts no releases, so this triggers on SOURCE changes; inputs come
+# from our private device-inputs repo.
 on:
   push:
     branches: [tf-7.2]
@@ -21,8 +23,9 @@ jobs:
     outputs:
       skip: ${{ steps.check.outputs.skip }}
       tag: ${{ steps.check.outputs.tag }}
-      kv618: 6.18.54
       kv72: ${{ steps.check.outputs.kv72 }}
+      head_sha: ${{ steps.check.outputs.head_sha }}
+      inputs_sha: ${{ steps.check.outputs.inputs_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,22 +48,46 @@ jobs:
           INPUTS_SHA=$(git ls-remote git@github.com:8099bb4X21/mu300-device-inputs.git HEAD | cut -f1)
           rm -f ~/.ssh/inputs_key
           [ -n "$INPUTS_SHA" ] || { echo "cannot reach inputs repo"; exit 1; }
-          DATE=$(date -u +%Y%m%d)
-          SHORT=$(echo "$HEAD_SHA" | cut -c1-7)
-          TAG="own-tf-${DATE}-${SHORT}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "inputs_sha=$INPUTS_SHA" >> "$GITHUB_OUTPUT"
-          echo "kv72_full=$KV72" >> "$GITHUB_OUTPUT"
+          DATE=$(date -u +%Y%m%d)
+          TAG="own-tf-${DATE}-$(echo "$HEAD_SHA" | cut -c1-7)-$(echo "$INPUTS_SHA" | cut -c1-7)-$(echo "$KV72" | tr -d .)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           SKIP=
           for t in $(gh release list --limit 100 --json tagName -q '.[].tagName | select(startswith("own-tf-"))'); do
             body=$(gh release view "$t" --json body -q .body)
-            case "$body" in *"$HEAD_SHA"*"$INPUTS_SHA"*"$KV72"*) SKIP="$t"; break;; esac
+            printf '%s' "$body" | grep -qFx "base: $HEAD_SHA" || continue
+            printf '%s' "$body" | grep -qFx "inputs: $INPUTS_SHA" || continue
+            printf '%s' "$body" | grep -qFx "kernels: 6.18.54 $KV72" || continue
+            SKIP="$t"; break
           done
           if [ -n "$SKIP" ]; then echo "up to date: $SKIP"; echo "skip=yes" >> "$GITHUB_OUTPUT"; fi
 
-  build:
+  vendor54:
     needs: resolve
+    if: needs.resolve.outputs.skip != 'yes'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tf-7.2
+          fetch-depth: 1
+      - name: Vendor 5.4 modules
+        run: |
+          MU300_KERNEL_OUT="$PWD/work/out" sh kernel/build-all.sh
+          for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
+            [ -s "work/out/modules/$f" ] || { echo "missing 5.4 module $f" >&2; exit 1; }
+          done
+          tar -czf vendor54-modules.tar.gz -C work/out modules
+      - name: Upload modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: vendor54-modules
+          path: vendor54-modules.tar.gz
+          retention-days: 1
+
+  build:
+    needs: [resolve, vendor54]
     if: needs.resolve.outputs.skip != 'yes'
     runs-on: ubuntu-24.04-arm
     strategy:
@@ -91,7 +118,7 @@ jobs:
 
       - name: Static tools (busybox, logdw, bt-init, keys)
         run: |
-          mkdir -p work/tools/logdw work/tools/bt-init work/tools/keys
+          mkdir -p work/tools/logdw work/tools/bt-init work/tools/keys work/out
           sudo apt-get update -qq
           apt-get download busybox-static >/dev/null
           dpkg-deb -x busybox-static_*.deb bbdir
@@ -110,9 +137,15 @@ jobs:
           done
           cp -r device-inputs/dumps device-inputs/firmware device-inputs/android-subset work/
 
-      - name: Vendor 5.4 modules
+      - name: Vendor 5.4 modules (prebuilt)
+        uses: actions/download-artifact@v4
+        with:
+          name: vendor54-modules
+          path: vendor54-dl
+      - name: Unpack vendor modules
         run: |
-          MU300_KERNEL_OUT="$PWD/work/out" sh kernel/build-all.sh
+          mkdir -p work/out
+          tar -xzf vendor54-dl/vendor54-modules.tar.gz -C work/out
           for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
             [ -s "work/out/modules/$f" ] || { echo "missing 5.4 module $f" >&2; exit 1; }
           done
@@ -130,6 +163,9 @@ jobs:
           docker run --rm -e KV="$KV" -e OUTDIR="$OUTDIR" -v tf-mainline:/src -v "$PWD/upstream":/work \
             mu300-mainline-build bash /work/build-modules.sh > /dev/null
           test -s "upstream/$OUTDIR/modules/ksmbd.ko" || { echo "ksmbd.ko was not built" >&2; exit 1; }
+          for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
+            [ -s "work/out/modules/$f" ] || { echo "missing 5.4 module $f" >&2; exit 1; }
+          done
 
       - name: TF Magisk zips (factory + sysupgrade)
         run: |
@@ -152,6 +188,10 @@ jobs:
     if: needs.resolve.outputs.skip != 'yes'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          fetch-depth: 0
       - name: Collect all zips
         uses: actions/download-artifact@v4
         with:
@@ -164,13 +204,13 @@ jobs:
           ls -la assets/
           (cd assets && sha256sum *.zip > SHA256SUMS)
           cat assets/SHA256SUMS
-          gh release create "${{ needs.resolve.outputs.tag }}" --title "自用 TF 卡包 (${{ needs.resolve.outputs.tag }})" --notes "基于 kano clean-tf-7.2，6.18 + 7.2 双内核，一次发版四个包。
-          和上游的区别：
-          - 内核多编了 ksmbd 模块（两个内核都有），配合预装的 ksmbd 用户态
-          - 预装 wsdd2（Windows 网络发现）
-          - LuCI 默认中文、Aurora 主题、时区东八区
-          - root 默认密码 password（kano 原版不设密码）
-          - 无预置共享，自己在 LuCI 里建
-          - 普通版：格卡全新安装；sysupgrade 版：保留数据升级（卡里没系统会直接报错退出，不会乱写）
-          刷机：Magisk 里选对应内核的包；切内核要重刷对应包。" \
+          cp custom/release-notes.md NOTES.md
+          {
+            echo
+            echo "---"
+            echo "base: ${{ needs.resolve.outputs.head_sha }}"
+            echo "inputs: ${{ needs.resolve.outputs.inputs_sha }}"
+            echo "kernels: 6.18.54 ${{ needs.resolve.outputs.kv72 }}"
+          } >> NOTES.md
+          gh release create "${{ needs.resolve.outputs.tag }}" --title "自用 TF 卡包 (${{ needs.resolve.outputs.tag }})" --notes-file NOTES.md \
             assets/*.zip assets/SHA256SUMS
