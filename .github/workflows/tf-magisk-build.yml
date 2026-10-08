@@ -77,7 +77,9 @@ jobs:
           sudo apt-get update -qq
           apt-get download busybox-static >/dev/null
           dpkg-deb -x busybox-static_*.deb bbdir
-          cp bbdir/bin/busybox work/busybox
+          BB_BIN=$(find bbdir -name busybox -type f | head -1)
+          [ -n "$BB_BIN" ] || { echo "no busybox in deb:"; find bbdir | head -10; exit 1; }
+          cp "$BB_BIN" work/busybox
           chmod +x work/busybox
           ./work/busybox --list | grep -qx -e mdev -e losetup -e switch_root -e telnetd || \
             { echo "busybox missing required applets" >&2; ./work/busybox --list | head -5; exit 1; }
