@@ -1,9 +1,11 @@
 name: ksmbd kernel modules
 
-# Builds kano's mainline kernel + in-tree modules with our SMB fragment and
-# publishes ksmbd.ko. kano cuts no releases, so this triggers on SOURCE
-# changes (pushes to tf-7.2, which include the daily sync merges) instead
-# of release tags; a run whose inputs match an existing release skips.
+# Builds kano's mainline kernels + in-tree modules with our SMB fragment and
+# publishes ksmbd.ko per kernel line. kano cuts no releases, so this triggers
+# on SOURCE changes (pushes to tf-7.2, which include the daily sync merges)
+# instead of release tags; a run whose inputs match an existing release skips.
+# Needs nothing from the device: kernel sources come from kernel.org, patches
+# and config from this repo, toolchain from the docker image.
 on:
   push:
     branches: [tf-7.2]
@@ -11,35 +13,42 @@ on:
   schedule:
     - cron: '30 3 * * *'
   workflow_dispatch:
-    inputs:
-      kv:
-        description: 'Kernel version (default: 6.18.54 = the device kernel)'
-        required: false
 
 permissions:
   contents: write
 
-env:
-  KV_DEFAULT: 6.18.54
-
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        line: ['6.18', '7.2']
     steps:
       - uses: actions/checkout@v4
         with:
           ref: tf-7.2
           fetch-depth: 0
 
-      - name: Resolve inputs and skip check
+      - name: Resolve version and skip check
         id: skip
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          KV="${{ github.event.inputs.kv }}"
-          [ -n "$KV" ] || KV="$KV_DEFAULT"
+          if [ "${{ matrix.line }}" = 6.18 ]; then
+            # pinned: must equal the kernel running on the device
+            KV=6.18.54
+            OUTDIR=out
+          else
+            KV=$(curl -fsSL https://www.kernel.org/releases.json | python3 -c '
+            import json, sys
+            r = json.load(sys.stdin)["releases"]
+            print(next(x["version"] for x in r if x["version"].startswith("7.2.")))')
+            OUTDIR=out-7.2
+          fi
           echo "$KV" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad KV: $KV"; exit 1; }
           echo "KV=$KV" >> "$GITHUB_ENV"
+          echo "OUTDIR=$OUTDIR" >> "$GITHUB_ENV"
           KANO_SHA=$(git ls-remote https://github.com/kanoqwq/mu300-linux.git clean-tf-7.2 | cut -f1)
           [ -n "$KANO_SHA" ] || { echo "cannot reach kano"; exit 1; }
           echo "KANO_SHA=$KANO_SHA" >> "$GITHUB_ENV"
@@ -63,14 +72,14 @@ jobs:
           # mount replaces it for the build, and build.sh verifies our line too
           cat upstream/mu300-mainline.config custom/ksmbd.fragment > combined-mainline.config
           grep -q '^CONFIG_SMB_SERVER=m$' combined-mainline.config
-          docker run --rm -e KV="$KV" -v ksmbd-build:/src -v "$PWD/upstream":/work \
+          docker run --rm -e KV="$KV" -e OUTDIR="$OUTDIR" -v ksmbd-build:/src -v "$PWD/upstream":/work \
             -v "$PWD/combined-mainline.config:/work/mu300-mainline.config:ro" \
             mu300-mainline-build bash /work/build.sh
-          docker run --rm -e KV="$KV" -v ksmbd-build:/src -v "$PWD/upstream":/work \
+          docker run --rm -e KV="$KV" -e OUTDIR="$OUTDIR" -v ksmbd-build:/src -v "$PWD/upstream":/work \
             mu300-mainline-build bash /work/build-modules.sh > /dev/null
-          test -s upstream/out/modules/ksmbd.ko || { echo "ksmbd.ko was not built" >&2; exit 1; }
+          test -s "upstream/$OUTDIR/modules/ksmbd.ko" || { echo "ksmbd.ko was not built" >&2; exit 1; }
           mkdir -p rel
-          cp upstream/out/modules/ksmbd.ko rel/
+          cp "upstream/$OUTDIR/modules/ksmbd.ko" rel/
           strings rel/ksmbd.ko | grep -m1 '^vermagic=' | cut -d' ' -f1 > rel/vermagic.txt || true
           cat rel/vermagic.txt
           ls -la rel/
