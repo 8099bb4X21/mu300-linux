@@ -61,6 +61,8 @@ echo "==> OpenWrt rootfs ($rel modules included)"
 MU300_GPU=0 MU300_INPUTS="$IN" MU300_MAINLINE_OUT="$UO" MU300_LUCI_PLUGIN_SRC="$PLUGIN" \
   MU300_VERSION="$VERSION-tf-$KERNEL" \
   sh "$TOP/openwrt/build-rootfs.sh" "$(basename "$ROOTFS")"
+# own: post-process the built rootfs (extra packages, defaults) when asked
+[ -z "${MU300_POST_ROOTFS:-}" ] || sh "$MU300_POST_ROOTFS" "$ROOTFS"
 for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
     ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd \
     ./opt/mu300/bin/mu300-usb ./etc/init.d/mu300-post ./etc/init.d/mu300-atd \

@@ -19,8 +19,10 @@ kano 的配置文件一个字不动，它自带的校验会连我们的行一起
 以前 fork 保留的功能，在这条线上的去处：
 - ksmbd：本 CI 编内核模块 + 设备上装用户态（`apk add ksmbd-server`）。
   kano 和上游都没开它。
-- wsdd2 预装：软件源里有，设备上一行命令（`apk add wsdd2`），不用编。
-- 中文/时区默认：kano 故意不注册 zh_cn（保浏览器自动语言）；
-  设备上进 LuCI 或 uci 设一次即可。
-- 默认密码：kano 安装器是密码中立的（不管密码）；装完设备上
-  `passwd` 改一次即可。
+- wsdd2 预装：TF 包烘焙时装好（`custom/post-rootfs.sh`，跑在
+  `tools/build-openwrt-tf-magisk.sh` 的 `MU300_POST_ROOTFS` 钩子上，
+  该钩子是本 fork 对 kano 脚本唯一的 3 行改动）。
+- 中文/时区/默认密码：同上，在烘焙里一次写好（kano 安装器不管密码；
+  密码只在全新安装生效，更新保留旧密码）。
+- TF 整包（6.18 + 7.2）：`tf-magisk-build.yml` 全流程重打，需要
+  私有设备料仓。触发同上（源码一动就编）。

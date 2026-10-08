@@ -1,0 +1,145 @@
+name: TF Magisk zips
+
+# Full TF-card Magisk zips (OpenWrt, kernels 6.18 + 7.2) the kano way:
+# vendor 5.4 modules, mainline kernel (+ our ksmbd fragment), rootfs
+# (+ our post-process), boot image, staged zip. kano cuts no releases,
+# so this triggers on SOURCE changes; inputs come from our private
+# device-inputs repo (firmware, dumps, android subset).
+on:
+  push:
+    branches: [tf-7.2]
+    paths: ['upstream/**', 'openwrt/**', 'tools/**', 'boot/**', 'custom/**', '.github/workflows/tf-magisk-build.yml']
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tf-build-${{ matrix.line }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        line: ['6.18', '7.2']
+    env:
+      UPSTREAM_REPO: kanoqwq/mu300-linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tf-7.2
+          fetch-depth: 0
+
+      - name: Fetch device inputs (private)
+        env:
+          INPUTS_SSH_KEY: ${{ secrets.INPUTS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$INPUTS_SSH_KEY" > ~/.ssh/inputs_key
+          chmod 600 ~/.ssh/inputs_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/inputs_key -o StrictHostKeyChecking=no"
+          git clone --depth 1 git@github.com:8099bb4X21/mu300-device-inputs.git device-inputs
+          rm -f ~/.ssh/inputs_key
+          ls device-inputs/
+
+      - name: Resolve versions and skip check
+        id: skip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ matrix.line }}" = 6.18 ]; then
+            KV=6.18.54
+            OUTDIR=out
+          else
+            KV=$(curl -fsSL https://www.kernel.org/releases.json | python3 -c 'import json,sys;r=json.load(sys.stdin)["releases"];print(next(x["version"] for x in r if x["version"].startswith("7.2.")))')
+            OUTDIR=out-7.2
+          fi
+          echo "$KV" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad KV: $KV"; exit 1; }
+          echo "KV=$KV" >> "$GITHUB_ENV"
+          echo "OUTDIR=$OUTDIR" >> "$GITHUB_ENV"
+          echo "LINE=${{ matrix.line }}" >> "$GITHUB_ENV"
+          HEAD_SHA=$(git rev-parse HEAD)
+          echo "HEAD_SHA=$HEAD_SHA" >> "$GITHUB_ENV"
+          INPUTS_SHA=$(git -C device-inputs rev-parse HEAD)
+          echo "INPUTS_SHA=$INPUTS_SHA" >> "$GITHUB_ENV"
+          SKIP=
+          for t in $(gh release list --limit 100 --json tagName -q '.[].tagName | select(startswith("own-tf-"))'); do
+            body=$(gh release view "$t" --json body -q .body)
+            case "$body" in *"$KV"*"$HEAD_SHA"*"$INPUTS_SHA"*) SKIP="$t"; break;; esac
+          done
+          if [ -n "$SKIP" ]; then echo "up to date: $SKIP"; echo "skip=yes" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Static tools (busybox, logdw, bt-init, keys)
+        if: steps.skip.outputs.skip != 'yes'
+        run: |
+          mkdir -p work/tools/logdw work/tools/bt-init work/tools/keys
+          sudo apt-get update -qq
+          apt-get download busybox-static >/dev/null
+          dpkg-deb -x busybox-static_*.deb bbdir
+          cp bbdir/bin/busybox work/busybox
+          chmod +x work/busybox
+          ./work/busybox --list | grep -qx -e mdev -e losetup -e switch_root -e telnetd || \
+            { echo "busybox missing required applets" >&2; ./work/busybox --list | head -5; exit 1; }
+          gcc -O2 -static -o work/tools/logdw/logdw tools/logdw/logdw.c
+          gcc -O2 -static -o work/tools/bt-init/mu300-bt-init tools/bt-init/mu300-bt-init.c
+          gcc -O2 -static -o work/tools/keys/mu300-keys tools/keys/mu300-keys.c
+          file work/busybox | grep -q "ARM aarch64" || { echo "busybox is not AArch64" >&2; exit 1; }
+          for t in work/tools/logdw/logdw work/tools/bt-init/mu300-bt-init work/tools/keys/mu300-keys; do
+            file "$t" | grep -q "ARM aarch64" || { echo "$t is not AArch64" >&2; exit 1; }
+          done
+          cp -r device-inputs/dumps device-inputs/firmware device-inputs/android-subset work/
+
+      - name: Vendor 5.4 modules
+        if: steps.skip.outputs.skip != 'yes'
+        run: |
+          MU300_KERNEL_OUT="$PWD/work/out" sh kernel/build-all.sh
+          for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
+            [ -s "work/out/modules/$f" ] || { echo "missing 5.4 module $f" >&2; exit 1; }
+          done
+
+      - name: Mainline kernel and modules (+ ksmbd fragment)
+        if: steps.skip.outputs.skip != 'yes'
+        run: |
+          docker build -t mu300-mainline-build upstream/
+          docker volume rm -f tf-mainline >/dev/null 2>&1 || true
+          docker volume create tf-mainline
+          cat upstream/mu300-mainline.config custom/ksmbd.fragment > combined-mainline.config
+          grep -q '^CONFIG_SMB_SERVER=m$' combined-mainline.config
+          docker run --rm -e KV="$KV" -e OUTDIR="$OUTDIR" -v tf-mainline:/src -v "$PWD/upstream":/work \
+            -v "$PWD/combined-mainline.config:/work/mu300-mainline.config:ro" \
+            mu300-mainline-build bash /work/build.sh
+          docker run --rm -e KV="$KV" -e OUTDIR="$OUTDIR" -v tf-mainline:/src -v "$PWD/upstream":/work \
+            mu300-mainline-build bash /work/build-modules.sh > /dev/null
+          test -s "upstream/$OUTDIR/modules/ksmbd.ko" || { echo "ksmbd.ko was not built" >&2; exit 1; }
+
+      - name: TF Magisk zip
+        if: steps.skip.outputs.skip != 'yes'
+        run: |
+          mkdir -p out-tf
+          DATE=$(date -u +%Y%m%d)
+          echo "ZIPDATE=$DATE" >> "$GITHUB_ENV"
+          MU300_KERNEL="${{ matrix.line }}" MU300_INPUTS="$PWD/work" \
+            MU300_POST_ROOTFS="$PWD/custom/post-rootfs.sh" \
+            sh tools/build-openwrt-tf-magisk.sh "out-tf/mu300-linux-openwrt-tf-${{ matrix.line }}-$DATE.zip"
+          ls -la out-tf/
+
+      - name: Publish release
+        if: steps.skip.outputs.skip != 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHORT=$(echo "$HEAD_SHA" | cut -c1-7)
+          TAG="own-tf-${{ matrix.line }}-${ZIPDATE}-${SHORT}"
+          (cd out-tf && sha256sum *.zip > SHA256SUMS)
+          cat out-tf/SHA256SUMS
+          gh release create "$TAG" --title "own TF ${{ matrix.line }} ($ZIPDATE)" --notes "kernel: $KV
+          kano state: $HEAD_SHA
+          device inputs: $INPUTS_SHA
+          baked: wsdd2, ksmbd (+tr/zh-cn), aurora/zh_cn/CST-8 defaults, root password preseed, no preset shares
+          flash from Magisk (TF card is formatted)" \
+            out-tf/*.zip out-tf/SHA256SUMS
