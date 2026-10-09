@@ -148,6 +148,8 @@ if ($parts.Count -ne 2) { Die 'could not read the partition table from the devic
 [int64]$OFF = 0; [int64]$SIZE = 0
 [int64]$start = [math]::Floor($lastEnd / 4096 + 1) * 4096 * 512
 foreach ($cand in @($start, 27762098176)) {
+    # Upstream 486856c: do not read a legacy/dynamic superblock past the eMMC.
+    if ($cand -lt 0 -or ($cand + 2048) -gt ($disk * 512)) { continue }
     $m = (SuDo "dd if=/dev/block/mmcblk0 bs=1 skip=$($cand + 1080) count=2 2>/dev/null | od -An -tx1") -replace '\s', ''
     $l = (SuDo "dd if=/dev/block/mmcblk0 bs=1 skip=$($cand + 1144) count=16 2>/dev/null") -replace '\0', ''
     if ($m -eq '53ef' -and $l.Trim() -eq 'mu300root') {
