@@ -22,10 +22,16 @@ add_list system.ntp.server='ntp.tencent.com'
 add_list system.ntp.server='ntp.ntsc.ac.cn'
 UCI
 
+# DHCP 租期：默认 6 天（覆盖 OpenWrt 默认的 12h）。
+uci -q batch <<UCI
+set dhcp.lan.leasetime='6d'
+UCI
+
 # 标记最后写，半途失败下次首启仍会补全。
 uci -q batch <<UCI
 set system.own_defaults=own_defaults
 set system.own_defaults.enabled='1'
 UCI
 uci commit system
+uci commit dhcp
 exit 0
