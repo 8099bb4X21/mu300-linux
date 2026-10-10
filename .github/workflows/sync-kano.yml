@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   sync:
@@ -28,3 +29,8 @@ jobs:
           git checkout tf-7.2
           git merge --no-edit kano/clean-tf-7.2 || { echo 'CONFLICT - fix manually'; exit 1; }
           git push origin tf-7.2
+      - name: Trigger TF build
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run "TF Magisk zips" --ref tf-7.2
