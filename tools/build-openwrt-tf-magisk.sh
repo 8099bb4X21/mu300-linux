@@ -70,6 +70,10 @@ for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
     ./www/luci-static/resources/mu300/refresh.js \
     ./www/luci-static/resources/view/mu300/sms.css \
     ./usr/libexec/unisoc-modem/dashboard-rates \
+    ./usr/libexec/unisoc-modem/lock-apply.sh ./usr/libexec/unisoc-modem/lock-jobs.sh \
+    ./usr/libexec/unisoc-modem/traffic ./usr/libexec/unisoc-modem/traffic-core.uc \
+    ./usr/libexec/unisoc-modem/hotspot ./usr/libexec/unisoc-modem/hotspot.uc \
+    ./www/luci-static/resources/view/mu300/traffic.js ./etc/init.d/unisoc-traffic \
     ./usr/libexec/unisoc-modem/operator.uc ./usr/libexec/unisoc-modem/refresh-config \
     ./www/luci-static/resources/view/mu300/device.js \
     ./usr/libexec/unisoc-modem/device-usb \

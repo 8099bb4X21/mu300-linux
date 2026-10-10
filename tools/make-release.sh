@@ -84,6 +84,10 @@ for f in ./usr/share/luci/menu.d/luci-app-mu300.json ./www/luci-static/resources
     ./www/luci-static/resources/mu300/refresh.js ./www/luci-static/resources/view/mu300/sms.css \
     ./usr/libexec/unisoc-modem/dashboard-rates ./usr/libexec/unisoc-modem/operator.uc \
     ./usr/libexec/unisoc-modem/refresh-config \
+    ./usr/libexec/unisoc-modem/lock-apply.sh ./usr/libexec/unisoc-modem/lock-jobs.sh \
+    ./usr/libexec/unisoc-modem/traffic ./usr/libexec/unisoc-modem/traffic-core.uc \
+    ./usr/libexec/unisoc-modem/hotspot ./usr/libexec/unisoc-modem/hotspot.uc \
+    ./www/luci-static/resources/view/mu300/traffic.js ./etc/init.d/unisoc-traffic \
     ./www/luci-static/resources/view/mu300/device.js ./usr/libexec/unisoc-modem/device-usb \
     ./etc/hotplug.d/net/90-unisoc-usb-host ./etc/hotplug.d/iface/90-unisoc-usb-host \
     ./etc/init.d/unisoc-modem-ui ./usr/lib/lua/luci/i18n/mu300.en.lmo ./usr/lib/lua/luci/i18n/mu300.tr.lmo; do

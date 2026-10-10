@@ -21,7 +21,32 @@ var callAt     = rpc.declare({ object: 'mu300dash', method: 'at', params: [ 'cmd
 var callAtHist = rpc.declare({ object: 'mu300dash', method: 'at_history', expect: { '': {} } });
 var callLockGet = rpc.declare({ object: 'mu300dash', method: 'lock_get', nobatch: true, expect: { '': {} } });
 var callLockFresh = rpc.declare({ object: 'mu300dash', method: 'lock_get', nobatch: true, params: [ 'fresh' ], expect: { '': {} } });
-var callLockSet = rpc.declare({ object: 'mu300dash', method: 'lock_set', params: [ 'kind', 'val' ], expect: { '': {} } });
+var callLockSet = rpc.declare({ object: 'mu300dash', method: 'lock_set', nobatch: true, params: [ 'kind', 'val' ], expect: { '': {} } });
+var callLockStatus = rpc.declare({ object: 'mu300dash', method: 'lock_status', nobatch: true, params: [ 'id' ], expect: { '': {} } });
+function waitLockJob(started, active) {
+	return new Promise(function(resolve, reject) {
+		if (!started || !started.ok || !started.id) { reject(new Error(started && started.error || '网络设置提交失败')); return; }
+		var done = false, next, limit;
+		var finish = function(error, result) {
+			if (done) return;
+			done = true; clearTimeout(limit); clearTimeout(next);
+			if (error) reject(error); else resolve(result);
+		};
+		limit = setTimeout(function() { finish(new Error('应用超时，请刷新确认模组状态')); }, 240000);
+		var check = function() {
+			if (active && !active()) { finish(new Error('页面已关闭')); return; }
+			callLockStatus(started.id).then(function(r) {
+				if (done) return;
+				if (active && !active()) { finish(new Error('页面已关闭')); return; }
+				if (r && r.id === started.id && r.state === 'done' && r.ok) finish(null, r);
+				else if (!r || r.state === 'error') finish(new Error(r && r.error || '网络设置执行失败'));
+				else if (r.id === started.id && (r.state === 'queued' || r.state === 'running')) next = setTimeout(check, 1000);
+				else finish(new Error('无效的操作状态'));
+			}, function() { finish(new Error('无法查询操作结果，请刷新确认模组状态')); });
+		};
+		check();
+	});
+}
 var callSmsList = rpc.declare({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
 var callSmsShow = rpc.declare({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
 var callSmsSend = rpc.declare({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
@@ -33,6 +58,7 @@ var callForwardSet = rpc.declare({ object: 'mu300dash', method: 'forward_set', p
 var callForwardTest = rpc.declare({ object: 'mu300dash', method: 'forward_test', expect: { '': {} } });
 var callTrafficGet = rpc.declare({ object: 'mu300dash', method: 'traffic_get', expect: { '': {} } });
 var callTrafficSet = rpc.declare({ object: 'mu300dash', method: 'traffic_set', params: [ 'payload' ], expect: { '': {} } });
+var callTrafficClear = rpc.declare({ object: 'mu300dash', method: 'traffic_clear', nobatch: true, params: [ 'confirm' ], expect: { '': {} } });
 var callUsbGet = rpc.declare({ object: 'mu300dash', method: 'usb_get', expect: { '': {} } });
 var callUsbSet = rpc.declare({ object: 'mu300dash', method: 'usb_set', params: [ 'kind', 'value', 'scope', 'auto' ], expect: { '': {} } });
 var callUsbNetList = rpc.declare({ object: 'mu300dash', method: 'usb_net_list', expect: { '': {} } });
@@ -42,6 +68,71 @@ var callUsbNetAdd = rpc.declare({ object: 'mu300dash', method: 'usb_net_add', pa
  * standalone package works in any OpenWrt buildroot without po2lmo or extra
  * language packages. Chinese remains the source/fallback language. */
 var DASH_I18N = {
+	'开机角色策略': ['Boot role policy', 'Açılış rolü ilkesi'],
+	'当前共享协议': ['Current tethering protocol', 'Geçerli paylaşım protokolü'],
+	'下次启动协议': ['Protocol on next boot', 'Sonraki açılış protokolü'],
+	'主机模式不使用共享协议': ['No tethering protocol in host mode', 'Ana makine modunda paylaşım protokolü kullanılmaz'],
+	'多个共享协议': ['Multiple tethering protocols', 'Birden çok paylaşım protokolü'],
+	'未能确认': ['Not confirmed', 'Doğrulanamadı'],
+	'设备模式（默认）': ['Device mode (default)', 'Cihaz modu (varsayılan)'],
+	'USB 状态读取失败，请刷新重试': ['Could not read USB status; refresh to retry', 'USB durumu okunamadı; yenileyip tekrar deneyin'],
+	'USB 角色后台切换失败，请重试': ['The background USB role switch failed; please retry', 'Arka planda USB rolü değiştirilemedi; tekrar deneyin'],
+	'启动协议文件与保存设置不一致，请重新保存': ['Boot protocol file differs from saved settings; save again', 'Açılış protokolü dosyası kayıtlı ayarlardan farklı; tekrar kaydedin'],
+	'设置已保存，当前协议不变，重启后生效': ['Settings saved; the current protocol is unchanged until reboot', 'Ayarlar kaydedildi; geçerli protokol yeniden başlatılana kadar değişmez'],
+	'仅保存选择，未启用开机应用': ['Selection saved only; boot application is not enabled', 'Yalnızca seçim kaydedildi; açılışta uygulama etkin değil'],
+	'请求结果未能确认，请刷新后检查，勿重复提交': ['The result could not be confirmed; refresh to check before resubmitting', 'Sonuç doğrulanamadı; tekrar göndermeden önce yenileyip kontrol edin'],
+	'读取 USB 网卡失败，请刷新重试': ['Could not read USB adapters; refresh to retry', 'USB ağ bağdaştırıcıları okunamadı; yenileyip tekrar deneyin'],
+	'无法记录 USB 角色切换结果': ['Could not record the USB role switch result', 'USB rolü değiştirme sonucu kaydedilemedi'],
+	'热点连接可能已中断，请重新连接后确认状态': ['The hotspot connection may have closed; reconnect to check its state', 'Erişim noktası bağlantısı kesilmiş olabilir; durumu kontrol etmek için yeniden bağlanın'],
+	'热点 AP 配置节': ['Hotspot AP configuration section', 'Erişim noktası yapılandırma bölümü'],
+	'留空时匹配 Wi-Fi 网卡；只有一个 AP 时自动选择。多个 AP 无法唯一匹配时必须指定无线配置节名称。': ['Leave empty to match the Wi-Fi interface, or select the only AP. If multiple APs cannot be matched uniquely, specify the wireless section name.', 'Wi-Fi arayüzünü eşleştirmek veya tek AP’yi seçmek için boş bırakın. Birden çok AP benzersiz eşleştirilemiyorsa kablosuz bölüm adını belirtin.'],
+	'热点配置节不存在或不是 AP': ['The hotspot section is missing or is not an AP', 'Erişim noktası bölümü yok veya AP değil'],
+	'存在多个热点，请在适配设置选择目标 AP': ['Multiple hotspots found; select the target AP in adapter settings', 'Birden çok erişim noktası bulundu; uyarlama ayarlarında hedef AP’yi seçin'],
+	'没有配置热点': ['No hotspot is configured', 'Yapılandırılmış erişim noktası yok'],
+	'热点所属无线电无效': ['The hotspot radio is invalid', 'Erişim noktasının radyosu geçersiz'],
+	'热点开关参数无效': ['Invalid hotspot state', 'Geçersiz erişim noktası durumu'],
+	'热点正在应用配置，请稍后重试': ['Hotspot changes are being applied; try again shortly', 'Erişim noktası ayarları uygulanıyor; biraz sonra tekrar deneyin'],
+	'无线配置有未应用更改，请先保存或撤销': ['Wireless settings have pending edits; save or discard them first', 'Kablosuz ayarlarda bekleyen değişiklikler var; önce kaydedin veya iptal edin'],
+	'启用此无线电会影响其他接口，请在无线页面处理': ['Enabling this radio affects other interfaces; use the Wireless page', 'Bu radyoyu açmak diğer arayüzleri etkiler; Kablosuz sayfasını kullanın'],
+	'热点配置写入失败': ['Could not write hotspot settings', 'Erişim noktası ayarları yazılamadı'],
+	'热点配置保存失败': ['Could not save hotspot settings', 'Erişim noktası ayarları kaydedilemedi'],
+	'热点配置已保存，但应用失败，请重试': ['Hotspot settings saved, but applying failed; please retry', 'Erişim noktası ayarları kaydedildi ancak uygulanamadı; tekrar deneyin'],
+	'热点配置应用失败': ['Could not apply hotspot settings', 'Erişim noktası ayarları uygulanamadı'],
+	'热点配置已保存，正在应用': ['Hotspot settings saved; applying changes', 'Erişim noktası ayarları kaydedildi; uygulanıyor'],
+	'清空流量记录': ['Clear traffic records', 'Trafik kayıtlarını temizle'],
+	'清空所有流量记录？': ['Clear all traffic records?', 'Tüm trafik kayıtları temizlensin mi?'],
+	'将清空今日、每月历史和套餐周期校准，并从当前网卡计数重新开始。已保存的套餐额度、结算日、计量方式和统计网卡保持不变。此操作不可撤销。': ['This clears today’s usage, monthly history and cycle calibration, then starts again from the current interface counters. Saved quotas, billing day, counting direction and interface stay unchanged. This cannot be undone.', 'Bugünkü kullanım, aylık geçmiş ve dönem kalibrasyonu silinir; mevcut arayüz sayaçlarından yeniden başlanır. Kayıtlı kotalar, fatura günü, sayım yönü ve arayüz değişmez. Bu işlem geri alınamaz.'],
+	'正在清空流量记录…': ['Clearing traffic records…', 'Trafik kayıtları temizleniyor…'],
+	'流量记录已清空': ['Traffic records cleared', 'Trafik kayıtları temizlendi'],
+	'清空失败': ['Could not clear records', 'Kayıtlar temizlenemedi'],
+	'请先确认清空操作': ['Please confirm before clearing records', 'Kayıtları temizlemeden önce onaylayın'],
+	'仅清除本地统计，不会重置运营商账单，也不会断开网络。': ['Only local statistics are cleared. This does not reset carrier billing or disconnect the network.', 'Yalnızca yerel istatistikler silinir. Operatör faturası sıfırlanmaz ve ağ bağlantısı kesilmez.'],
+	'已应用并核对模组状态': ['Applied and verified against the modem', 'Uygulandı ve modemden doğrulandı'],
+	'开机自动应用设置已保存': ['Boot auto-apply preference saved', 'Açılışta otomatik uygulama tercihi kaydedildi'],
+	'网络设置提交失败': ['Could not submit network settings', 'Ağ ayarları gönderilemedi'],
+	'网络设置执行失败': ['Network settings failed', 'Ağ ayarları uygulanamadı'],
+	'应用超时，请刷新确认模组状态': ['Operation timed out; refresh to check the actual modem state', 'İşlem zaman aşımına uğradı; modem durumunu denetlemek için yenileyin'],
+	'无法查询操作结果，请刷新确认模组状态': ['Cannot query the result; refresh to check the actual modem state', 'Sonuç sorgulanamıyor; modem durumunu denetlemek için yenileyin'],
+	'无效的操作状态': ['Invalid operation status', 'Geçersiz işlem durumu'],
+	'页面已关闭': ['Page closed', 'Sayfa kapatıldı'],
+	'操作结果已过期或不存在': ['Operation result expired or unavailable', 'İşlem sonucu süresi dolmuş veya mevcut değil'],
+	'设置进程已中断，请刷新确认模组状态': ['Settings worker stopped; refresh to check the modem state', 'Ayar işlemi durdu; modem durumunu denetlemek için yenileyin'],
+	'另一项网络设置仍在执行，请稍后重试': ['Another network setting is in progress; try again shortly', 'Başka bir ağ ayarı uygulanıyor; biraz sonra tekrar deneyin'],
+	'无效的频段列表': ['Invalid band list', 'Geçersiz bant listesi'],
+	'所选频段不受此模组支持': ['Selected bands are not supported by this modem', 'Seçilen bantlar bu modem tarafından desteklenmiyor'],
+	'所选频段无法用当前模组指令编码': ['Selected bands cannot be encoded by this modem command', 'Seçilen bantlar bu modem komutuyla kodlanamıyor'],
+	'无效的小区参数': ['Invalid cell parameters', 'Geçersiz hücre parametreleri'],
+	'无效的网络设置': ['Invalid network setting', 'Geçersiz ağ ayarı'],
+	'模组拒绝了设置': ['The modem rejected the setting', 'Modem ayarı reddetti'],
+	'设置保存失败': ['Could not save settings', 'Ayarlar kaydedilemedi'],
+	'无法读取当前 SIM 模式，未发送设置': ['Cannot read the current SIM mode; no settings sent', 'Mevcut SIM modu okunamıyor; ayar gönderilmedi'],
+	'无法读取当前小区锁定，未发送设置': ['Cannot read current cell locks; no settings sent', 'Mevcut hücre kilitleri okunamıyor; ayar gönderilmedi'],
+	'模组回读与请求设置不一致，未保存': ['Modem readback does not match; setting not saved', 'Modem geri okuması eşleşmiyor; ayar kaydedilmedi'],
+	'设置已写入，但射频未恢复，请检查模组状态': ['Setting written, but radio did not recover; check the modem', 'Ayar yazıldı ancak radyo geri gelmedi; modemi denetleyin'],
+	'协议栈重启后设置不一致，未保存': ['Setting changed after the protocol restart; not saved', 'Protokol yeniden başlatılınca ayar değişti; kaydedilmedi'],
+	'协议栈重启被拒绝，请检查模组状态': ['Protocol restart rejected; check the modem state', 'Protokolün yeniden başlatılması reddedildi; modem durumunu denetleyin'],
+	'正在确认设置结果…': ['Verifying the setting…', 'Ayar doğrulanıyor…'],
+	'等待模组能力数据': ['Waiting for modem capabilities', 'Modem yetenekleri bekleniyor'],
 	'本机号码': ['Phone number', 'Telefon numarası'],
 	'流量池': ['Data plan', 'Veri paketi'],
 	'今日流量': ['Today’s data', 'Bugünkü veri'],
@@ -204,6 +295,26 @@ var DASH_I18N = {
 	'添加 USB 网卡到 LAN？': ['Add USB adapter to LAN?', 'USB bağdaştırıcısı LAN’a eklensin mi?'],
 	'这会保存网桥配置并重新加载网络，现有连接可能短暂中断。': ['This saves the bridge configuration and reloads networking; existing connections may briefly drop.', 'Bu işlem köprü yapılandırmasını kaydedip ağı yeniden yükler; mevcut bağlantılar kısa süreli kesilebilir.'],
 	'正在添加 USB 网卡…': ['Adding USB adapter…', 'USB bağdaştırıcısı ekleniyor…'],
+	'自动将空闲 USB 网卡加入 LAN': ['Automatically add unused USB adapters to LAN', 'Boştaki USB bağdaştırıcılarını otomatik olarak LAN’a ekle'],
+	'保存策略': ['Save policy', 'İlkeyi kaydet'],
+	'默认关闭。启用后在网卡接入或 LAN 启动时自动加入空闲 USB 有线网卡；不会接管其他网络、USB Wi-Fi 或本机共享接口。关闭不会删除已保存端口。': ['Off by default. On adapter attachment or LAN startup, unused USB Ethernet adapters are added automatically. Other networks, USB Wi-Fi and local tethering interfaces are excluded. Disabling does not remove saved ports.', 'Varsayılan olarak kapalıdır. Bağdaştırıcı bağlandığında veya LAN başladığında boştaki USB Ethernet bağdaştırıcıları otomatik eklenir. Diğer ağlar, USB Wi-Fi ve yerel paylaşım arayüzleri hariç tutulur. Kapatmak kayıtlı bağlantı noktalarını silmez.'],
+	'仅主机模式可用。刷新只尝试启用未被其他网络占用的网卡；现有网卡可手动添加到 LAN。': ['Host mode only. Refresh only brings up adapters not owned by other networks; existing adapters can be added to LAN manually.', 'Yalnızca ana makine modunda. Yenileme yalnızca başka ağlara ait olmayan bağdaştırıcıları açar; mevcut bağdaştırıcılar LAN’a elle eklenebilir.'],
+	'保存 USB 网卡自动加入策略？': ['Save USB adapter auto-add policy?', 'USB bağdaştırıcısı otomatik ekleme ilkesi kaydedilsin mi?'],
+	'空闲 USB 有线网卡会成为 LAN 端口，向所连接网络提供局域网访问。仅连接可信网络；已连接的网卡可手动添加。': ['Unused USB Ethernet adapters will become LAN ports and grant LAN access to the connected network. Connect trusted networks only; already connected adapters can be added manually.', 'Boştaki USB Ethernet bağdaştırıcıları LAN bağlantı noktası olur ve bağlı ağa LAN erişimi sağlar. Yalnızca güvenilir ağları bağlayın; zaten bağlı bağdaştırıcılar elle eklenebilir.'],
+	'停止自动加入新网卡；已保存的 LAN 端口及热插拔恢复保持不变。': ['Stop adding new adapters automatically; saved LAN ports and hotplug recovery remain unchanged.', 'Yeni bağdaştırıcıları otomatik eklemeyi durdurur; kayıtlı LAN bağlantı noktaları ve yeniden bağlanma korunur.'],
+	'USB 网卡自动加入策略已保存': ['USB adapter auto-add policy saved', 'USB bağdaştırıcısı otomatik ekleme ilkesi kaydedildi'],
+	'驱动': ['Driver', 'Sürücü'],
+	'链路未连接': ['Link disconnected', 'Bağlantı yok'],
+	'当前归属': ['Assigned to', 'Atandığı ağ'],
+	'未分配': ['Unassigned', 'Atanmamış'],
+	'已被其他网络占用': ['In use by another network', 'Başka bir ağ tarafından kullanılıyor'],
+	'已保存，等待接入网桥': ['Saved; waiting for bridge attachment', 'Kaydedildi; köprüye bağlanması bekleniyor'],
+	'不可添加': ['Unavailable', 'Eklenemez'],
+	'USB 网卡配置正忙，请稍后重试': ['USB adapter configuration is busy; try again later', 'USB bağdaştırıcısı yapılandırması meşgul; daha sonra tekrar deneyin'],
+	'配置有未保存更改，请先处理后重试': ['Resolve pending configuration changes before retrying', 'Tekrar denemeden önce bekleyen yapılandırma değişikliklerini çözün'],
+	'无法保存 USB 网卡自动加入设置': ['Could not save USB adapter auto-add settings', 'USB bağdaştırıcısı otomatik ekleme ayarları kaydedilemedi'],
+	'无法确认网卡归属，请稍后重试': ['Could not determine adapter ownership; try again later', 'Bağdaştırıcının ait olduğu ağ belirlenemedi; daha sonra tekrar deneyin'],
+	'网卡已被其他网络占用，不可加入 LAN': ['Adapter belongs to another network and cannot join LAN', 'Bağdaştırıcı başka bir ağa ait ve LAN’a eklenemez'],
 	'添加失败：': ['Add failed: ', 'Ekleme başarısız: '],
 	'切换失败：': ['Switch failed: ', 'Değiştirme başarısız: '],
 	'保存失败：': ['Save failed: ', 'Kaydetme başarısız: '],
@@ -1003,15 +1114,18 @@ function toast(text, opts) {
 function busy(btn, on) {
 	if (!btn || !btn.classList) return;
 	if (on === undefined) on = !btn.classList.contains('busy');
-	if (on && !btn.classList.contains('busy')) {
+	if (on) {
 		btn.classList.add('busy');
-		var s = document.createElement('i');
-		s.className = 'mud-spin';
-		btn.insertBefore(s, btn.firstChild);
-	} else if (!on && btn.classList.contains('busy')) {
+		if (!btn.querySelector('.mud-spin')) {
+			var s = document.createElement('i');
+			s.className = 'mud-spin';
+			btn.insertBefore(s, btn.firstChild);
+		}
+	} else {
+		// Repainting a button may replace className without removing its children.
+		// Always clean up the spinner, even when the busy class was already lost.
 		btn.classList.remove('busy');
-		var sp = btn.querySelector('.mud-spin');
-		if (sp) sp.remove();
+		Array.prototype.forEach.call(btn.querySelectorAll('.mud-spin'), function(sp) { sp.remove(); });
 	}
 }
 
@@ -1171,11 +1285,13 @@ function choiceBox(title, message, choices, opts) {
 return baseclass.extend({
 	callRates: callRates, callCells: callCells, mergeCell: mergeCell, callStatus: callStatus, callSignal: callSignal, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
 	callLockGet: callLockGet, callLockFresh: callLockFresh, callLockSet: callLockSet,
+	callLockStatus: callLockStatus, waitLockJob: waitLockJob,
 	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	callForwardGet: callForwardGet, callForwardStatus: callForwardStatus,
 	callForwardSet: callForwardSet, callForwardTest: callForwardTest,
 	callTrafficGet: callTrafficGet, callTrafficSet: callTrafficSet,
+	callTrafficClear: callTrafficClear,
 	callUsbGet: callUsbGet, callUsbSet: callUsbSet,
 	callUsbNetList: callUsbNetList, callUsbNetAdd: callUsbNetAdd,
 	carrierName: carrierName, qLabel: qLabel, qCol: qCol, qScore: qScore,

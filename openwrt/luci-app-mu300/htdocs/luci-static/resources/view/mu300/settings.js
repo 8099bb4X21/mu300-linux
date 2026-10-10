@@ -46,6 +46,10 @@ return view.extend({
 		o.placeholder = 'br-lan';
 		o = s.option(form.Value, 'wifi_device', t('Wi-Fi 网卡'));
 		o.placeholder = 'wlan0';
+		o = s.option(form.Value, 'wifi_iface', t('热点 AP 配置节'));
+		o.placeholder = 'ap0';
+		o.datatype = 'uciname';
+		o.description = t('留空时匹配 Wi-Fi 网卡；只有一个 AP 时自动选择。多个 AP 无法唯一匹配时必须指定无线配置节名称。');
 		o = s.option(form.Value, 'usb_device', t('USB 网卡'));
 		o.placeholder = 'usb0';
 

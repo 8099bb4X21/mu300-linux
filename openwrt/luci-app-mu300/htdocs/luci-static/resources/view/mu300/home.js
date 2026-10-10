@@ -82,7 +82,7 @@ return view.extend({
 
 	unload: function() {
 		this._disposed = true;
-		clearTimeout(this._lockTimer);
+		if (this._lockToast) this._lockToast.close();
 		if (this._stopStatus) this._stopStatus();
 		if (this._stopRates) this._stopRates();
 	},
@@ -266,14 +266,20 @@ return view.extend({
 
 		/* 统一反馈：按钮转圈（M.busy）+ 顶部 toast，与锁定/短信页同一框架 */
 		var act = function(op, arg, note, btn) {
+			if (op === 'wifi') { if (self._wifiBusy) return; self._wifiBusy = true; btn.disabled = true; }
 			M.busy(btn, true);
 			M.toast(note || ('正在执行 ' + op + ' …'), { type: 'busy' });
 			return L.resolveDefault(M.callAct(op, arg)).then(function(r) {
 				r = r || {};
 				M.busy(btn, false);
-				M.toast(r.ok ? ((r.started ? '已后台执行：' : '已执行：') + (r.op || op)) : ('失败：' + (r.error || '未知错误')),
+				if (op === 'wifi' && r.ok == null) {
+					M.toast('热点连接可能已中断，请重新连接后确认状态', {type:'info'}); return;
+				}
+				M.toast(r.ok ? (r.pending ? '热点配置已保存，正在应用' : ((r.started ? '已后台执行：' : '已执行：') + (r.op || op))) : ('失败：' + (r.error || '未知错误')),
 					{ type: r.ok ? 'success' : 'error' });
-			}, function() { M.busy(btn, false); M.toast('调用失败', { type: 'error' }); });
+			}, function() { M.busy(btn, false); M.toast('调用失败', { type: 'error' }); }).finally(function() {
+				if (op === 'wifi') { self._wifiBusy = false; btn.disabled = false; }
+			});
 		};
 		q('btn-data').onclick = function() {
 			var up = self.lastInfo && self.lastInfo.wan && self.lastInfo.wan.up;
@@ -288,6 +294,8 @@ return view.extend({
 			).then(function(go) { if (go) act('radio', on ? 'off' : 'on', null, btn); });
 		};
 		q('btn-wifi').onclick = function() {
+			var wifi = self.lastInfo && self.lastInfo.wifi;
+			if (!wifi || wifi.available === 0 || wifi.pending || self._wifiBusy) return;
 			var on = self.lastInfo && self.lastInfo.wifi && self.lastInfo.wifi.up;
 			act('wifi', on ? 'off' : 'on', null, this);
 		};
@@ -323,15 +331,20 @@ return view.extend({
 			var key = btn.getAttribute('data-lock');
 			M.confirmBox('锁定小区 ' + key.replace(':', ' ') + '?', '协议栈会重启（SFUN），蜂窝断开约半分钟。', { danger: true })
 				.then(function(go) {
-				if (!go) return;
+				if (!go || self._disposed || self._locking) return;
+				self._locking = true;
 				M.busy(btn, true);
-			M.toast('正在后台锁定 ' + key + '，约半分钟', { type: 'busy' });
-			L.resolveDefault(M.callLockSet('cell', key)).then(function(r) {
-				r = r || {};
-				M.busy(btn, false);
-					M.toast(r.ok ? '已后台锁定 ' + key + '，稍后自动刷新状态' : '锁定失败：' + (r.error || '未知错误'),
-						{ type: r.ok ? 'success' : 'error' });
-					self._lockTimer = setTimeout(function() { self.refreshLock(); }, 35000);
+				self._lockToast = M.toast('正在确认设置结果…', { type: 'busy' });
+				M.callLockSet('cell', key).then(function(r) {
+					return M.waitLockJob(r, function() { return !self._disposed; });
+				}).then(function() {
+					if (!self._disposed) M.toast('已应用并核对模组状态', { type: 'success' });
+				}).catch(function(error) {
+					if (!self._disposed) M.toast('锁定失败：' + (error.message || error), { type: 'error' });
+				}).finally(function() {
+					self._locking = false; M.busy(btn, false);
+					if (self._lockToast) self._lockToast.close();
+					self.refreshLock();
 				});
 			});
 		});
@@ -584,7 +597,10 @@ return view.extend({
 		var b;
 		b = M.v('btn-data'); b.className = 'mud-btn' + (w.up ? ' on' : ''); b.textContent = '数据连接';
 		b = M.v('btn-radio'); b.className = 'mud-btn' + (c && c.cfun === 1 ? ' on' : ''); b.textContent = '蜂窝射频';
-		b = M.v('btn-wifi'); b.className = 'mud-btn' + (wf.up ? ' on' : ''); b.textContent = 'Wi-Fi 热点';
+		b = M.v('btn-wifi'); b.classList.toggle('on', !!wf.up);
+		if (!this._wifiBusy) b.textContent = 'Wi-Fi 热点';
+		b.disabled = !!this._wifiBusy || wf.available === 0 || !!wf.pending;
+		b.title = M.translate(wf.error || (wf.pending ? '热点正在应用配置，请稍后重试' : ''));
 		M.localize(this._root);
 	}
 });

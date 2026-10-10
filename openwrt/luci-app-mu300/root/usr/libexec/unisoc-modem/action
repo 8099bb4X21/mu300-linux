@@ -59,13 +59,7 @@ case "${1:-}:${2:-}" in
         ok "data down"
         ;;
     wifi:on|wifi:off)
-        # persistent through reboots: the uci flag, not just a runtime wifi down
-        case $2 in on) d=0 ;; off) d=1 ;; esac
-        [ -n "${d:-}" ] || { fail "wifi $2" "need on or off"; exit 1; }
-        uci -q set wireless.@wifi-device[0].disabled=$d
-        uci -q commit wireless
-        case $2 in on) wifi up ;; off) wifi down ;; esac >/dev/null 2>&1
-        ok "wifi $2"
+        exec "${MU300_DASH_BIN:-/usr/libexec/unisoc-modem}/hotspot" "$2"
         ;;
     modem-reset:)
         if [ -x /opt/mu300/bin/mobile-data ]; then

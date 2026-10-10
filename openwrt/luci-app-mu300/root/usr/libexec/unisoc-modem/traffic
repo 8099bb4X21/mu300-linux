@@ -23,7 +23,7 @@ function atomic(path, value) {
     fs.chmod(tmp, 384);
     return fs.rename(tmp, path);
 }
-let db = read_json(RUN + '/state.json') ?? read_json(BASE + '/state.json') ?? core.fresh(time());
+let db = core.restore(read_json(RUN + '/state.json'), read_json(BASE + '/state.json'), time());
 if (db.version != 1 || type(db.days) != 'object' || type(db.months) != 'object')
     die('Unsupported traffic database\n');
 db.config = core.config(db.config);
@@ -60,9 +60,10 @@ function view(now) {
 }
 function checkpoint(force) {
     let now = time();
-    if (!atomic(RUN + '/state.json', db)) storage_error = true;
+    let ram_ok = atomic(RUN + '/state.json', db);
+    if (!ram_ok) storage_error = true;
     if (force || now - saved_at >= 60 || now < saved_at) {
-        if (atomic(BASE + '/state.json', db)) { saved_at = now; storage_error = false; }
+        if (atomic(BASE + '/state.json', db)) { saved_at = now; storage_error = !ram_ok; }
         else storage_error = true;
     }
     atomic(RUN + '/view.json', view(now));
@@ -86,6 +87,20 @@ function get_data() {
 }
 const obj = bus.publish(BUS, {
     get: { call: function(req) { return get_data(); } },
+    clear: { args: { confirm: false }, call: function(req) {
+        // Cancelled/unconfirmed requests do not sample or write anything.
+        if (req.args?.confirm !== true) return { ok: 0, error: 'confirmation_required' };
+        let now = time(), next = core.clear_records(db, snapshot(now), now);
+        // Single event-loop transaction: publish neither RAM state nor the new
+        // in-memory ledger until the durable replacement succeeds.
+        if (!atomic(BASE + '/state.json', next)) {
+            storage_error = true;
+            return { ok: 0, error: 'storage_failed' };
+        }
+        db = next; saved_at = now; storage_error = false;
+        checkpoint(false);
+        return { ok: 1, data: get_data() };
+    } },
     set: { args: { payload: '' }, call: function(req) {
         let input;
         try {
@@ -95,12 +110,14 @@ const obj = bus.publish(BUS, {
             if (input.used_gb != null && time() < 1704067200) return { ok: 0, error: 'clock_unsynced' };
         } catch (e) { return { ok: 0, error: 'invalid_config' }; }
         sample(false);
-        let previous = db.config, adjustment = db.adjustment, last = db.last;
+        let previous = db.config, adjustment = db.adjustment, last = db.last, revision = db.revision;
         try { core.update_config(db, input, time()); }
         catch (e) { return { ok: 0, error: 'invalid_config' }; }
+        db.revision = (db.revision ?? 0) + 1;
         // Persist the full transaction before acknowledging changed settings.
         if (!atomic(BASE + '/state.json', db)) {
             db.config = previous; db.adjustment = adjustment; db.last = last;
+            db.revision = revision;
             storage_error = true;
             return { ok: 0, error: 'storage_failed' };
         }

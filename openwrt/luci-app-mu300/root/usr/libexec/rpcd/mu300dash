@@ -205,20 +205,14 @@ m_at_history() {
 }
 
 m_lock_set() {
-    local kind val q=0
+    local kind val
     kind=$(inp '@.kind')
     val=$(inp '@.val')
     case "$kind" in
         mode|endc|lte|nr|cell|auto_apply) ;;
         *) printf '{"ok":0,"error":"unknown lock kind"}\n'; return ;;
     esac
-    # applying restarts the protocol stack (SFUN 5 -> 4): half a minute without
-    # cellular - exactly the thing that must never run inside a request
-    # queued=1 tells the page another apply is still running (SFUN restart);
-    # the new one waits for the modem and the page can say so
-    [ -d /run/unisoc-modem-lock-apply ] && q=1
-    setsid "$DASH/lock" apply "$kind" "$val" >/dev/null 2>&1 &
-    printf '{"ok":1,"started":1,"queued":%d,"op":"lock %s=%s"}\n' "$q" "$kind" "$val"
+    "$DASH/lock" start "$kind" "$val"
 }
 
 # --------------------------------------------------------------------- SMS
@@ -345,6 +339,7 @@ do_list() {
 	"at_history": { },
 	"lock_get": { "fresh": "String" },
 	"lock_set": { "kind": "String", "val": "String" },
+	"lock_status": { "id": "String" },
 	"sms_list": { "page": "String" },
 	"sms_show": { "id": "String" },
 	"sms_send": { "num": "String", "text": "String" },
@@ -356,6 +351,7 @@ do_list() {
 	"forward_test": { },
 	"traffic_get": { },
 	"traffic_set": { "payload": "String" },
+	"traffic_clear": { "confirm": false },
 	"usb_get": { },
 	"usb_set": { "kind": "String", "value": "String", "scope": "String", "auto": "String" },
 	"usb_net_list": { },
@@ -403,6 +399,7 @@ call)
             fi
             ;;
         lock_set)   run_m lock_set   'm_lock_set' ;;
+        lock_status) "$DASH/lock" status "$(inp '@.id')" ;;
         sms_list)   run_m sms_list   'm_sms_list' ;;
         sms_show)   run_m sms_show   'm_sms_show' ;;
         sms_send)   run_m sms_send   'm_sms_send' ;;
@@ -423,7 +420,15 @@ call)
             ubus -t 3 call unisoc.traffic get 2>/dev/null || printf '{"error":"traffic_unavailable"}\n'
             ;;
         traffic_set)
-            ubus -t 5 call unisoc.traffic set "$INPUT" 2>/dev/null || printf '{"ok":0,"error":"traffic_unavailable"}\n'
+            # Do not forward the browser session into the private service.
+            params=$(printf '%s' "$INPUT" | ucode -e 'import * as fs from "fs"; let i=json(fs.readfile("/dev/stdin")); print(sprintf("%J", {payload:i.payload}));' 2>/dev/null) || params='{}'
+            ubus -t 5 call unisoc.traffic set "$params" 2>/dev/null || printf '{"ok":0,"error":"traffic_unavailable"}\n'
+            ;;
+        traffic_clear)
+            # Forward only the validated argument, not LuCI's ubus_rpc_session:
+            # the internal service is intentionally not exposed by the UI ACL.
+            case $(inp '@.confirm') in true) confirm=true ;; *) confirm=false ;; esac
+            ubus -t 5 call unisoc.traffic clear "{\"confirm\":$confirm}" 2>/dev/null || printf '{"ok":0,"error":"traffic_unavailable"}\n'
             ;;
         usb_get)    run_m usb_get    '"$DASH/device-usb" get' ;;
         usb_set)
@@ -431,6 +436,7 @@ call)
             case $kind in
                 role) run_m usb_set:role '"$DASH/device-usb" set-role "$value" "$auto"' ;;
                 net)  run_m usb_set:net  '"$DASH/device-usb" set-net "$value" "$scope" "$auto"' ;;
+                lan-auto) run_m usb_set:lan-auto '"$DASH/device-usb" set-lan-auto "$value"' ;;
                 *)    printf '{"ok":0,"error":"unknown USB setting"}\n' ;;
             esac ;;
         usb_net_list) run_m usb_net_list '"$DASH/device-usb" net-list' ;;

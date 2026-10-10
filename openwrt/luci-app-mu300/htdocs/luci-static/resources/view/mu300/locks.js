@@ -12,8 +12,6 @@
  * 邻区表每行带「锁定」按钮，与主页共用 M.neighborRows。 */
 
 var MODES = [ [ 'auto', '自动' ], [ '4g', '仅 4G' ], [ 'sa', '5G SA' ], [ 'nsa', '5G NSA' ] ];
-var NR_CAND = [ 1, 5, 6, 8, 28, 41, 78 ];   /* 本机 SP5GCMDS 实测；LTE 无能力查询命令，用固定表 */
-var LTE_CAND = [ 1, 3, 5, 8, 34, 38, 39, 40, 41 ];
 
 return view.extend({
 	load: function() { return Promise.resolve(); },
@@ -100,7 +98,7 @@ return view.extend({
 	wire: function(root) {
 		var self = this;
 		this.lockSel = { nr: {}, lte: {} };
-		this.lockCand = { nr: NR_CAND, lte: LTE_CAND };
+		this.lockCand = { nr: [], lte: [] };
 		this.Q = function(id) { return root.querySelector('#mud-' + id); };
 
 		/* 主题化确认框替代浏览器 confirm；确认后再进入实际执行 */
@@ -113,6 +111,8 @@ return view.extend({
 			if (self._disposed) return; if (go) applyNow(kind, val, what, opts); });
 		};
 		var applyNow = function(kind, val, what, opts) {
+			if (self._applying) { self.note('另一项网络设置仍在执行，请稍后重试', 'info'); return; }
+			self._applying = true;
 			var btn = opts.btn;
 			if (opts.optimistic) opts.optimistic();   /* 按钮立刻切到目标态，回读负责校正 */
 			M.busy(btn, true);   /* 在 optimistic 之后：它可能重置按钮的 className */
@@ -121,23 +121,15 @@ return view.extend({
 			if (self._disposed) return;
 				r = r || {};
 				if (!r.ok) {
+					self._applying = false;
 					M.busy(btn, false);
 					self.note('失败：' + (r.error || '未知错误'), 'error');
+					self.refresh();
 					return;
 				}
-				if (kind == 'endc') {
-					self.note(r.queued
-						? '已排队：另一项锁定正在应用（SFUN 重启中），随后自动生效'
-						: '正在确认 EN-DC 状态…', r.queued ? 'info' : 'busy');
-					return self.confirmToggle(kind, val, btn);
-				}
-				if (kind == 'auto_apply') {
-					self.note('正在确认开机自动应用…', 'busy');
-					return self.confirmToggle(kind, val, btn);
-				}
-				self.note('已后台执行：' + (r.op || kind) + '（SFUN 重启约半分钟），自动回读状态…', 'busy');
-				self.readback(Date.now(), btn);
-			}, function() { M.busy(btn, false); self.note('调用失败', 'error'); });
+				self.note('正在确认设置结果…', 'busy');
+				return self.readback(r, btn);
+			}, function() { self._applying = false; M.busy(btn, false); self.note('调用失败', 'error'); });
 		};
 
 		this.Q('lock-modes').innerHTML = MODES.map(function(m) {
@@ -199,8 +191,10 @@ return view.extend({
 				if (self.lockSel[rat][b]) ch.className = 'mud-chip on';
 			});
 		};
-		this.chipRow(this.Q('lock-nr'), 'nr', NR_CAND);
-		this.chipRow(this.Q('lock-lte'), 'lte', LTE_CAND);
+		[ 'nr', 'lte' ].forEach(function(rat) {
+			self.Q('lock-' + rat + '-apply').disabled = true;
+			self.Q('lock-' + rat).textContent = M.translate('等待模组能力数据');
+		});
 		/* 事件委托绑在容器上：paint() 依模组能力重建 chips 后点击依然有效 */
 		[ 'nr', 'lte' ].forEach(function(rat) {
 			self.Q('lock-' + rat).addEventListener('click', function(ev) {
@@ -237,15 +231,15 @@ return view.extend({
 				.then(function(go) {
 			if (self._disposed) return;
 				if (!go) return;
+				if (self._applying) return;
+				self._applying = true;
 				M.busy(btn, true);
 			self.note('正在解除 ' + rat.toUpperCase() + ' 小区锁定…', 'busy');
 			L.resolveDefault(M.callLockSet('cell', 'off-' + rat)).then(function(r) {
 			if (self._disposed) return;
 				r = r || {};
-				M.busy(btn, false);
-				if (!r.ok) { self.note('解锁失败：' + (r.error || '未知错误'), 'error'); return; }
-					self.note('已后台解除，SFUN 重启约半分钟，自动回读状态…', 'busy');
-					self.readback(Date.now());
+					self.note('正在确认设置结果…', 'busy');
+					self.readback(r, btn);
 				});
 			});
 		});
@@ -259,15 +253,15 @@ return view.extend({
 				.then(function(go) {
 			if (self._disposed) return;
 				if (!go) return;
+				if (self._applying) return;
+				self._applying = true;
 				M.busy(btn, true);
 			self.note('正在后台锁定 ' + key + ' …', 'busy');
 			L.resolveDefault(M.callLockSet('cell', key)).then(function(r) {
 			if (self._disposed) return;
 				r = r || {};
-				M.busy(btn, false);
-				if (!r.ok) { self.note('锁定失败：' + (r.error || '未知错误'), 'error'); return; }
-					self.note('已后台锁定 ' + key + '（SFUN 重启约半分钟），自动回读状态…', 'busy');
-					self.readback(Date.now());
+					self.note('正在确认设置结果…', 'busy');
+					self.readback(r, btn);
 				});
 			});
 		});
@@ -390,62 +384,28 @@ return view.extend({
 		if (nb) nb.innerHTML = M.neighborRows(this.neighborCell || c, (this.lastLock || {}).cells || []);
 	},
 
-	/* 应用后自动回读：轮询缓存 lock_get 直到 ts 越过本次应用（后端 apply 后会 fresh 刷新缓存） */
-	/* 应用后自动回读：轮询缓存直到 ts 落在“点击应用”之后（SFUN 重启 + fresh 读
-	 * 最长约一两分钟；期间后端不会用空读数覆盖缓存），拿到新状态才重绘高亮 */
-	readback: function(t0ms, btn) {
-		var self = this, tries = 0, t0 = t0ms || Date.now();
-		var step = function() {
-			L.resolveDefault(M.callLockGet()).then(function(l) {
-			if (self._disposed) return;
-				l = l || {};
-				if ((l.ts && l.ts * 1000 > t0) || ++tries > 40) {
-					M.busy(btn, false);
-					self.lastLock = l; self.paint(); self.paintServing(self.lastCell);
-					self.note((l.ts && l.ts * 1000 > t0) ? '状态已回读' : '回读超时，请点「刷新锁定状态」',
-						(l.ts && l.ts * 1000 > t0) ? 'success' : 'error');
-				} else self.later(step, 2500);
-			});
-		};
-		step();
-	},
-	refreshSoon: function() {
+	/* Job completion is independent of browser/device clock skew. */
+	readback: function(operation, btn) {
 		var self = this;
-		self.later(function() { self.refresh(); }, 1500);
-	},
-
-	/* 即时开关（EN-DC / 开机自动应用）确认式回读：后端已把这些状态即时写进
-	 * lock 缓存，正常第一轮（1.5s）就能对上；对不上（比如排在 SFUN 后面）
-	 * 就保持乐观状态继续等，最多 15 秒才回滚，避免按钮闪回造成“没点上”的错觉。 */
-	confirmToggle: function(kind, val, btn) {
-		var self = this, tries = 0;
-		var matches = function(l) {
-			if (kind == 'endc') return (l.endc === '1') == (val == 'on');
-			if (kind == 'auto_apply') return (l.auto_apply !== 0) == (val == 'on');
-			return true;
-		};
-		var step = function() {
-			L.resolveDefault(M.callLockGet()).then(function(l) {
+		return M.waitLockJob(operation, function() { return !self._disposed; }).finally(function() {
+			// The operation is finished; a slow display refresh must not keep its
+			// button spinning after the completion toast has already appeared.
+			self._applying = false;
+			M.busy(btn, false);
+		}).then(function() {
 			if (self._disposed) return;
-				l = l || {};
-				if (matches(l) || ++tries > 10) {
-					M.busy(btn, false);
-					self.lastLock = l;
-					self.paint();
-					if (matches(l))
-						self.note(kind == 'endc' ? '已生效（EN-DC 不需要重启协议栈）' : '开机自动应用已' + (val == 'on' ? '开启' : '关闭'), 'success');
-					else
-						self.note((kind == 'endc' ? 'EN-DC' : '开机自动应用') + '状态回读超时，点「刷新锁定状态」确认', 'error');
-				} else self.later(step, 1500);
-			});
-		};
-		self.later(step, 1500);
+			self.note(operation.kind === 'auto_apply' ? '开机自动应用设置已保存' : '已应用并核对模组状态', 'success');
+			return self.refresh();
+		}).catch(function(error) {
+			if (self._disposed) return;
+			self.note('失败：' + (error.message || error), 'error');
+			return self.refresh();
+		});
 	},
-
 	refresh: function() {
 		if (this._disposed) return;
 		var self = this;
-		L.resolveDefault(M.callLockGet()).then(function(l) {
+		return L.resolveDefault(M.callLockGet()).then(function(l) {
 			if (self._disposed) return;
 			l = l || {};
 			/* 空结果多半是 rpcd 高并发下的一次瞬时失败（实测同请求重发即好）：轻量重试 */
@@ -469,14 +429,14 @@ return view.extend({
 		var MODE_TXT = { auto: '自动（5G/4G）', '4g': '仅 4G', sa: '仅 5G SA', nsa: '仅 5G NSA' };
 		var cur = this.Q('lock-modes');
 		if (cur) Array.prototype.forEach.call(cur.querySelectorAll('.mud-btn'), function(b) {
-			b.className = (b.getAttribute('data-mode') === (l.mode && l.mode.label)) ? 'mud-btn on' : 'mud-btn';
+			b.classList.toggle('on', b.getAttribute('data-mode') === (l.mode && l.mode.label));
 		});
 		var eb = this.Q('lock-endc');
 		if (eb) { eb.className = 'mud-btn' + (l.endc === '1' ? ' on' : ''); eb.textContent = l.endc === '1' ? 'EN-DC' : 'EN-DC'; }
 		var ab = this.Q('lock-auto-apply'), autoApply = l.auto_apply !== 0;
 		if (ab) { ab.className = 'mud-btn' + (autoApply ? ' on' : ''); ab.textContent = M.translate(autoApply ? '开机自动应用 ✓' : '开机自动应用'); }
 
-		/* 支持频段优先取模组能力（SPLBAND=4 / =0 解码），读不到才用静态表 */
+		/* Never expose speculative selectable bands before backend capabilities. */
 		var caps = l.caps || {};
 		/* 已锁定小区独立表：多小区都列出来，每个 RAT 一个解锁按钮 */
 		var lc = self.Q('lockedcells');
@@ -493,7 +453,14 @@ return view.extend({
 				: '';
 		}
 		[ 'nr', 'lte' ].forEach(function(rat) {
-			var capList = (caps[rat] || '').split(',').map(Number).filter(function(b) { return b > 0; });
+			var rawCaps = (l.write_caps || caps)[rat] || '';
+			var capList = /^[1-9][0-9]*(,[1-9][0-9]*)*$/.test(rawCaps) ? rawCaps.split(',').map(Number) : [];
+			self.Q('lock-' + rat + '-apply').disabled = !capList.length;
+			if (!capList.length) {
+				self.lockCand[rat] = []; self.lockSel[rat] = {};
+				self.Q('lock-' + rat).textContent = M.translate('等待模组能力数据');
+				setR('lock-' + rat + 'line', '--'); return;
+			}
 			if (capList.length) {
 				capList.sort(function(a, b) { return a - b; });
 				self.lockCand[rat] = capList;
@@ -502,7 +469,7 @@ return view.extend({
 			}
 			var locked = (l[rat] && l[rat].locked) || '';
 			var arr = locked ? locked.split(',').map(Number) : [];
-			var isAuto = arr.length === 0 || arr.length >= self.lockCand[rat].length;
+			var isAuto = arr.length === 0 || self.lockCand[rat].every(function(b) { return arr.indexOf(b) >= 0; });
 			setR('lock-' + rat + 'line', M.translate(isAuto
 				? '自动（支持 ' + self.lockCand[rat].length + ' 个）'
 				: '已锁 ' + arr.length + ' 个：' + (rat === 'nr' ? 'n' : 'B') + arr.join(' ' + (rat === 'nr' ? 'n' : 'B'))));

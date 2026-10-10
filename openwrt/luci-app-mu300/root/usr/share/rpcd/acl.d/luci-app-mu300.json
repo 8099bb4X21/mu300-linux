@@ -3,7 +3,11 @@
   "description": "MU300 控制中心：状态看板、网络锁定、AT 终端与短信",
   "read": {
    "ubus": {
-    "mu300dash": [ "*" ]
+    "mu300dash": [
+     "sysinfo", "status", "rates", "cells", "signal", "at_history",
+     "lock_get", "lock_status", "sms_list", "sms_show", "forward_get",
+     "forward_status", "traffic_get", "usb_get", "usb_net_list"
+    ]
    },
    "uci": {
     "unisoc_modem": [ "*" ]
