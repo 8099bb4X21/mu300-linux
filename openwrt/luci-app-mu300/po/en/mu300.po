@@ -29,3 +29,9 @@ msgstr "Adapter settings"
 
 msgid "设备管理"
 msgstr "Device management"
+
+msgid "CPU 设置"
+msgstr "CPU settings"
+
+msgid "SIM 卡管理"
+msgstr "SIM management"

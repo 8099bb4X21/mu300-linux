@@ -133,13 +133,19 @@ for n in ${MU300_AT_URC_CHANNELS-0}; do
         log=$URCDIR/$(basename "$other").log
         CMT_PENDING_FILE=$URCDIR/$(basename "$other").cmt-pending
         : > "$log"
+        exec 4< "$other" || exit 1
+        # $$ remains the parent's PID in ash subshells. Read our actual PID
+        # without forking so a dead drainer cannot pass the readiness check.
+        read -r reader_pid reader_stat < /proc/self/stat
+        echo "$reader_pid" > "$URCDIR/$(basename "$other").ready"
         while IFS= read -r urc; do
             urc=${urc%"$CR"}
             capture_cmt "$urc"
             printf '%s\n' "$urc" >> "$log"
             # cheap cap: start over rather than grow without end, /run is RAM
             [ "$(wc -c < "$log" 2>/dev/null || echo 0)" -gt "$URCMAX" ] && : > "$log"
-        done < "$other"
+        done <&4
+        rm -f "$URCDIR/$(basename "$other").ready"
     ) &
     drainers="$drainers $!"
 done
@@ -154,7 +160,7 @@ now() { date +%s; }
 # Has the modem said anything at all lately? The drainers above append every unsolicited line to a log, so a log
 # that has been written to in the last few minutes means the modem is running, whatever it thinks of our
 # commands. With no drainer (a single-channel device) there is nothing to go on, and this answers "no".
-URCLOG=$URCDIR/$(basename "${DEV%[0-9]}0").log
+URCLOG=${MU300_AT_ALIVE_LOG:-$URCDIR/$(basename "${DEV%[0-9]}0").log}
 modem_alive() {
     [ -f "$URCLOG" ] || return 1
     [ "$(( $(now) - $(date -r "$URCLOG" +%s 2>/dev/null || echo 0) ))" -lt "${MU300_AT_URC_QUIET:-240}" ]

@@ -422,6 +422,7 @@ if ($parts.Count -ne 2) { Die (T 'could not read the partition table from the de
 [int64]$lastEnd = $parts[0]; [int64]$disk = $parts[1]
 [int64]$start = [math]::Floor($lastEnd / 4096 + 1) * 4096
 [int64]$end = [math]::Floor(($disk - 34) / 4096 - 1) * 4096
+if ($end -le $start) { $end = $start }
 [int64]$OFF = $start * 512
 [int64]$SIZE = ($end - $start) * 512
 function Gib([int64]$b) { '{0:N1} GiB' -f ($b / 1GB) }
@@ -440,7 +441,9 @@ if ($SIZE -lt 700MB) {
 }
 
 $existing = 'no'
+function RegionOnDisk([int64]$bytes) { $bytes -ge 0 -and ($bytes + 2048) -le ($disk * 512) }
 foreach ($cand in @($OFF, 27762098176)) {
+    if (-not (RegionOnDisk $cand)) { continue }
     $m = (SuDo "dd if=/dev/block/mmcblk0 bs=1 skip=$($cand + 1080) count=2 2>/dev/null | od -An -tx1") -replace '\s', ''
     $l = (SuDo "dd if=/dev/block/mmcblk0 bs=1 skip=$($cand + 1144) count=16 2>/dev/null") -replace '\0', ''
     if ($m -eq '53ef' -and $l.Trim() -eq 'mu300root') {

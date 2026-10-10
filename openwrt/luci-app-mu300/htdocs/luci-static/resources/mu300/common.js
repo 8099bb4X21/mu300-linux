@@ -11,26 +11,96 @@
  * 质量色不用写死的色值，走 --success/--warning/--danger 与 color-mix，
  * 深浅两套模式都跟随主题。 */
 
-var callStatus = rpc.declare({ object: 'mu300dash', method: 'status', expect: { '': {} } });
-var callSignal = rpc.declare({ object: 'mu300dash', method: 'signal', expect: { '': {} } });
-var callSysinfo = rpc.declare({ object: 'mu300dash', method: 'sysinfo', expect: { '': {} } });
-var callAct    = rpc.declare({ object: 'mu300dash', method: 'act', params: [ 'op', 'arg' ], expect: { '': {} } });
-var callAt     = rpc.declare({ object: 'mu300dash', method: 'at', params: [ 'cmd' ], expect: { '': {} } });
-var callAtHist = rpc.declare({ object: 'mu300dash', method: 'at_history', expect: { '': {} } });
-var callLockGet = rpc.declare({ object: 'mu300dash', method: 'lock_get', expect: { '': {} } });
-var callLockFresh = rpc.declare({ object: 'mu300dash', method: 'lock_get', params: [ 'fresh' ], expect: { '': {} } });
-var callLockSet = rpc.declare({ object: 'mu300dash', method: 'lock_set', params: [ 'kind', 'val' ], expect: { '': {} } });
-var callSmsList = rpc.declare({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
-var callSmsShow = rpc.declare({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
-var callSmsSend = rpc.declare({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
-var callSmsDel  = rpc.declare({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
-var callSmsSync = rpc.declare({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
-var callForwardGet = rpc.declare({ object: 'mu300dash', method: 'forward_get', expect: { '': {} } });
-var callForwardStatus = rpc.declare({ object: 'mu300dash', method: 'forward_status', expect: { '': {} } });
+function selectedSlot() {
+    try { return sessionStorage.getItem('mu300-view-slot') === '1' ? '1' : '0'; } catch(e) { return '0'; }
+}
+function selectViewedSlot(slot) {
+    if (String(slot) !== '0' && String(slot) !== '1') return false;
+    try { sessionStorage.setItem('mu300-view-slot', String(slot)); return true; } catch(e) { return false; }
+}
+function scopedRpc(options) {
+    var count = (options.params || []).length;
+    options.params = (options.params || []).concat(['slot']);
+    var call = rpc.declare(options);
+    return function() {
+        var args = Array.prototype.slice.call(arguments, 0, count);
+        while (args.length < count) args.push('');
+        args.push(selectedSlot());
+        return call.apply(null, args);
+    };
+}
+var callSimGet = rpc.declare({ object: 'mu300dash', method: 'sim_get', expect: { '': {} } });
+function simSelector(root) {
+    callSimGet().then(function(info) {
+        if (!root.isConnected) return;
+        if (info.slots !== 2) {
+            if (selectedSlot() !== '0') { sessionStorage.removeItem('mu300-view-slot'); location.reload(); }
+            return;
+        }
+        var panel = document.createElement('details'); panel.className = 'mud-card mud-sim-selector';
+        panel.style.marginBottom = '14px';
+        var summary = document.createElement('summary');
+        summary.className = 'mud-sim-toggle';
+        summary.textContent = translate('正在查看') + ' SIM ' + (Number(selectedSlot()) + 1);
+        var label = document.createElement('label'), select = document.createElement('select');
+        label.textContent = translate('查看卡槽') + ' ';
+        ['0','1'].forEach(function(v) { var o=document.createElement('option'); o.value=v; o.textContent='SIM '+(Number(v)+1); select.appendChild(o); });
+        select.value = selectedSlot(); label.appendChild(select);
+        var body=document.createElement('div'); body.style.cssText='padding-top:12px;animation:mudfade-in .2s ease';
+        var note=document.createElement('p'); note.className='mud-note';
+        note.textContent=translate('仅切换查看与控制对象，不切换上网卡。');
+        body.append(label,note); panel.append(summary,body); root.prepend(panel);
+        select.onchange=function() { selectViewedSlot(select.value); location.reload(); };
+    }).catch(function() {});
+}
+var callRates = rpc.declare({ object: 'mu300dash', method: 'rates', nobatch: true, expect: { '': {} } });
+var callCells = scopedRpc({ object: 'mu300dash', method: 'cells', nobatch: true, expect: { '': {} } });
+var callStatus = scopedRpc({ object: 'mu300dash', method: 'status', nobatch: true, expect: { '': {} } });
+var callSignal = scopedRpc({ object: 'mu300dash', method: 'signal', nobatch: true, expect: { '': {} } });
+var callSysinfo = rpc.declare({ object: 'mu300dash', method: 'sysinfo', nobatch: true, expect: { '': {} } });
+var callAct    = scopedRpc({ object: 'mu300dash', method: 'act', params: [ 'op', 'arg' ], expect: { '': {} } });
+var callAt     = scopedRpc({ object: 'mu300dash', method: 'at', params: [ 'cmd' ], expect: { '': {} } });
+var callAtHist = scopedRpc({ object: 'mu300dash', method: 'at_history', expect: { '': {} } });
+var callLockGet = scopedRpc({ object: 'mu300dash', method: 'lock_get', nobatch: true, expect: { '': {} } });
+var callLockFresh = scopedRpc({ object: 'mu300dash', method: 'lock_get', nobatch: true, params: [ 'fresh' ], expect: { '': {} } });
+var callLockSet = scopedRpc({ object: 'mu300dash', method: 'lock_set', nobatch: true, params: [ 'kind', 'val' ], expect: { '': {} } });
+var callLockStatus = scopedRpc({ object: 'mu300dash', method: 'lock_status', nobatch: true, params: [ 'id' ], expect: { '': {} } });
+function waitLockJob(started, active) {
+	return new Promise(function(resolve, reject) {
+		if (!started || !started.ok || !started.id) { reject(new Error(started && started.error || '网络设置提交失败')); return; }
+		var done = false, next, limit;
+		var finish = function(error, result) {
+			if (done) return;
+			done = true; clearTimeout(limit); clearTimeout(next);
+			if (error) reject(error); else resolve(result);
+		};
+		limit = setTimeout(function() { finish(new Error('应用超时，请刷新确认模组状态')); }, 240000);
+		var check = function() {
+			if (active && !active()) { finish(new Error('页面已关闭')); return; }
+			callLockStatus(started.id).then(function(r) {
+				if (done) return;
+				if (active && !active()) { finish(new Error('页面已关闭')); return; }
+				if (r && r.id === started.id && r.state === 'done' && r.ok) finish(null, r);
+				else if (!r || r.state === 'error') finish(new Error(r && r.error || '网络设置执行失败'));
+				else if (r.id === started.id && (r.state === 'queued' || r.state === 'running')) next = setTimeout(check, 1000);
+				else finish(new Error('无效的操作状态'));
+			}, function() { finish(new Error('无法查询操作结果，请刷新确认模组状态')); });
+		};
+		check();
+	});
+}
+var callSmsList = scopedRpc({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
+var callSmsShow = scopedRpc({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
+var callSmsSend = scopedRpc({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
+var callSmsDel  = scopedRpc({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
+var callSmsSync = scopedRpc({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
+var callForwardGet = rpc.declare({ object: 'mu300dash', method: 'forward_get', params: [ 'profile' ], expect: { '': {} } });
+var callForwardStatus = rpc.declare({ object: 'mu300dash', method: 'forward_status', params: [ 'profile' ], expect: { '': {} } });
 var callForwardSet = rpc.declare({ object: 'mu300dash', method: 'forward_set', params: [ 'payload' ], expect: { '': {} } });
-var callForwardTest = rpc.declare({ object: 'mu300dash', method: 'forward_test', expect: { '': {} } });
-var callTrafficGet = rpc.declare({ object: 'mu300dash', method: 'traffic_get', expect: { '': {} } });
-var callTrafficSet = rpc.declare({ object: 'mu300dash', method: 'traffic_set', params: [ 'payload' ], expect: { '': {} } });
+var callForwardTest = rpc.declare({ object: 'mu300dash', method: 'forward_test', params: [ 'profile' ], expect: { '': {} } });
+var callTrafficGet = scopedRpc({ object: 'mu300dash', method: 'traffic_get', expect: { '': {} } });
+var callTrafficSet = scopedRpc({ object: 'mu300dash', method: 'traffic_set', params: [ 'payload' ], expect: { '': {} } });
+var callTrafficClear = scopedRpc({ object: 'mu300dash', method: 'traffic_clear', nobatch: true, params: [ 'confirm' ], expect: { '': {} } });
 var callUsbGet = rpc.declare({ object: 'mu300dash', method: 'usb_get', expect: { '': {} } });
 var callUsbSet = rpc.declare({ object: 'mu300dash', method: 'usb_set', params: [ 'kind', 'value', 'scope', 'auto' ], expect: { '': {} } });
 var callUsbNetList = rpc.declare({ object: 'mu300dash', method: 'usb_net_list', expect: { '': {} } });
@@ -40,6 +110,85 @@ var callUsbNetAdd = rpc.declare({ object: 'mu300dash', method: 'usb_net_add', pa
  * standalone package works in any OpenWrt buildroot without po2lmo or extra
  * language packages. Chinese remains the source/fallback language. */
 var DASH_I18N = {
+	'清除全部蜂窝锁定': ['Clear all cellular locks', 'Tüm hücresel kilitleri temizle'],
+	'清除当前 SIM 全部锁定': ['Clear all locks for the selected SIM', 'Seçili SIM için tüm kilitleri temizle'],
+	'清除 SIM %s 的全部锁定？': ['Clear all locks for SIM %s?', 'SIM %s için tüm kilitler temizlensin mi?'],
+	'确认清除': ['Confirm clearing', 'Temizlemeyi onayla'],
+	'按当前查看 SIM 恢复自动模式和频段、解除小区锁定并开启 EN-DC；只删除当前卡的已保存锁定，保留两张卡的开机自动应用开关。': ['Restore automatic mode and bands, remove cell locks and enable EN-DC through the viewed SIM. Only its saved locks are deleted; both SIMs retain their apply-at-startup preferences.', 'Görüntülenen SIM üzerinden otomatik mod ve bantları geri yükle, hücre kilitlerini kaldır ve EN-DC’yi aç. Yalnızca bu SIM’in kayıtlı kilitleri silinir; her iki SIM’in açılışta uygulama tercihleri korunur.'],
+	'注意：部分模组的频段或小区锁定由双卡共享（F50 的 NR 频段已确认共享），清除也会影响另一张卡。另一张卡的保存配置不会删除，其开机回放可能再次改变共享设置。清除会短暂中断蜂窝连接；全部回读通过后才删除当前卡的保存项。': ['Note: some modems share band or cell locks between SIMs (NR bands are confirmed shared on F50), so clearing also affects the other SIM. Its saved settings remain and may change shared settings again at boot. Cellular service briefly disconnects; only the selected SIM’s saved locks are deleted after all readbacks pass.', 'Not: bazı modemlerde bant veya hücre kilitleri SIM’ler arasında ortaktır (F50’de NR bantlarının ortak olduğu doğrulandı); temizleme diğer SIM’i de etkiler. Diğer SIM’in kayıtlı ayarları korunur ve açılışta ortak ayarları yeniden değiştirebilir. Hücresel bağlantı kısa süre kesilir; yalnızca seçili SIM’in kayıtlı kilitleri tüm geri okumalar doğrulanınca silinir.'],
+	'恢复自动模式和频段、解除 LTE/NR 小区锁定并开启 EN-DC。双卡共享的模组设置也会影响另一张卡（F50 的 NR 频段共享）。只清除当前卡的保存项，保留另一张卡配置和开机自动应用开关；另一张卡的回放可能重新改变共享设置。蜂窝会短暂断开；全部回读通过才算成功。': ['Restore automatic mode and bands, remove LTE/NR cell locks and enable EN-DC. Shared modem settings also affect the other SIM (F50 shares NR bands). Delete only the selected SIM’s saved locks; keep the other SIM’s settings and startup preferences. Its replay may change shared settings again. Cellular service briefly disconnects; success requires all readbacks to pass.', 'Otomatik mod ve bantları geri yükle, LTE/NR hücre kilitlerini kaldır ve EN-DC’yi aç. Ortak modem ayarları diğer SIM’i de etkiler (F50’de NR bantları ortaktır). Yalnızca seçili SIM’in kayıtlı kilitlerini sil; diğer SIM’in ayarlarını ve açılış tercihlerini koru. Diğer SIM’in ayarları yeniden uygulanınca ortak ayarlar değişebilir. Hücresel bağlantı kısa süre kesilir; başarı için tüm geri okumalar doğrulanmalıdır.'],
+	'查看卡槽已改变，请重新确认操作': ['The viewed SIM slot changed; confirm the operation again', 'Görüntülenen SIM yuvası değişti; işlemi yeniden onaylayın'],
+	'当前 SIM 的全部锁定已清除，已核对并清理保存配置': ['All locks for the selected SIM were cleared, verified, and removed from saved settings', 'Seçili SIM’in tüm kilitleri temizlendi, doğrulandı ve kayıtlı ayarlardan kaldırıldı'],
+	'清除未完成，部分设置可能已生效；已保存锁定未删除，请刷新后重试': ['Clearing was incomplete; some settings may have changed. Saved locks were not deleted. Refresh and retry.', 'Temizleme tamamlanmadı; bazı ayarlar değişmiş olabilir. Kayıtlı kilitler silinmedi. Yenileyip tekrar deneyin.'],
+	'清除回读不一致，部分设置可能已生效；已保存锁定未删除，请刷新后重试': ['Reset readback did not match; some settings may have changed. Saved locks were not deleted. Refresh and retry.', 'Sıfırlama geri okuması eşleşmedi; bazı ayarlar değişmiş olabilir. Kayıtlı kilitler silinmedi. Yenileyip tekrar deneyin.'],
+	'模组已恢复自动，但清除结果保存失败；旧锁定仍可能在开机回放，请重试': ['The modem is automatic, but saving the reset failed. Old locks may still be reapplied at boot; retry.', 'Modem otomatik moda döndü ancak sıfırlama kaydedilemedi. Eski kilitler açılışta yeniden uygulanabilir; tekrar deneyin.'],
+	'模组已恢复自动，旧锁定回放已阻止，但保存文件清理失败，请重试': ['The modem is automatic and replay of old locks is blocked, but saved-file cleanup failed. Retry.', 'Modem otomatik moda döndü ve eski kilitlerin uygulanması engellendi ancak kayıtlı dosyalar temizlenemedi. Tekrar deneyin.'],
+	'上次清除的保存文件尚未清理完成，请检查存储后重试': ['The previous reset still needs saved-file cleanup. Check storage and retry.', 'Önceki sıfırlamanın kayıtlı dosyaları henüz temizlenmedi. Depolamayı kontrol edip tekrar deneyin.'],
+	'开机角色策略': ['Boot role policy', 'Açılış rolü ilkesi'],
+	'当前共享协议': ['Current tethering protocol', 'Geçerli paylaşım protokolü'],
+	'下次启动协议': ['Protocol on next boot', 'Sonraki açılış protokolü'],
+	'主机模式不使用共享协议': ['No tethering protocol in host mode', 'Ana makine modunda paylaşım protokolü kullanılmaz'],
+	'多个共享协议': ['Multiple tethering protocols', 'Birden çok paylaşım protokolü'],
+	'未能确认': ['Not confirmed', 'Doğrulanamadı'],
+	'设备模式（默认）': ['Device mode (default)', 'Cihaz modu (varsayılan)'],
+	'USB 状态读取失败，请刷新重试': ['Could not read USB status; refresh to retry', 'USB durumu okunamadı; yenileyip tekrar deneyin'],
+	'USB 角色后台切换失败，请重试': ['The background USB role switch failed; please retry', 'Arka planda USB rolü değiştirilemedi; tekrar deneyin'],
+	'启动协议文件与保存设置不一致，请重新保存': ['Boot protocol file differs from saved settings; save again', 'Açılış protokolü dosyası kayıtlı ayarlardan farklı; tekrar kaydedin'],
+	'设置已保存，当前协议不变，重启后生效': ['Settings saved; the current protocol is unchanged until reboot', 'Ayarlar kaydedildi; geçerli protokol yeniden başlatılana kadar değişmez'],
+	'仅保存选择，未启用开机应用': ['Selection saved only; boot application is not enabled', 'Yalnızca seçim kaydedildi; açılışta uygulama etkin değil'],
+	'请求结果未能确认，请刷新后检查，勿重复提交': ['The result could not be confirmed; refresh to check before resubmitting', 'Sonuç doğrulanamadı; tekrar göndermeden önce yenileyip kontrol edin'],
+	'读取 USB 网卡失败，请刷新重试': ['Could not read USB adapters; refresh to retry', 'USB ağ bağdaştırıcıları okunamadı; yenileyip tekrar deneyin'],
+	'无法记录 USB 角色切换结果': ['Could not record the USB role switch result', 'USB rolü değiştirme sonucu kaydedilemedi'],
+	'热点连接可能已中断，请重新连接后确认状态': ['The hotspot connection may have closed; reconnect to check its state', 'Erişim noktası bağlantısı kesilmiş olabilir; durumu kontrol etmek için yeniden bağlanın'],
+	'热点 AP 配置节': ['Hotspot AP configuration section', 'Erişim noktası yapılandırma bölümü'],
+	'留空时匹配 Wi-Fi 网卡；只有一个 AP 时自动选择。多个 AP 无法唯一匹配时必须指定无线配置节名称。': ['Leave empty to match the Wi-Fi interface, or select the only AP. If multiple APs cannot be matched uniquely, specify the wireless section name.', 'Wi-Fi arayüzünü eşleştirmek veya tek AP’yi seçmek için boş bırakın. Birden çok AP benzersiz eşleştirilemiyorsa kablosuz bölüm adını belirtin.'],
+	'热点配置节不存在或不是 AP': ['The hotspot section is missing or is not an AP', 'Erişim noktası bölümü yok veya AP değil'],
+	'存在多个热点，请在适配设置选择目标 AP': ['Multiple hotspots found; select the target AP in adapter settings', 'Birden çok erişim noktası bulundu; uyarlama ayarlarında hedef AP’yi seçin'],
+	'没有配置热点': ['No hotspot is configured', 'Yapılandırılmış erişim noktası yok'],
+	'热点所属无线电无效': ['The hotspot radio is invalid', 'Erişim noktasının radyosu geçersiz'],
+	'热点开关参数无效': ['Invalid hotspot state', 'Geçersiz erişim noktası durumu'],
+	'热点正在应用配置，请稍后重试': ['Hotspot changes are being applied; try again shortly', 'Erişim noktası ayarları uygulanıyor; biraz sonra tekrar deneyin'],
+	'无线配置有未应用更改，请先保存或撤销': ['Wireless settings have pending edits; save or discard them first', 'Kablosuz ayarlarda bekleyen değişiklikler var; önce kaydedin veya iptal edin'],
+	'启用此无线电会影响其他接口，请在无线页面处理': ['Enabling this radio affects other interfaces; use the Wireless page', 'Bu radyoyu açmak diğer arayüzleri etkiler; Kablosuz sayfasını kullanın'],
+	'热点配置写入失败': ['Could not write hotspot settings', 'Erişim noktası ayarları yazılamadı'],
+	'热点配置保存失败': ['Could not save hotspot settings', 'Erişim noktası ayarları kaydedilemedi'],
+	'热点配置已保存，但应用失败，请重试': ['Hotspot settings saved, but applying failed; please retry', 'Erişim noktası ayarları kaydedildi ancak uygulanamadı; tekrar deneyin'],
+	'热点配置应用失败': ['Could not apply hotspot settings', 'Erişim noktası ayarları uygulanamadı'],
+	'热点配置已保存，正在应用': ['Hotspot settings saved; applying changes', 'Erişim noktası ayarları kaydedildi; uygulanıyor'],
+	'清空流量记录': ['Clear traffic records', 'Trafik kayıtlarını temizle'],
+	'清空所有流量记录？': ['Clear all traffic records?', 'Tüm trafik kayıtları temizlensin mi?'],
+	'将清空今日、每月历史和套餐周期校准，并从当前网卡计数重新开始。已保存的套餐额度、结算日、计量方式和统计网卡保持不变。此操作不可撤销。': ['This clears today’s usage, monthly history and cycle calibration, then starts again from the current interface counters. Saved quotas, billing day, counting direction and interface stay unchanged. This cannot be undone.', 'Bugünkü kullanım, aylık geçmiş ve dönem kalibrasyonu silinir; mevcut arayüz sayaçlarından yeniden başlanır. Kayıtlı kotalar, fatura günü, sayım yönü ve arayüz değişmez. Bu işlem geri alınamaz.'],
+	'正在清空流量记录…': ['Clearing traffic records…', 'Trafik kayıtları temizleniyor…'],
+	'流量记录已清空': ['Traffic records cleared', 'Trafik kayıtları temizlendi'],
+	'清空失败': ['Could not clear records', 'Kayıtlar temizlenemedi'],
+	'请先确认清空操作': ['Please confirm before clearing records', 'Kayıtları temizlemeden önce onaylayın'],
+	'仅清除本地统计，不会重置运营商账单，也不会断开网络。': ['Only local statistics are cleared. This does not reset carrier billing or disconnect the network.', 'Yalnızca yerel istatistikler silinir. Operatör faturası sıfırlanmaz ve ağ bağlantısı kesilmez.'],
+	'已应用并核对模组状态': ['Applied and verified against the modem', 'Uygulandı ve modemden doğrulandı'],
+	'开机自动应用设置已保存': ['Boot auto-apply preference saved', 'Açılışta otomatik uygulama tercihi kaydedildi'],
+	'网络设置提交失败': ['Could not submit network settings', 'Ağ ayarları gönderilemedi'],
+	'网络设置执行失败': ['Network settings failed', 'Ağ ayarları uygulanamadı'],
+	'应用超时，请刷新确认模组状态': ['Operation timed out; refresh to check the actual modem state', 'İşlem zaman aşımına uğradı; modem durumunu denetlemek için yenileyin'],
+	'无法查询操作结果，请刷新确认模组状态': ['Cannot query the result; refresh to check the actual modem state', 'Sonuç sorgulanamıyor; modem durumunu denetlemek için yenileyin'],
+	'无效的操作状态': ['Invalid operation status', 'Geçersiz işlem durumu'],
+	'页面已关闭': ['Page closed', 'Sayfa kapatıldı'],
+	'操作结果已过期或不存在': ['Operation result expired or unavailable', 'İşlem sonucu süresi dolmuş veya mevcut değil'],
+	'设置进程已中断，请刷新确认模组状态': ['Settings worker stopped; refresh to check the modem state', 'Ayar işlemi durdu; modem durumunu denetlemek için yenileyin'],
+	'另一项网络设置仍在执行，请稍后重试': ['Another network setting is in progress; try again shortly', 'Başka bir ağ ayarı uygulanıyor; biraz sonra tekrar deneyin'],
+	'无效的频段列表': ['Invalid band list', 'Geçersiz bant listesi'],
+	'所选频段不受此模组支持': ['Selected bands are not supported by this modem', 'Seçilen bantlar bu modem tarafından desteklenmiyor'],
+	'所选频段无法用当前模组指令编码': ['Selected bands cannot be encoded by this modem command', 'Seçilen bantlar bu modem komutuyla kodlanamıyor'],
+	'无效的小区参数': ['Invalid cell parameters', 'Geçersiz hücre parametreleri'],
+	'无效的网络设置': ['Invalid network setting', 'Geçersiz ağ ayarı'],
+	'模组拒绝了设置': ['The modem rejected the setting', 'Modem ayarı reddetti'],
+	'设置保存失败': ['Could not save settings', 'Ayarlar kaydedilemedi'],
+	'无法读取当前 SIM 模式，未发送设置': ['Cannot read the current SIM mode; no settings sent', 'Mevcut SIM modu okunamıyor; ayar gönderilmedi'],
+	'无法读取当前小区锁定，未发送设置': ['Cannot read current cell locks; no settings sent', 'Mevcut hücre kilitleri okunamıyor; ayar gönderilmedi'],
+	'模组回读与请求设置不一致，未保存': ['Modem readback does not match; setting not saved', 'Modem geri okuması eşleşmiyor; ayar kaydedilmedi'],
+	'设置已写入，但射频未恢复，请检查模组状态': ['Setting written, but radio did not recover; check the modem', 'Ayar yazıldı ancak radyo geri gelmedi; modemi denetleyin'],
+	'协议栈重启后设置不一致，未保存': ['Setting changed after the protocol restart; not saved', 'Protokol yeniden başlatılınca ayar değişti; kaydedilmedi'],
+	'协议栈重启被拒绝，请检查模组状态': ['Protocol restart rejected; check the modem state', 'Protokolün yeniden başlatılması reddedildi; modem durumunu denetleyin'],
+	'正在确认设置结果…': ['Verifying the setting…', 'Ayar doğrulanıyor…'],
+	'等待模组能力数据': ['Waiting for modem capabilities', 'Modem yetenekleri bekleniyor'],
 	'本机号码': ['Phone number', 'Telefon numarası'],
 	'流量池': ['Data plan', 'Veri paketi'],
 	'今日流量': ['Today’s data', 'Bugünkü veri'],
@@ -90,6 +239,38 @@ var DASH_I18N = {
 	'短信转发': ['SMS forwarding', 'SMS yönlendirme'],
 	'开启短信转发': ['Enable SMS forwarding', 'SMS yönlendirmeyi aç'],
 	'转发已开启': ['Forwarding enabled', 'Yönlendirme açık'],
+	'转发配置': ['Forwarding profiles', 'Yönlendirme profilleri'],
+	'启用当前配置': ['Enable this profile', 'Bu profili etkinleştir'],
+	'电源通知使用共用配置；请同时开启该配置并设置渠道。': ['Power notifications use the shared profile; enable that profile and configure its channel.', 'Güç bildirimleri ortak profili kullanır; bu profili etkinleştirip kanalını yapılandırın.'],
+	'转发正在执行，请稍后再试': ['A delivery is running; please try again shortly', 'Bir gönderim sürüyor; lütfen biraz sonra tekrar deneyin'],
+	'配置模式': ['Configuration mode', 'Yapılandırma modu'],
+	'所有 SIM 共用': ['Shared by all SIMs', 'Tüm SIM kartları için ortak'],
+	'按 SIM 独立配置': ['Separate profile per SIM', 'SIM başına ayrı profil'],
+	'正在编辑': ['Editing profile', 'Düzenlenen profil'],
+	'共用配置 / 电源通知': ['Shared profile / power notifications', 'Ortak profil / güç bildirimleri'],
+	'独立模式按收到短信的卡选择渠道和黑名单，不受上网卡切换影响。电源通知始终使用共用配置。': ['Separate mode selects the channel and blacklist by the receiving SIM, not the data SIM. Power notifications always use the shared profile.', 'Ayrı modda kanal ve kara liste veri SIM kartına değil, SMS alan karta göre seçilir. Güç bildirimleri her zaman ortak profili kullanır.'],
+	'当前配置用于新短信转发。': ['This profile handles new incoming SMS.', 'Bu profil yeni gelen SMS mesajlarını yönlendirir.'],
+	'当前配置不用于短信；保存后仍保留，可单独测试。': ['This profile is inactive for SMS; its settings are retained and can be tested separately.', 'Bu profil SMS için etkin değil; ayarları korunur ve ayrı olarak test edilebilir.'],
+	'电源通知请在共用配置中设置，独立模式下仍生效。': ['Configure power notifications in the shared profile; they remain active in separate mode.', 'Güç bildirimlerini ortak profilde ayarlayın; ayrı modda da etkin kalır.'],
+	'填入推送预设': ['Fill from a push preset', 'Bildirim ön ayarını doldur'],
+	'自定义 / 兼容旧版': ['Custom / legacy compatible', 'Özel / eski sürümle uyumlu'],
+	'企业微信': ['WeCom', 'WeCom'],
+	'钉钉 Webhook': ['DingTalk Webhook', 'DingTalk Webhook'],
+	'预设只填入表单，请替换密钥后保存；需要钉钉加签时请选择“钉钉机器人”。': ['Presets only fill the form. Replace the keys and save; use DingTalk bot for signed requests.', 'Ön ayarlar yalnızca formu doldurur. Anahtarları değiştirip kaydedin; imzalı istekler için DingTalk botunu seçin.'],
+	'请求方法': ['Request method', 'İstek yöntemi'],
+	'请求超时（秒，1–120）': ['Request timeout (seconds, 1–120)', 'İstek zaman aşımı (saniye, 1–120)'],
+	'正文格式': ['Body format', 'Gövde biçimi'],
+	'正文模板': ['Body template', 'Gövde şablonu'],
+	'纯文本': ['Plain text', 'Düz metin'],
+	'占位符：{from}、{text}、{time}、{sim}、{device}、{kind}。JSON 占位符放在字符串内；按格式自动转义，绝不执行命令。': ['Placeholders: {from}, {text}, {time}, {sim}, {device}, {kind}. Put JSON placeholders inside strings; values are escaped for the format, never executed.', 'Yer tutucular: {from}, {text}, {time}, {sim}, {device}, {kind}. JSON yer tutucularını dizgelerin içine koyun; değerler biçime göre kaçışlanır, komut olarak çalıştırılmaz.'],
+	'GET 只发送 URL 参数；JSON 模板留空时沿用旧版 from/text/date 格式。仅支持公网 HTTPS，验证证书且不跟随重定向。': ['GET sends URL parameters only. An empty JSON template preserves the legacy from/text/date format. Public HTTPS only, with certificate verification and no redirects.', 'GET yalnızca URL parametrelerini gönderir. Boş JSON şablonu eski from/text/date biçimini korur. Yalnızca genel HTTPS; sertifika doğrulanır, yönlendirmeler izlenmez.'],
+	'附加请求头（每行 Name: value）': ['Extra headers (Name: value, one per line)', 'Ek başlıklar (satır başına Name: value)'],
+	'请求超时必须为 1–120 秒': ['Request timeout must be 1–120 seconds', 'İstek zaman aşımı 1–120 saniye olmalıdır'],
+	'正文模板必须是有效 JSON': ['Body template must be valid JSON', 'Gövde şablonu geçerli JSON olmalıdır'],
+	'填入推送预设？': ['Fill from this push preset?', 'Bu bildirim ön ayarı doldurulsun mu?'],
+	'将替换当前 Webhook 地址、正文及请求头，保存后才会生效。': ['This replaces the Webhook URL, body and headers in the form. Changes take effect only after saving.', 'Formdaki Webhook adresi, gövde ve başlıklar değiştirilir. Değişiklikler yalnızca kaydettikten sonra geçerli olur.'],
+	'切换编辑配置？': ['Switch the profile being edited?', 'Düzenlenen profil değiştirilsin mi?'],
+	'未保存的修改将被丢弃。': ['Unsaved changes will be discarded.', 'Kaydedilmemiş değişiklikler silinecek.'],
 	'转发未开启': ['Forwarding disabled', 'Yönlendirme kapalı'],
 	'转发方式': ['Forwarding method', 'Yönlendirme yöntemi'],
 	'模板语言': ['Template language', 'Şablon dili'],
@@ -131,6 +312,139 @@ var DASH_I18N = {
 	'发送测试消息': ['Send test message', 'Test mesajı gönder'],
 	'刷新状态': ['Refresh status', 'Durumu yenile'],
 	'最近转发：': ['Last forwarding: ', 'Son yönlendirme: '],
+	'最近投递记录': ['Recent deliveries', 'Son teslimatlar'],
+	'CPU 设置': ['CPU settings', 'CPU ayarları'],
+	"频率、电压、温控分别保存。频率和温控即时生效，电压重启后生效。": ["Frequency, voltage and thermal settings are saved separately. Frequency and thermal settings apply immediately; voltage applies after reboot.", "Frekans, voltaj ve sıcaklık ayarları ayrı kaydedilir. Frekans ve sıcaklık hemen, voltaj yeniden başlatmada uygulanır."],
+	"仅控制本区域；未勾选时只应用本次，并取消本区域的开机设置。": ["Controls this section only. When unchecked, apply for this session and remove only this section’s startup settings.", "Yalnızca bu bölümü yönetir. İşaretli değilse bu oturum için uygular ve yalnızca bu bölümün açılış ayarlarını kaldırır."],
+	"应用温控设置": ["Apply thermal settings", "Sıcaklık ayarlarını uygula"],
+	"应用频率设置": ["Apply frequency settings", "Frekans ayarlarını uygula"],
+	"应用温控设置？": ["Apply thermal settings?", "Sıcaklık ayarları uygulansın mı?"],
+	"应用频率设置？": ["Apply frequency settings?", "Frekans ayarları uygulansın mı?"],
+	"恢复温控启动基线？": ["Restore thermal boot baseline?", "Başlangıç sıcaklık ayarları geri yüklensin mi?"],
+	"恢复频率启动基线？": ["Restore frequency boot baseline?", "Başlangıç frekans ayarları geri yüklensin mi?"],
+	"仅恢复本次启动记录的温控阈值并取消温控开机应用；不修改频率或电压设置。": ["Restore only thermal thresholds recorded for this boot and disable thermal startup settings. Frequency and voltage settings are unchanged.", "Yalnızca bu açılışın sıcaklık eşiklerini geri yükler ve sıcaklık açılış ayarlarını kapatır. Frekans ve voltaj ayarları değişmez."],
+	"仅恢复本次启动记录的频率并取消频率开机应用；不修改温控或电压设置。": ["Restore only frequencies recorded for this boot and disable frequency startup settings. Thermal and voltage settings are unchanged.", "Yalnızca bu açılışın frekanslarını geri yükler ve frekans açılış ayarlarını kapatır. Sıcaklık ve voltaj ayarları değişmez."],
+	"温控阈值将立即应用；提高阈值可能增加温度。不修改频率或电压设置。": ["Thermal thresholds apply immediately; raising them may increase temperature. Frequency and voltage settings are unchanged.", "Sıcaklık eşikleri hemen uygulanır; yükseltmek sıcaklığı artırabilir. Frekans ve voltaj ayarları değişmez."],
+	"降低频率可能降低吞吐量；提高最低频率可能增加功耗和温度。不修改温控或电压设置。": ["Lower frequencies may reduce throughput; higher minimum frequencies may increase power use and temperature. Thermal and voltage settings are unchanged.", "Düşük frekans verimi azaltabilir; yüksek alt frekans güç tüketimini ve sıcaklığı artırabilir. Sıcaklık ve voltaj ayarları değişmez."],
+	"正在应用温控设置…": ["Applying thermal settings…", "Sıcaklık ayarları uygulanıyor…"],
+	"正在应用频率设置…": ["Applying frequency settings…", "Frekans ayarları uygulanıyor…"],
+	"温控设置已应用": ["Thermal settings applied", "Sıcaklık ayarları uygulandı"],
+	"频率设置已应用": ["Frequency settings applied", "Frekans ayarları uygulandı"],
+	"请刷新页面后分别应用频率或温控设置": ["Reload the page and apply frequency or thermal settings separately", "Sayfayı yenileyip frekans veya sıcaklık ayarlarını ayrı ayrı uygulayın"],
+	"频率与温控即时应用；电压偏移独立保存，重启后生效。": ["Frequency and thermal settings apply immediately; voltage offsets are saved separately and apply after reboot.", "Frekans ve sıcaklık ayarları hemen uygulanır; voltaj ofsetleri ayrı kaydedilir ve yeniden başlatmada uygulanır."],
+	"温控管理": ["Thermal management", "Sıcaklık yönetimi"],
+	"按实际温区调整被动阈值；临界保护与回差只读，保留内核降频绑定。": ["Adjust passive thresholds for actual thermal zones. Critical protection and hysteresis are read-only; kernel cooling bindings are preserved.", "Gerçek sıcaklık bölgelerinin pasif eşiklerini ayarlayın. Kritik koruma ve histerezis salt okunurdur; çekirdek soğutma bağlantıları korunur."],
+	"温区已禁用": ["Thermal zone disabled", "Sıcaklık bölgesi devre dışı"],
+	"内核温控": ["Kernel thermal control", "Çekirdek sıcaklık denetimi"],
+	"降频触发温度": ["Throttling threshold", "Frekans düşürme eşiği"],
+	"被动温控起点": ["Passive monitoring threshold", "Pasif izleme eşiği"],
+	"临界保护温度": ["Critical protection threshold", "Kritik koruma eşiği"],
+	"高温保护温度": ["Hot protection threshold", "Yüksek sıcaklık koruma eşiği"],
+	"只读阈值": ["Read-only threshold", "Salt okunur eşik"],
+	"回差": ["Hysteresis", "Histerezis"],
+	"只读": ["Read-only", "Salt okunur"],
+	"降温等级（当前 / 最大）": ["Cooling state (current / maximum)", "Soğutma seviyesi (mevcut / en yüksek)"],
+	"当前内核没有可写的 CPU 被动温控阈值，仅显示实际传感器。": ["This kernel exposes no writable passive CPU thermal thresholds; actual sensors are shown read-only.", "Bu çekirdekte yazılabilir pasif CPU sıcaklık eşiği yok; gerçek sensörler salt okunur gösterilir."],
+	"温度传感器": ["Temperature sensors", "Sıcaklık sensörleri"],
+	"提高阈值可能增加温度；此处不会关闭内核临界保护或设备紧急保护。": ["Raising thresholds may increase temperature. Kernel critical protection and device emergency protection are not disabled here.", "Eşikleri yükseltmek sıcaklığı artırabilir. Çekirdek kritik koruması ve cihaz acil koruması burada kapatılmaz."],
+	"应用频率与温控": ["Apply frequency & thermal settings", "Frekans ve sıcaklık ayarlarını uygula"],
+	"恢复启动基线": ["Restore boot baseline", "Başlangıç ayarlarını geri yükle"],
+	"恢复启动基线？": ["Restore boot baseline?", "Başlangıç ayarları geri yüklensin mi?"],
+	"恢复本次启动记录的频率与温控阈值，并取消开机自动应用；不修改电压。": ["Restore frequency and thermal thresholds recorded for this boot and disable automatic application at startup. Voltage is unchanged.", "Bu açılışta kaydedilen frekans ve sıcaklık eşiklerini geri yükle ve açılışta otomatik uygulamayı kapat. Voltaj değişmez."],
+	"频率与温控阈值将立即应用。降低频率可能降低吞吐量；提高最低频率或温控阈值可能增加功耗和温度。": ["Frequency and thermal thresholds apply immediately. Lower frequencies may reduce throughput; higher minimum frequencies or thermal thresholds may increase power use and temperature.", "Frekans ve sıcaklık eşikleri hemen uygulanır. Düşük frekans verimi azaltabilir; yüksek alt frekans veya sıcaklık eşikleri güç tüketimini ve sıcaklığı artırabilir."],
+	"温控配置无效": ["Invalid thermal settings", "Geçersiz sıcaklık ayarları"],
+	"温区不存在或名称不唯一": ["Thermal zone is missing or its name is ambiguous", "Sıcaklık bölgesi yok veya adı benzersiz değil"],
+	"只能调整可写的 CPU 被动温控阈值": ["Only writable passive CPU thermal thresholds can be adjusted", "Yalnızca yazılabilir pasif CPU sıcaklık eşikleri ayarlanabilir"],
+	"温控阈值超出保护范围": ["Thermal threshold is outside the protection limits", "Sıcaklık eşiği koruma sınırlarının dışında"],
+	"被动温控阈值必须至少相隔 1°C 并递增": ["Passive thresholds must increase with at least 1°C separation", "Pasif eşikler en az 1°C aralıkla artmalıdır"],
+	"温控配置回读不一致": ["Thermal settings did not match readback", "Sıcaklık ayarları geri okumayla eşleşmedi"],
+	"无法读取 CPU 启动基线": ["Could not read CPU boot baseline", "CPU başlangıç ayarları okunamadı"],
+	"无法保存 CPU 启动基线": ["Could not save CPU boot baseline", "CPU başlangıç ayarları kaydedilemedi"],
+	'SIM 卡管理': ['SIM management', 'SIM yönetimi'],
+	'切换上网卡后，看板、锁定和 AT 的查看卡槽会同步；仍可手动查看另一张卡。': ['Switching the data SIM also updates the SIM viewed by the dashboard, network locks and AT terminal. You can still view the other SIM manually.', 'Veri SIM kartı değiştirildiğinde panel, ağ kilitleri ve AT terminalinde görüntülenen SIM de güncellenir. Diğer SIM kartını yine elle görüntüleyebilirsiniz.'],
+	'切换上网卡': ['Switch data SIM', 'Veri SIM kartını değiştir'],
+	'默认上网卡': ['Default data SIM', 'Varsayılan veri SIM kartı'],
+	'当前上网卡': ['Active data SIM', 'Etkin veri SIM kartı'],
+	'欠费或无信号不影响选卡；数据连接失败不会自动切回。': ['A SIM can be selected without credit or signal. A data connection failure does not switch back automatically.', 'Bakiye veya sinyal olmadan SIM seçilebilir. Veri bağlantısı başarısız olursa otomatik geri geçiş yapılmaz.'],
+	'数据连接': ['Data connection', 'Veri bağlantısı'],
+	'最低频率': ['Minimum frequency', 'En düşük frekans'],
+	'最高频率': ['Maximum frequency', 'En yüksek frekans'],
+	'开机默认': ['Boot default', 'Açılış varsayılanı'],
+	'切换上网卡？': ['Switch data SIM?', 'Veri SIM kartı değiştirilsin mi?'],
+	'目标卡槽': ['Target SIM slot', 'Hedef SIM yuvası'],
+	'正在切换上网卡…': ['Switching data SIM…', 'Veri SIM kartı değiştiriliyor…'],
+	'上网卡切换完成': ['Data SIM switch completed', 'Veri SIM kartı değiştirildi'],
+	'切换会短暂中断蜂窝网络，成功后作为开机默认上网卡；不会切换 USB 或 Wi-Fi。': ['Switching briefly interrupts cellular service. On success the card becomes the boot default. USB and Wi-Fi are unchanged.', 'Geçiş hücresel hizmeti kısa süreli keser. Başarılı olursa kart açılış varsayılanı olur. USB ve Wi-Fi değişmez.'],
+	'当前配置不支持双卡切换': ['Dual SIM switching is not supported by this configuration', 'Bu yapılandırma çift SIM geçişini desteklemiyor'],
+	'双卡尚未共同初始化，请重启后检查状态': ['Both SIMs have not been initialized together; reboot and check status', 'İki SIM birlikte başlatılmadı; yeniden başlatıp durumu kontrol edin'],
+	'SIM 卡槽无效': ['Invalid SIM slot', 'Geçersiz SIM yuvası'],
+	'另一项模组操作正在执行': ['Another modem operation is running', 'Başka bir modem işlemi çalışıyor'],
+	'无法核验当前上网卡': ['Could not verify the current data SIM', 'Geçerli veri SIM kartı doğrulanamadı'],
+	'目标 SIM 尚未就绪': ['The target SIM is not ready', 'Hedef SIM hazır değil'],
+	'旧数据连接未停止，已取消切换': ['The old data connection did not stop; switch cancelled', 'Eski veri bağlantısı durmadı; geçiş iptal edildi'],
+	'切换失败，已恢复原上网卡': ['Switch failed; the original SIM was restored', 'Geçiş başarısız; önceki SIM geri yüklendi'],
+	'切换失败且恢复不完整，请检查 SIM 和信号': ['Switch failed and recovery is incomplete; check the SIM and signal', 'Geçiş başarısız ve kurtarma eksik; SIM kartı ve sinyali kontrol edin'],
+	'上网卡切换适配器': ['Data SIM switch adapter', 'Veri SIM geçiş bağdaştırıcısı'],
+	'分卡网卡映射': ['Per-SIM network device mapping', 'SIM başına ağ aygıtı eşlemesi'],
+	'两张 SIM 映射到同一网卡，已暂停第二卡统计以避免重复计费': ['Both SIMs map to the same device; SIM 2 metering is paused to avoid duplicate counting', 'İki SIM aynı aygıta eşlenmiş; çift sayımı önlemek için SIM 2 ölçümü duraklatıldı'],
+	'启用双卡后请重启设备，以建立独立的第二卡短信接收通道。': ['After enabling dual SIM, reboot to establish the second SIM’s independent SMS receive channel.', 'Çift SIM etkinleştirildikten sonra ikinci SIM için bağımsız SMS alma kanalını oluşturmak üzere yeniden başlatın.'],
+	'留空使用平台默认映射，不影响已有流量账本。': ['Leave empty for platform defaults; existing traffic ledgers are preserved.', 'Platform varsayılanları için boş bırakın; mevcut trafik kayıtları korunur.'],
+	'正在查看': ['Viewing', 'Görüntülenen'],
+	'查看卡槽': ['View SIM slot', 'SIM yuvasını görüntüle'],
+	'仅切换查看与控制对象，不切换上网卡。': ['Changes the SIM being viewed and controlled, not the mobile data SIM.', 'Görüntülenen ve kontrol edilen SIM değişir; mobil veri SIM kartı değişmez.'],
+	'SIM 卡槽不可用': ['SIM slot unavailable', 'SIM yuvası kullanılamıyor'],
+	'请使用 SIM 管理切换卡槽，终端禁止改写卡槽寻址': ['Use SIM management to switch cards; changing SIM addressing in the terminal is blocked', 'Kart değiştirmek için SIM yönetimini kullanın; terminalde SIM adresleme değişikliği engellendi'],
+	'SIM 卡槽数量': ['Number of SIM slots', 'SIM yuvası sayısı'],
+	'单卡': ['Single SIM', 'Tek SIM'],
+	'双卡': ['Dual SIM', 'Çift SIM'],
+	'仅在硬件与 AT 适配器支持独立双卡寻址时开启双卡；查看卡槽不会切换上网卡。': ['Enable dual SIM only when the hardware and AT adapter support independent SIM addressing. Viewing a slot does not switch mobile data.', 'Çift SIM yalnızca donanım ve AT bağdaştırıcısı bağımsız SIM adreslemeyi destekliyorsa etkinleştirilmelidir. Bir yuvayı görüntülemek mobil veriyi değiştirmez.'],
+	'调速器': ['Governor', 'Frekans yöneticisi'],
+	'最低频率（kHz）': ['Minimum frequency (kHz)', 'En düşük frekans (kHz)'],
+	'最高频率（kHz）': ['Maximum frequency (kHz)', 'En yüksek frekans (kHz)'],
+	'应用设置': ['Apply settings', 'Ayarları uygula'],
+	'仅调整驱动支持的调速器与频率范围，不修改电压或温控。': ['Only changes driver-supported governors and frequency limits, not voltage or thermal controls.', 'Yalnızca sürücünün desteklediği yöneticileri ve frekans sınırlarını değiştirir; voltaj veya sıcaklık denetimini değiştirmez.'],
+	'CPU 调频驱动尚未就绪': ['CPU frequency driver is not ready', 'CPU frekans sürücüsü hazır değil'],
+	'未勾选时仅本次运行生效，并取消之前保存的开机应用设置。': ['When unchecked, applies only until reboot and removes any previously saved boot settings.', 'İşaretlenmezse yalnızca yeniden başlatmaya kadar geçerlidir ve önceden kaydedilen açılış ayarlarını kaldırır.'],
+	'应用 CPU 设置？': ['Apply CPU settings?', 'CPU ayarları uygulansın mı?'],
+	'降低频率可能降低吞吐量；提高最低频率可能增加功耗和温度。': ['Lower frequencies may reduce throughput; raising the minimum may increase power use and temperature.', 'Düşük frekanslar aktarım hızını azaltabilir; alt sınırı yükseltmek güç tüketimini ve sıcaklığı artırabilir.'],
+	'正在应用 CPU 设置…': ['Applying CPU settings…', 'CPU ayarları uygulanıyor…'],
+	'CPU 设置已应用': ['CPU settings applied', 'CPU ayarları uygulandı'],
+	'CPU 设置失败且回滚不完整，请检查实际状态': ['CPU settings failed and rollback was incomplete; check actual state', 'CPU ayarları başarısız ve geri alma eksik; gerçek durumu kontrol edin'],
+	'CPU 配置无效': ['Invalid CPU settings', 'Geçersiz CPU ayarları'],
+	'调速器与频率即时应用；电压偏移独立保存，重启后生效，不修改温控。': ['Governors and frequency limits apply immediately. Voltage offsets are saved separately and apply after reboot; thermal controls are unchanged.', 'Yönetici ve frekans sınırları hemen uygulanır. Voltaj ofsetleri ayrı kaydedilir ve yeniden başlatmada uygulanır; sıcaklık denetimi değişmez.'],
+	'CPU 电压偏移': ['CPU voltage offsets', 'CPU voltaj ofsetleri'],
+	'频率与调速策略': ['Frequency & governor', 'Frekans ve yönetici'],
+	'即时生效': ['Applies immediately', 'Hemen uygulanır'],
+	'重启生效': ['Applies after reboot', 'Yeniden başlatmada uygulanır'],
+	'当前频率': ['Current frequency', 'Geçerli frekans'],
+	'按 CPU 簇设置，步进 3.125 mV。偏移会同时作用于固件对应的 CPU/SRAM 电压表；不增加超频档位。': ['Set each CPU cluster in 3.125 mV steps. Firmware adjusts the corresponding CPU/SRAM voltage tables together; no overclock states are added.', 'Her CPU kümesini 3.125 mV adımlarla ayarlayın. Donanım yazılımı ilgili CPU/SRAM voltaj tablolarını birlikte ayarlar; hız aşırtma kademesi eklenmez.'],
+	'已保存，将在下次重启时应用': ['Saved; applies on next reboot', 'Kaydedildi; sonraki yeniden başlatmada uygulanır'],
+	'当前电压偏移与保存值一致': ['Active voltage offsets match the saved values', 'Etkin voltaj ofsetleri kayıtlı değerlerle aynı'],
+	'当前内核或固件不支持电压调整': ['This kernel or firmware does not support voltage adjustment', 'Bu çekirdek veya donanım yazılımı voltaj ayarını desteklemiyor'],
+	'检测到异常关机，已停用上次的电压设置并恢复默认。': ['An unclean shutdown was detected. The previous voltage profile was disabled and defaults restored.', 'Düzgün kapanmama algılandı. Önceki voltaj profili devre dışı bırakılıp varsayılanlar geri yüklendi.'],
+	'当前偏移': ['Active offset', 'Etkin ofset'],
+	'偏移预设': ['Offset presets', 'Ofset ön ayarları'],
+	'默认电压': ['Default voltage', 'Varsayılan voltaj'],
+	'预设仅填入小幅偏移，不会直接保存；非零偏移仍需验证稳定性，不保证每颗芯片都安全。': ['Presets only fill in small offsets; they do not save. Non-zero offsets still require stability testing and are not guaranteed safe for every chip.', 'Ön ayarlar yalnızca küçük ofsetleri doldurur; kaydetmez. Sıfır dışı ofsetler kararlılık testi gerektirir ve her çip için güvenli olduğu garanti edilmez.'],
+	'当前偏移 → 下次启动偏移': ['Active offset → Next boot offset', 'Etkin ofset → Sonraki açılış ofseti'],
+	'请核对各簇偏移。非零偏移可能导致死机或数据损坏，预设也不保证稳定。确认仅保存配置，下次重启生效，不会立即调压。': ['Check the offsets for each cluster. Non-zero offsets may cause crashes or data corruption; presets do not guarantee stability. Confirming only saves the configuration for the next reboot; voltage will not change now.', 'Her kümenin ofsetini kontrol edin. Sıfır dışı ofsetler çökmeye veya veri bozulmasına yol açabilir; ön ayarlar kararlılığı garanti etmez. Onaylama yalnızca sonraki yeniden başlatma için yapılandırmayı kaydeder; voltaj şimdi değişmez.'],
+	'确认保存': ['Confirm save', 'Kaydetmeyi onayla'],
+	'下次启动偏移（mV）': ['Next boot offset (mV)', 'Sonraki açılış ofseti (mV)'],
+	'当前固件电压表': ['Current firmware voltage table', 'Geçerli donanım yazılımı voltaj tablosu'],
+	'保存电压设置': ['Save voltage settings', 'Voltaj ayarlarını kaydet'],
+	'恢复默认电压': ['Restore default voltage', 'Varsayılan voltajı geri yükle'],
+	'调压可能导致死机或数据丢失，请从小幅调整开始。异常断电或重启后会停用电压配置；正常关机保留。保存不会立即调压或自动重启。': ['Voltage changes may cause crashes or data loss; start with small adjustments. An unclean shutdown disables the profile; clean shutdown preserves it. Saving does not change live voltage or reboot.', 'Voltaj değişiklikleri çökmeye veya veri kaybına yol açabilir; küçük ayarlarla başlayın. Düzgün olmayan kapanma profili devre dışı bırakır; normal kapanma korur. Kaydetmek anlık voltajı değiştirmez veya yeniden başlatmaz.'],
+	'CPU 电压配置无效': ['Invalid CPU voltage settings', 'Geçersiz CPU voltaj ayarları'],
+	'恢复默认电压？': ['Restore default voltage?', 'Varsayılan voltaj geri yüklensin mi?'],
+	'保存电压设置？': ['Save voltage settings?', 'Voltaj ayarları kaydedilsin mi?'],
+	'电压设置仅在下次重启时应用；请确认已了解调压风险。': ['Voltage settings apply only after reboot. Please confirm that you understand the risks.', 'Voltaj ayarları yalnızca yeniden başlatmada uygulanır. Riskleri anladığınızı onaylayın.'],
+	'正在保存电压设置…': ['Saving voltage settings…', 'Voltaj ayarları kaydediliyor…'],
+	'电压设置已保存，重启后生效': ['Voltage settings saved; reboot to apply', 'Voltaj ayarları kaydedildi; uygulamak için yeniden başlatın'],
+	'CPU 设置正忙，请稍后重试': ['CPU settings are busy; try again later', 'CPU ayarları meşgul; daha sonra tekrar deneyin'],
+	'CPU 配置回读不一致': ['CPU settings did not match readback', 'CPU ayarları geri okumayla eşleşmedi'],
+	'无法保存 CPU 设置': ['Could not save CPU settings', 'CPU ayarları kaydedilemedi'],
+	'测试消息': ['Test message', 'Test mesajı'],
+	'仅保留本次开机最近 30 次投递结果，不记录号码、地址或短信内容。': ['Keeps the last 30 delivery results since boot; no numbers, addresses or message content are recorded.', 'Açılıştan bu yana son 30 teslimat sonucu tutulur; numara, adres veya mesaj içeriği kaydedilmez.'],
 	'最近电源通知：': ['Last power notice: ', 'Son güç bildirimi: '],
 	'暂无投递': ['No delivery yet', 'Henüz teslimat yok'],
 	'发送成功': ['Sent successfully', 'Başarıyla gönderildi'],
@@ -202,6 +516,26 @@ var DASH_I18N = {
 	'添加 USB 网卡到 LAN？': ['Add USB adapter to LAN?', 'USB bağdaştırıcısı LAN’a eklensin mi?'],
 	'这会保存网桥配置并重新加载网络，现有连接可能短暂中断。': ['This saves the bridge configuration and reloads networking; existing connections may briefly drop.', 'Bu işlem köprü yapılandırmasını kaydedip ağı yeniden yükler; mevcut bağlantılar kısa süreli kesilebilir.'],
 	'正在添加 USB 网卡…': ['Adding USB adapter…', 'USB bağdaştırıcısı ekleniyor…'],
+	'自动将空闲 USB 网卡加入 LAN': ['Automatically add unused USB adapters to LAN', 'Boştaki USB bağdaştırıcılarını otomatik olarak LAN’a ekle'],
+	'保存策略': ['Save policy', 'İlkeyi kaydet'],
+	'默认关闭。启用后在网卡接入或 LAN 启动时自动加入空闲 USB 有线网卡；不会接管其他网络、USB Wi-Fi 或本机共享接口。关闭不会删除已保存端口。': ['Off by default. On adapter attachment or LAN startup, unused USB Ethernet adapters are added automatically. Other networks, USB Wi-Fi and local tethering interfaces are excluded. Disabling does not remove saved ports.', 'Varsayılan olarak kapalıdır. Bağdaştırıcı bağlandığında veya LAN başladığında boştaki USB Ethernet bağdaştırıcıları otomatik eklenir. Diğer ağlar, USB Wi-Fi ve yerel paylaşım arayüzleri hariç tutulur. Kapatmak kayıtlı bağlantı noktalarını silmez.'],
+	'仅主机模式可用。刷新只尝试启用未被其他网络占用的网卡；现有网卡可手动添加到 LAN。': ['Host mode only. Refresh only brings up adapters not owned by other networks; existing adapters can be added to LAN manually.', 'Yalnızca ana makine modunda. Yenileme yalnızca başka ağlara ait olmayan bağdaştırıcıları açar; mevcut bağdaştırıcılar LAN’a elle eklenebilir.'],
+	'保存 USB 网卡自动加入策略？': ['Save USB adapter auto-add policy?', 'USB bağdaştırıcısı otomatik ekleme ilkesi kaydedilsin mi?'],
+	'空闲 USB 有线网卡会成为 LAN 端口，向所连接网络提供局域网访问。仅连接可信网络；已连接的网卡可手动添加。': ['Unused USB Ethernet adapters will become LAN ports and grant LAN access to the connected network. Connect trusted networks only; already connected adapters can be added manually.', 'Boştaki USB Ethernet bağdaştırıcıları LAN bağlantı noktası olur ve bağlı ağa LAN erişimi sağlar. Yalnızca güvenilir ağları bağlayın; zaten bağlı bağdaştırıcılar elle eklenebilir.'],
+	'停止自动加入新网卡；已保存的 LAN 端口及热插拔恢复保持不变。': ['Stop adding new adapters automatically; saved LAN ports and hotplug recovery remain unchanged.', 'Yeni bağdaştırıcıları otomatik eklemeyi durdurur; kayıtlı LAN bağlantı noktaları ve yeniden bağlanma korunur.'],
+	'USB 网卡自动加入策略已保存': ['USB adapter auto-add policy saved', 'USB bağdaştırıcısı otomatik ekleme ilkesi kaydedildi'],
+	'驱动': ['Driver', 'Sürücü'],
+	'链路未连接': ['Link disconnected', 'Bağlantı yok'],
+	'当前归属': ['Assigned to', 'Atandığı ağ'],
+	'未分配': ['Unassigned', 'Atanmamış'],
+	'已被其他网络占用': ['In use by another network', 'Başka bir ağ tarafından kullanılıyor'],
+	'已保存，等待接入网桥': ['Saved; waiting for bridge attachment', 'Kaydedildi; köprüye bağlanması bekleniyor'],
+	'不可添加': ['Unavailable', 'Eklenemez'],
+	'USB 网卡配置正忙，请稍后重试': ['USB adapter configuration is busy; try again later', 'USB bağdaştırıcısı yapılandırması meşgul; daha sonra tekrar deneyin'],
+	'配置有未保存更改，请先处理后重试': ['Resolve pending configuration changes before retrying', 'Tekrar denemeden önce bekleyen yapılandırma değişikliklerini çözün'],
+	'无法保存 USB 网卡自动加入设置': ['Could not save USB adapter auto-add settings', 'USB bağdaştırıcısı otomatik ekleme ayarları kaydedilemedi'],
+	'无法确认网卡归属，请稍后重试': ['Could not determine adapter ownership; try again later', 'Bağdaştırıcının ait olduğu ağ belirlenemedi; daha sonra tekrar deneyin'],
+	'网卡已被其他网络占用，不可加入 LAN': ['Adapter belongs to another network and cannot join LAN', 'Bağdaştırıcı başka bir ağa ait ve LAN’a eklenemez'],
 	'添加失败：': ['Add failed: ', 'Ekleme başarısız: '],
 	'切换失败：': ['Switch failed: ', 'Değiştirme başarısız: '],
 	'保存失败：': ['Save failed: ', 'Kaydetme başarısız: '],
@@ -327,6 +661,14 @@ var DASH_I18N = {
 	'调用失败': ['Request failed', 'İstek başarısız'],
 	'正在断开数据连接': ['Disconnecting data', 'Veri bağlantısı kesiliyor'],
 	'正在拨号': ['Connecting data', 'Veri bağlantısı kuruluyor'],
+	'断开数据连接': ['Disconnect data', 'Veri bağlantısını kes'],
+	'建立数据连接': ['Connect data', 'Veri bağlantısı kur'],
+	'将断开蜂窝数据连接，依赖此连接的设备将无法上网。': ['Cellular data will disconnect. Devices using this connection will lose internet access.', 'Hücresel veri bağlantısı kesilecek. Bu bağlantıyı kullanan cihazlar internet erişimini kaybedecek.'],
+	'将建立蜂窝数据连接，可能产生流量费用。': ['A cellular data connection will be established. Data charges may apply.', 'Hücresel veri bağlantısı kurulacak. Veri ücreti uygulanabilir.'],
+	'关闭 Wi-Fi 热点': ['Turn off Wi-Fi hotspot', 'Wi-Fi erişim noktasını kapat'],
+	'打开 Wi-Fi 热点': ['Turn on Wi-Fi hotspot', 'Wi-Fi erişim noktasını aç'],
+	'热点客户端会断开；若正通过此热点管理设备，需要重新连接后才能继续访问。': ['Hotspot clients will disconnect. If you are managing the device through this hotspot, reconnect to regain access.', 'Erişim noktasına bağlı cihazların bağlantısı kesilecek. Cihazı bu erişim noktasından yönetiyorsanız erişmek için yeniden bağlanmanız gerekecek.'],
+	'将使用已保存的配置开启 Wi-Fi 热点。': ['The Wi-Fi hotspot will start using the saved settings.', 'Wi-Fi erişim noktası kayıtlı ayarlarla açılacak.'],
 	'关闭蜂窝射频': ['Turn off cellular radio', 'Hücresel radyoyu kapat'],
 	'打开蜂窝射频': ['Turn on cellular radio', 'Hücresel radyoyu aç'],
 	'蜂窝连接会中断': ['Cellular connectivity will be interrupted', 'Hücresel bağlantı kesilecek'],
@@ -372,7 +714,11 @@ var DASH_I18N = {
 	'AT 终端': ['AT terminal', 'AT terminali'],
 	'适配设置': ['Adapter settings', 'Bağdaştırıcı ayarları'],
 	'主页刷新间隔（秒）': ['Home dashboard refresh interval (seconds)', 'Ana pano yenileme aralığı (saniye)'],
-	'仅控制主页状态看板的刷新频率；允许 0.5–60 秒，保存后重新进入主页生效。': ['Controls only the home dashboard refresh rate; 0.5–60 seconds. Reopen Home after saving to apply.', 'Yalnızca ana panonun yenileme hızını kontrol eder; 0,5–60 saniye. Kaydettikten sonra uygulamak için Ana Sayfa’yı yeniden açın.'],
+	'主页状态每 2–60 秒刷新，网速独立每秒刷新；旧设置不足 2 秒时按 2 秒处理。保存后重新进入主页生效。': ['Status refreshes every 2–60 seconds; speed refreshes independently every second. Older settings below 2 seconds use 2 seconds. Reopen Home after saving.', 'Durum 2–60 saniyede bir, hız bağımsız olarak her saniye yenilenir. 2 saniyenin altındaki eski ayarlar 2 saniye olarak uygulanır. Kaydettikten sonra Ana Sayfa’yı yeniden açın.'],
+	'正在更新…': ['Updating…', 'Güncelleniyor…'],
+	'读取失败，稍后重试': ['Read failed; retrying shortly', 'Okuma başarısız; kısa süre sonra yeniden denenecek'],
+	'收件人': ['Recipient', 'Alıcı'],
+	'会话': ['Conversations', 'Görüşmeler'],
 	'当前驻网': ['Serving network', 'Bağlı olunan ağ'],
 	'网络模式 · EN-DC': ['Network mode · EN-DC', 'Ağ modu · EN-DC'],
 	'自动（5G/4G）': ['Automatic (5G/4G)', 'Otomatik (5G/4G)'],
@@ -579,7 +925,28 @@ var PLMN_CN = {
 
 function carrierName(op) {
 	if (!op) return '--';
-	return translate(op.name || PLMN_CN[op.plmn] || op.plmn || '--');
+	var name = op.name || PLMN_CN[op.plmn] || op.plmn || '--';
+	var key = String(name).toUpperCase().replace(/[\s_\-]/g, '');
+	var aliases = [
+		[['中国移动', '中国移动通信', 'CHINAMOBILE', 'CHNMOBILE', 'CMCC'], '中国移动'],
+		[['中国联通', 'CHINAUNICOM', 'CHNUNICOM', 'UNICOM', 'CUCC'], '中国联通'],
+		[['中国电信', 'CHINATELECOM', 'CHNCT', 'CHNCTLTE', 'CTCC'], '中国电信'],
+		[['中国广电', 'CHINABROADNET', 'CHNBG', 'CBN', 'CHINABROADCASTINGNETWORK'], '中国广电']
+	];
+	for (var i = 0; i < aliases.length; i++)
+		if (aliases[i][0].indexOf(key) >= 0) return translate(aliases[i][1]);
+	return translate(name);
+}
+
+/* Staged snapshots retain only slow fields that have not completed yet.
+ * Explicit null in a completed stage means unavailable, not stale data. */
+function mergeCell(previous, next) {
+	if (!next) return previous || null;
+	if (!next.partial || !previous || next.error) return Object.assign({}, next);
+	var merged = Object.assign({}, next);
+	['ident', 'qos'].forEach(function(k) { merged[k] = previous[k]; });
+	if (next.neigh_pending) merged.neigh = previous.neigh;
+	return merged;
 }
 
 /* 信号质量分级（阈值来自 ufi_tools 的 SignalQuality.kt），返回 CSS 颜色表达式 */
@@ -677,6 +1044,7 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;margin-top:6px}
 .mud-card{background:var(--surface,var(--background-alt,var(--background,#fff)));border:1px solid var(--hairline,var(--border,#e3e6ea));border-radius:calc(var(--radius-base,.5rem) + .375rem);padding:14px 16px;box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.04));transition:border-color .15s}
 .mud-card:hover{border-color:color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 30%,var(--hairline,var(--border,#e3e6ea)))}
+.mud .mud-sim-toggle,.mud .mud-sim-toggle:hover{background:transparent}
 .mud-card>h3{margin:0 0 8px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
 .mud-card>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
 .mud-hero{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center;background:var(--brand-subtle,var(--surface,#fff));margin-bottom:12px;padding:16px 20px}
@@ -813,7 +1181,17 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-toast.notify .mud-nb{display:flex;flex-direction:column;gap:2px;min-width:0}
 .mud-toast.notify .mud-nb b{font-size:.82rem;font-weight:700}
 .mud-toast.notify .mud-nb span{font-size:.76rem;color:var(--text-muted,var(--text-light,#888));overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.mud-btn .mud-spin,.mud-lockbtn .mud-spin{flex:0 0 auto;width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in oklab,currentColor 30%,transparent);border-top-color:currentColor;animation:mudspin .7s linear infinite}
+.mud-progress.is-loading::before{content:'';display:inline-block;margin-right:6px;vertical-align:middle}
+.mud-locks .mud-lock-heading{display:flex;align-items:center;gap:8px;min-width:0}
+.mud-locks .mud-lock-heading::before{flex-shrink:0;margin-right:0}
+.mud-locks .mud-heading-label{flex:1 1 auto;min-width:0}
+/* Keep an identical title-side slot for idle, loading and errors. No row is
+ * inserted or removed on each live AT poll, including on narrow screens. */
+.mud-locks .mud-lock-progress{flex:0 0 11em;max-width:50%;min-width:0;height:1.4em;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.7rem;font-weight:400;letter-spacing:normal;text-align:right;color:var(--text-muted,var(--text-light,#777))}
+.mud-locks .mud-lock-progress:empty{visibility:hidden}
+.mud-locks .mud-hero .mud-heading-label{flex:0 1 auto}
+.mud-locks .mud-hero .mud-lock-progress{text-align:left}
+.mud-progress.is-loading::before,.mud-btn .mud-spin,.mud-lockbtn .mud-spin{flex:0 0 auto;width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in oklab,currentColor 30%,transparent);border-top-color:currentColor;animation:mudspin .7s linear infinite}
 .mud-btn.busy,.mud-lockbtn.busy{pointer-events:none;opacity:.75}
 /* ---- 主题化对话框（替代浏览器 confirm/alert） ---- */
 .mud-dlg-wrap{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.42);animation:mudfade-in .16s ease-out;padding:20px}
@@ -966,23 +1344,26 @@ function toast(text, opts) {
 function busy(btn, on) {
 	if (!btn || !btn.classList) return;
 	if (on === undefined) on = !btn.classList.contains('busy');
-	if (on && !btn.classList.contains('busy')) {
+	if (on) {
 		btn.classList.add('busy');
-		var s = document.createElement('i');
-		s.className = 'mud-spin';
-		btn.insertBefore(s, btn.firstChild);
-	} else if (!on && btn.classList.contains('busy')) {
+		if (!btn.querySelector('.mud-spin')) {
+			var s = document.createElement('i');
+			s.className = 'mud-spin';
+			btn.insertBefore(s, btn.firstChild);
+		}
+	} else {
+		// Repainting a button may replace className without removing its children.
+		// Always clean up the spinner, even when the busy class was already lost.
 		btn.classList.remove('busy');
-		var sp = btn.querySelector('.mud-spin');
-		if (sp) sp.remove();
+		Array.prototype.forEach.call(btn.querySelectorAll('.mud-spin'), function(sp) { sp.remove(); });
 	}
 }
 
 /* ------------------------------------------------------------------ 对话框
  * M.confirmBox(title, message, opts) -> Promise<boolean>：主题化确认框，
- * 取消/遮罩/Escape 都 resolve(false)，确定/Enter resolve(true)。
+ * 取消/遮罩/Escape 都 resolve(false)，确定 resolve(true)，Enter 遵循当前按钮焦点。
  * M.alertBox(title, message, opts) -> Promise<true>：单按钮提示框。
- * opts: { danger:true 红色确认键, okText, cancelText }；danger 时默认焦点在取消上。 */
+ * opts: { danger:true 红色确认键, okText, cancelText, content: DOM Node }；danger 时默认焦点在取消上。 */
 function dialog(opts) {
 	opts = opts || {};
 	return new Promise(function(resolve) {
@@ -996,6 +1377,7 @@ function dialog(opts) {
 			'</div></div>';
 		wrap.querySelector('h4').textContent = translate(opts.title || '确认');
 		wrap.querySelector('.mud-dlg-msg').textContent = translate(opts.message || '');
+		if (opts.content instanceof Node) wrap.querySelector('.mud-dlg-msg').appendChild(opts.content);
 		var btns = wrap.querySelectorAll('.mud-dlg-btns .mud-btn');
 		btns[btns.length - 1].textContent = translate(opts.okText || '确定');
 		if (withCancel) btns[0].textContent = translate(opts.cancelText || '取消');
@@ -1006,10 +1388,10 @@ function dialog(opts) {
 		};
 		var onKey = function(ev) {
 			if (ev.key == 'Escape') { ev.preventDefault(); done(withCancel ? false : true); }
-			else if (ev.key == 'Enter') { ev.preventDefault(); done(true); }
+			else if (ev.key == 'Enter') { ev.preventDefault(); done(!(withCancel && document.activeElement === btns[0])); }
 		};
 		wrap.addEventListener('click', function(ev) {
-			var b = ev.target.closest('button');
+			var b = ev.target.closest('.mud-dlg-btns button[data-r]');
 			if (b) done(b.getAttribute('data-r') == '1');
 			else if (ev.target === wrap && withCancel) done(false);
 		});
@@ -1053,8 +1435,10 @@ function notify(title, message, opts) {
 var smsWatch = null;
 function watchSms() {
 	if (smsWatch) return;
-	smsWatch = { seen: null };
+	smsWatch = { seen: [null,null], inflight: false };
 	window.setInterval(function() {
+		if(document.hidden || smsWatch.inflight)return;
+		var slot=Number(selectedSlot()); smsWatch.inflight=true;
 		Promise.resolve(callSmsList(1)).catch(function() { return {}; }).then(function(r) {
 			r = r || {};
 			var msgs = r.msgs || [], max = 0;
@@ -1063,16 +1447,16 @@ function watchSms() {
 				if (id > max) max = id;
 			});
 			if (!max) return;
-			if (smsWatch.seen == null || max < smsWatch.seen) { smsWatch.seen = max; return; }
-			if (max > smsWatch.seen) {
+			if (smsWatch.seen[slot] == null || max < smsWatch.seen[slot]) { smsWatch.seen[slot] = max; return; }
+			if (max > smsWatch.seen[slot]) {
 				msgs.forEach(function(m) {
 					var id = parseInt(m.id, 10) || 0;
-					if (id > smsWatch.seen && m.dir === 'mt')
-						notify('新短信 · ' + (m.peer || '未知号码'), m.preview || '', { type: 'success' });
+					if (id > smsWatch.seen[slot] && m.dir === 'mt')
+						notify('SIM '+(slot+1)+' · 新短信 · ' + (m.peer || '未知号码'), m.preview || '', { type: 'success' });
 				});
-				smsWatch.seen = max;
+				smsWatch.seen[slot] = max;
 			}
-		});
+		}).finally(function(){smsWatch.inflight=false;});
 	}, 5000);
 }
 
@@ -1132,13 +1516,16 @@ function choiceBox(title, message, choices, opts) {
 
 /* LuCI 的 require 把模块当类工厂：必须返回 baseclass 派生的类，加载后拿到的是它的实例 */
 return baseclass.extend({
-	callStatus: callStatus, callSignal: callSignal, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
+	callRates: callRates, callCells: callCells, mergeCell: mergeCell, callStatus: callStatus, callSignal: callSignal, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
 	callLockGet: callLockGet, callLockFresh: callLockFresh, callLockSet: callLockSet,
+	callLockStatus: callLockStatus, waitLockJob: waitLockJob,
 	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	callForwardGet: callForwardGet, callForwardStatus: callForwardStatus,
+	callSimGet: callSimGet, simSelector: simSelector, selectedSlot: selectedSlot, selectViewedSlot: selectViewedSlot,
 	callForwardSet: callForwardSet, callForwardTest: callForwardTest,
 	callTrafficGet: callTrafficGet, callTrafficSet: callTrafficSet,
+	callTrafficClear: callTrafficClear,
 	callUsbGet: callUsbGet, callUsbSet: callUsbSet,
 	callUsbNetList: callUsbNetList, callUsbNetAdd: callUsbNetAdd,
 	carrierName: carrierName, qLabel: qLabel, qCol: qCol, qScore: qScore,

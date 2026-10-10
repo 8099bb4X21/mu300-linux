@@ -53,6 +53,7 @@ return view.extend({
 		M.localize(root);
 		this.wire(root);
 		this.loadHist();
+		M.simSelector(root);
 		return root;
 	},
 

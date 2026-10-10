@@ -46,6 +46,12 @@ make O=$O ARCH=arm64 -j"$(nproc)" Image > $O/build.log 2>&1 || {
     echo "--- end of build.log:"; tail -25 $O/build.log || true
     exit 1
 }
+if grep -qx 'CONFIG_DEBUG_INFO_BTF=y' "$O/.config"; then
+    # Consume all output: grep -q can SIGPIPE readelf under pipefail.
+    "${CROSS_COMPILE:-}readelf" -SW "$O/vmlinux" | grep -E '\.BTF[[:space:]]+PROGBITS' >/dev/null || {
+        echo 'BTF missing from the linked kernel' >&2; exit 1;
+    }
+fi
 cpp -nostdinc -undef -D__DTS__ -x assembler-with-cpp -I include -I scripts/dtc/include-prefixes \
   /work/dts/ums9620-mu300.dts | dtc -I dts -O dtb -o $O/ums9620-mu300.dtb -
 mkdir -p $OUT

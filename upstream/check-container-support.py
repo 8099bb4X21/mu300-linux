@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse old Images or incomplete module sets in either TF or kernel bundles."""
+"""Verify KVM/container/eBPF capabilities and complete TF/kernel module sets."""
 import argparse
 import hashlib
 import re
@@ -11,7 +11,11 @@ BUILTIN = '''VIRTUALIZATION KVM IKCONFIG IKCONFIG_PROC CGROUPS MEMCG BLK_CGROUP
 CGROUP_SCHED CGROUP_PIDS CPUSETS CGROUP_BPF CFS_BANDWIDTH BLK_DEV_THROTTLING
 NAMESPACES UTS_NS IPC_NS USER_NS PID_NS NET_NS SECCOMP SECCOMP_FILTER
 POSIX_MQUEUE VETH BRIDGE TUN OVERLAY_FS NF_CONNTRACK NF_NAT NF_TABLES NFT_COMPAT
-NETFILTER_XT_MATCH_CONNTRACK NETFILTER_XT_TARGET_MASQUERADE'''.split()
+NETFILTER_XT_MATCH_CONNTRACK NETFILTER_XT_TARGET_MASQUERADE
+BPF BPF_SYSCALL BPF_JIT BPF_EVENTS BPF_STREAM_PARSER BPF_UNPRIV_DEFAULT_OFF
+DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES KALLSYMS_ALL FTRACE FUNCTION_TRACER
+FUNCTION_GRAPH_TRACER DYNAMIC_FTRACE FTRACE_SYSCALLS KPROBES KPROBE_EVENTS
+UPROBES UPROBE_EVENTS PERF_EVENTS ARM_PMU'''.split()
 MODULES = {
     'VHOST_NET': 'vhost_net', 'VSOCKETS': 'vsock', 'VHOST_VSOCK': 'vhost_vsock',
     'BRIDGE_NETFILTER': 'br_netfilter', 'NETFILTER_XT_MATCH_ADDRTYPE': 'xt_addrtype',
@@ -19,6 +23,18 @@ MODULES = {
     'IP_VS': 'ip_vs', 'IP_VS_RR': 'ip_vs_rr', 'IP_VS_WRR': 'ip_vs_wrr',
     'IP_VS_SH': 'ip_vs_sh', 'VXLAN': 'vxlan', 'IPVLAN': 'ipvlan',
     'MACVTAP': 'macvtap', 'BINFMT_MISC': 'binfmt_misc', 'FUSE_FS': 'fuse',
+    'ARM_SPRD_CPUFREQ_V2': 'sprd_cpufreq_v2_driver',
+    'NETFILTER_XT_NAT': 'xt_nat',
+    'NET_SCH_FQ': 'sch_fq', 'NET_SCH_HTB': 'sch_htb',
+    'NET_SCH_TBF': 'sch_tbf', 'NET_SCH_PRIO': 'sch_prio',
+    'NET_SCH_NETEM': 'sch_netem', 'NET_CLS_U32': 'cls_u32',
+    'NET_CLS_FLOWER': 'cls_flower', 'NET_CLS_MATCHALL': 'cls_matchall',
+    'NET_ACT_BPF': 'act_bpf', 'NET_ACT_MIRRED': 'act_mirred',
+    'NET_ACT_POLICE': 'act_police', 'NET_ACT_GACT': 'act_gact',
+    'NET_ACT_SKBEDIT': 'act_skbedit', 'NET_ACT_CT': 'act_ct',
+    'IFB': 'ifb', 'NETLINK_DIAG': 'netlink_diag',
+    'UNIX_DIAG': 'unix_diag', 'PACKET_DIAG': 'af_packet_diag',
+    'IPVTAP': 'ipvtap', 'GENEVE': 'geneve',
 }
 
 
@@ -31,6 +47,8 @@ def config_check(path):
     for key in MODULES:
         if config.get('CONFIG_' + key) not in ('y', 'm'):
             raise ValueError(f'CONFIG_{key} missing in built kernel.config; rebuild kernel')
+    if config.get('CONFIG_ARM_SPRD_CPUFREQ_V2') != 'm':
+        raise ValueError('CONFIG_ARM_SPRD_CPUFREQ_V2=m required for boot voltage profiles; rebuild kernel')
     return config
 
 
@@ -115,5 +133,5 @@ if __name__ == '__main__':
             if args.rootfs:
                 check_rootfs(args.output, args.rootfs, release)
     except (OSError, ValueError) as error:
-        parser.exit(1, f'KVM/container build check: {error}\n')
-    print('KVM/container build checks passed (runtime verification still required)')
+        parser.exit(1, f'KVM/container/eBPF build check: {error}\n')
+    print('KVM/container/eBPF build checks passed (runtime verification still required)')

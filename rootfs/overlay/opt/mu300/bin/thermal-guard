@@ -1,7 +1,8 @@
 #!/bin/sh
-# Thermal safety for kernels without SoC trip points (mainline: the stock DT only has trips on the vendor virtual
-# zone). Reads the hottest on-die sensor every 5 s: above HOT caps every cpufreq policy one step lower, below COOL
-# lifts the cap one step, above CRIT powers off. The 5.4 vendor kernel throttles itself, so there it only watches.
+# Thermal safety for kernels without functional CPU cooling bindings. The mainline virtual sensor, when
+# available, restores the stock DT trips and lets native cooling handle frequency limits. Otherwise above HOT
+# caps each policy one step lower, below COOL lifts the cap. Mainline keeps CRIT emergency shutdown either way.
+# The 5.4 vendor kernel throttles/protects itself, so there this script only watches.
 # On every kernel: the SoC at HOT or (U30 Air) the battery at BATT_HOT (tenths of a degree, as power_supply reports it) sets
 # off the LED alarm (mu300-led alarm: a red and blue siren), until the SoC is down to COOL and the battery to
 # BATT_COOL.
@@ -17,6 +18,33 @@ throttle=1
 for z in "$R"/sys/class/thermal/thermal_zone*; do
     [ -e "$z/trip_point_0_temp" ] && { throttle=0; echo "kernel thermal trips present: only the LED alarm here"; break; }
 done
+legacy_throttle=$throttle
+[ -d "$R/sys/module/mu300_thermal" ] && legacy_throttle=1
+
+# The mainline virtual sensor can probe after this service starts. Only hand
+# frequency control over when every existing CPU cooling device is bound to
+# the enabled stock zone. Keep our more conservative 105 C shutdown protection.
+native_cpu_cooling() {
+    local zone mode kind dev link found count=0
+    [ -d "$R/sys/module/mu300_thermal" ] || return 1
+    for zone in "$R"/sys/class/thermal/thermal_zone*; do
+        read -r kind < "$zone/type" 2>/dev/null || continue
+        [ "$kind" = soc-thmzone ] || continue
+        read -r mode < "$zone/mode" 2>/dev/null || continue
+        [ "$mode" = enabled ] || return 1
+        for dev in "$R"/sys/class/thermal/cooling_device*; do
+            read -r kind < "$dev/type" 2>/dev/null || continue
+            case "$kind" in cpufreq-*) ;; *) continue ;; esac
+            count=$((count + 1)); found=0
+            for link in "$zone"/cdev[0-9]*; do
+                [ "$link" -ef "$dev" ] && { found=1; break; }
+            done
+            [ "$found" = 1 ] || return 1
+        done
+        [ "$count" -gt 0 ] && return 0
+    done
+    return 1
+}
 
 hottest() {
     local max=0 t
@@ -55,9 +83,15 @@ step() {
 # the alarm's state outlives a restart of this service, so a cooled device is never left flashing
 ALARM=$R/run/mu300/thermal-alarm
 while :; do
+    throttle=$legacy_throttle
+    emergency=$legacy_throttle
+    if [ -d "$R/sys/module/mu300_thermal" ]; then
+        throttle=1; emergency=1
+        native_cpu_cooling && throttle=0
+    fi
     t=$(hottest)
     b=$(battery)
-    if [ "$t" -ge "$CRIT" ] && [ "$throttle" = 1 ]; then
+    if [ "$t" -ge "$CRIT" ] && [ "$emergency" = 1 ]; then
         logger -t thermal-guard "critical temperature ${t} mC, powering off"
         poweroff
     elif [ "$t" -ge "$HOT" ] && [ "$throttle" = 1 ]; then

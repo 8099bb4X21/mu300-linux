@@ -242,6 +242,8 @@ set -- $(su_do 'e=0; for p in /sys/block/mmcblk0/mmcblk0p*; do x=$(( $(cat $p/st
 last_end=$1; disk=$2
 start=$(( (last_end / 4096 + 1) * 4096 ))
 end=$(( ((disk - 34) / 4096 - 1) * 4096 ))
+# Upstream bde23d0: a full partition table leaves no region, not a negative one.
+[ $end -gt $start ] || end=$start
 OFF=$((start * 512)); SIZE=$(( (end - start) * 512 ))
 gib() { awk -v b="$1" 'BEGIN { printf "%.1f GiB", b / 1073741824 }'; }
 # What each choice needs: the installed systems measure ~320 MiB (OpenWrt) and ~580 MiB (Ubuntu), and an update
@@ -259,6 +261,8 @@ fi
 # an existing installation defines the region (it may have been created with a slightly different size)
 existing=no
 for cand in $OFF 27762098176; do
+    # Never probe a superblock beyond the eMMC: the vendor block driver can hang.
+    [ "$cand" -ge 0 ] && [ $((cand + 2048)) -le $((disk * 512)) ] || continue
     m=$(su_do "dd if=/dev/block/mmcblk0 bs=1 skip=$((cand + 1080)) count=2 2>/dev/null | od -An -tx1" | tr -d ' ')
     l=$(su_do "dd if=/dev/block/mmcblk0 bs=1 skip=$((cand + 1144)) count=16 2>/dev/null" | tr -d '\000')
     if [ "$m" = 53ef ] && [ "$l" = mu300root ]; then

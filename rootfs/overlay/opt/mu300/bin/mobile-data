@@ -8,6 +8,9 @@ set -euo pipefail
 DEV=${MU300_AT_DEV:-/dev/stty_nr1}
 CID=1
 IFACE=sipa_eth$((CID - 1))
+. /opt/mu300/bin/mu300-sim-env
+mu300_sim_env "${MU300_SIM_SLOT:-}" || { echo 'Invalid SIM configuration' >&2; exit 2; }
+IFACE=$MU300_SIM_DEVICE
 DEVICE=$(/opt/mu300/bin/mu300-device 2>/dev/null || echo f50)
 
 # The blue LED only reports whether data is up. The PMIC rejects a brightness write now and then (seen as
@@ -52,19 +55,22 @@ at_owner_alive() {
 
 at() {  # at CMD [timeout] -> response lines up to the final result code
     local cmd=$1 t=${2:-5} line owner
+    cmd="AT+SPACTCARD=$MU300_SIM_SLOT;${cmd#AT}"
     # mobile-data gets its own AT channel (nr2, same slot-0 group as nr1): AT+CGDATA
     # blocks its channel for 10-20 s, and having it on the shared nr1 made every other
     # AT user (toolkit signal checks, SMS) wait behind it. The nr2 daemon serves only
     # this script, so the dial-up sequence never contends with anything.
-    if [ -p /run/mu300-at2/cmd ]; then
-        MU300_AT_DIR=/run/mu300-at2 /opt/mu300/bin/mu300-at -t "$t" "$cmd"
+    if [ -p "$MU300_SIM_DIAL/cmd" ]; then
+        MU300_AT_DIR=$MU300_SIM_DIAL /opt/mu300/bin/mu300-at -t "$t" "$cmd"
         return
     fi
     # fall through to the shared nr1 daemon when the nr2 one is not running yet
-    if [ -p /run/mu300-at/cmd ]; then
-        /opt/mu300/bin/mu300-at -t "$t" "$cmd"
+    if [ -p "$MU300_SIM_SHARED/cmd" ]; then
+        MU300_AT_DIR=$MU300_SIM_SHARED /opt/mu300/bin/mu300-at -t "$t" "$cmd"
         return
     fi
+    # No direct tty fallback for SIM 2; in particular never open slot 0.
+    [ "$MU300_SIM_SLOT" = 0 ] || return 1
     [ -c "$DEV" ] || return 1   # never let the redirection create a regular file in /dev
     # No command fifo, but the daemon can still be there with the channel open - that is what /run/mu300-at
     # being removed under a running mu300-atd leaves behind. Opening the device here would make a second reader
@@ -274,6 +280,10 @@ radio_on_locked() {
                 ;;
         esac
     fi
+    if [ "$(uci -q get unisoc_modem.main.sim_slots 2>/dev/null || true)" = 2 ]; then
+        /opt/mu300/bin/mu300-dual-radio
+        return $?
+    fi
     out=$(at 'AT+CFUN?' 4 2>&1 || true)
     case "$out" in
         *"+CFUN: 1"*) return 0 ;;
@@ -286,9 +296,15 @@ radio_on_locked() {
     # This is the one safe early window: nr1 has completed SMMSWAP, the CP
     # answers, and RF is still off. A failed readback leaves the plugin's late
     # worker armed; never make radio startup depend on the plugin.
-    if [ -x /usr/libexec/unisoc-modem/lock ] &&
-       [ ! -e /run/unisoc-modem-lock-replay-done ]; then
-        /usr/libexec/unisoc-modem/lock replay early ||
+    if [ -x /usr/libexec/unisoc-modem/lock ]; then
+        (
+            if [ -r /usr/libexec/unisoc-modem/sim-scope.sh ]; then
+                . /usr/libexec/unisoc-modem/sim-scope.sh
+                sim_scope "$MU300_SIM_SLOT" || exit 1
+            elif [ "$MU300_SIM_SLOT" != 0 ]; then exit 1; fi
+            [ ! -e "${UNISOC_REPLAY_MARKER:-/run/unisoc-modem-lock-replay-done}" ] || exit 0
+            /usr/libexec/unisoc-modem/lock replay early
+        ) ||
             radio_say "early lock replay unverified; late fallback remains armed"
     fi
     radio_say "AT 通道已就绪，射频为 0；发送 SFUN=4"
@@ -350,6 +366,7 @@ fetch_addr() {   # $1 = 预算秒（真实秒，不是轮数）
     rdp=
     end=$((SECONDS + lim))
     while [ "$SECONDS" -lt "$end" ]; do
+        [ ! -e /run/mu300-mobile-data-down ] || return 1
         line=$(at "AT+CGCONTRDP=$CID" 4 2>&1 | grep '^+CGCONTRDP:' | head -1 || true)
         am=$(echo "$line" | cut -d, -f4 | tr -d '"')
         case "$am" in
@@ -362,27 +379,38 @@ fetch_addr() {   # $1 = 预算秒（真实秒，不是轮数）
 }
 
 is_registered() {
-    # Query form: +CEREG: <n>,<stat>,...; unsolicited form: +CEREG: <stat>,...
-    grep -qE '^\+CEREG: (1|5)(,|$)|^\+CEREG: [0-9]+,(1|5)(,|$)'
+    # Query <n>,<stat> and URC <stat> are distinct grammars. In particular,
+    # query "1,8" is NOT registered. Only the newest record may decide state.
+    awk -F, -v query="${1:-query}" '
+        /^\+CEREG:/ {
+            sub(/^\+CEREG:[[:space:]]*/, "", $1)
+            stat = query == "query" ? $2 : $1
+            gsub(/[[:space:]]/, "", stat)
+        }
+        END { exit !(stat == "1" || stat == "5") }'
 }
 
 wait_registered() {
-    local urclog=/run/mu300-at/urc/stty_nr0.log out start size
+    local urclog=${MU300_SIM_URC:-/run/mu300-at/urc/stty_nr0.log} out start size
     local deadline=$((SECONDS + ${MU300_REGISTER_WAIT:-60}))
     local next_query=$SECONDS
 
-    # nr0 reports registration changes immediately. Watch only bytes appended
+    # The selected card's URC stream reports registration changes. Watch bytes
     # after this point so an old registered URC cannot be mistaken for the
     # current state. A low-rate query is the fallback for a carrier that emits
     # no URC; this replaces the old 0.3 s AT+CEREG? flood.
     size=$(wc -c < "$urclog" 2>/dev/null || echo 0)
     start=$((size + 1))
     while [ "$SECONDS" -lt "$deadline" ]; do
+        [ ! -e /run/mu300-mobile-data-down ] || return 1
         size=$(wc -c < "$urclog" 2>/dev/null || echo 0)
-        [ "$size" -lt "$start" ] && start=1
-        if [ -f "$urclog" ] && tail -c +"$start" "$urclog" 2>/dev/null | is_registered; then
+        # start points ONE byte beyond the previous end, so size == start-1
+        # is an unchanged log, not truncation (which would replay old URCs).
+        [ "$((size + 1))" -lt "$start" ] && start=1
+        if [ -f "$urclog" ] && tail -c +"$start" "$urclog" 2>/dev/null | is_registered urc; then
             return 0
         fi
+        start=$((size + 1))
         if [ "$SECONDS" -ge "$next_query" ]; then
             out=$(at 'AT+CEREG?' 3 2>&1 || true)
             echo "$out" | is_registered && return 0
@@ -399,6 +427,7 @@ modem_stack() { [ -e /dev/modem ] || [ -e /dev/pmsys ] || [ -c "$DEV" ]; }
 # "stty -F" opens and closes the tty, which desynchronises the SIPC channel (docs/FINDINGS.md 13b). When
 # mu300-atd owns the device it has already set the flags on its own descriptor, so leave the tty alone.
 tty_setup() {
+    [ "$MU300_SIM_SLOT" = 0 ] || return 0
     [ -p /run/mu300-at/cmd ] && return 0
     # same for a daemon whose fifo has gone missing: its descriptor is still the one the modem talks to
     at_owner_alive "$(cat "$ATLOCK/pid" 2>/dev/null || true)" && return 0
@@ -424,9 +453,17 @@ up() {
         sleep 1
     done
     echo $$ > "$UPLOCK/pid"
+    release_up_lock() {
+        if [ "$(cat "$UPLOCK/pid" 2>/dev/null)" = $$ ]; then
+            rm -f "$UPLOCK/pid"; rmdir "$UPLOCK" 2>/dev/null || true
+        fi
+    }
+    trap release_up_lock EXIT
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
     up_locked "$@"
     local rc=$?
-    rm -rf "$UPLOCK"
+    release_up_lock
     return $rc
 }
 
@@ -435,6 +472,16 @@ up_locked() {
     rm -f /run/mu300-mobile-data-down
     tty_setup
     radio_on
+    if [ "$(uci -q get unisoc_modem.main.sim_slots 2>/dev/null || true)" = 2 ]; then
+        # Select the data card once, before activation; never use SMMSWAP to
+        # implement viewing or data selection. Confirm even an omitted OK.
+        current=$(at 'AT+SPSWDATA?' 3 | sed -n 's/^+SPSWDATA: *\([01]\).*/\1/p' | head -n1)
+        if [ "$current" != "$MU300_SIM_SLOT" ]; then
+            at 'AT+SPSWDATA' 5 >/dev/null || true
+            current=$(at 'AT+SPSWDATA?' 3 | sed -n 's/^+SPSWDATA: *\([01]\).*/\1/p' | head -n1)
+            [ "$current" = "$MU300_SIM_SLOT" ] || { echo 'Data SIM readback mismatch' >&2; return 1; }
+        fi
+    fi
     mark dial-radio-on-done
     # Android's RIL enables the IMS bearer used by SMS. This is idempotent;
     # keep it on the normal radio bring-up path and do not wait for IMS here.
@@ -473,7 +520,11 @@ up_locked() {
     fi
     # 不再先问一次 AT+CGACT?：开机时上下文一定是关的，问那一趟是一条整 AT 往返（实测约 2 s），
     # 而 CGACT=1 对已经激活的上下文是幂等的（重拨、watch 重连就是这种情况），所以问不问结果一样。
-    at "AT+CGACT=1,$CID" 20 >/dev/null
+    local activated
+    activated=$(at "AT+CGACT=1,$CID" 20) || return 1
+    printf '%s\n' "$activated" | tr -d '\r' | grep -qx OK || {
+        echo 'PDP activation rejected or unverified' >&2; return 1;
+    }
     mark dial-pdp-active
     # 激活成功不等于地址已经下发。Do not cycle CGACT=0/1 here: two measured
     # boots showed that tearing down the just-created context made the AT
@@ -611,11 +662,21 @@ watch() {
         rm -rf "$wlock"
     done
     echo $$ > "$wlock/pid"
-    trap 'rm -rf "$wlock"' EXIT INT TERM
+    trap 'rm -f "$wlock/pid"; rmdir "$wlock" 2>/dev/null || true' EXIT
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
     modem_stack || { echo "no modem stack in this kernel ($(uname -r)), not watching" >&2; exit 0; }
     while :; do
         sleep "${MU300_WATCH_INTERVAL:-30}"
+        [ ! -d /run/unisoc-data-sim-switch ] || continue
         [ -e /run/mu300-mobile-data-down ] && continue
+        # A daemon started with SIM 1 must not keep polling/reconnecting SIM 1
+        # after the user selects SIM 2. Never compete with a pending attach.
+        if [ "${MU300_NETIFD:-0}" = 1 ]; then
+            mu300_sim_env "" || continue
+            IFACE=$MU300_SIM_DEVICE
+            [ "$(ubus call "network.interface.${MU300_WAN:-wan}" status 2>/dev/null | jsonfilter -e '@.pending')" != true ] || continue
+        fi
         [ -c "$DEV" ] || continue
         tty_setup
         if at "AT+CGACT?" | grep -q "+CGACT:$CID,1" && ip -4 addr show "$IFACE" 2>/dev/null | grep -q inet; then

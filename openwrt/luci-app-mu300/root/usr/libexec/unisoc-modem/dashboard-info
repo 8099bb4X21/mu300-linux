@@ -112,7 +112,16 @@ LAN_DEVICE=$(cfg lan_device); LAN_DEVICE=${LAN_DEVICE:-br-lan}
 WIFI_DEVICE=$(cfg wifi_device); WIFI_DEVICE=${WIFI_DEVICE:-wlan0}
 USB_DEVICE=$(cfg usb_device); USB_DEVICE=${USB_DEVICE:-usb0}
 jaddr4() { printf '%s' "$1" | sed -n 's/.*"address": *"\([^"]*\)".*/\1/p' | head -n1; }
-jarr_dns() { printf '%s' "$1" | sed -n 's/.*"dns-server": *\[\([^]]*\)\].*/\1/p' | tr -d '"' ; }
+wan_dns_servers() {
+    # ubus pretty-prints arrays over multiple lines. Parse only the top-level
+    # active DNS list, never inactive.dns-server or the loopback resolv.conf.
+    # Reuse the two status snapshots: no additional RPC, AT request or cache.
+    local snapshot
+    for snapshot in "$@"; do
+        [ -n "$snapshot" ] || continue
+        jsonfilter -s "$snapshot" -e '@["dns-server"][*]' 2>/dev/null || :
+    done | awk 'NF && !seen[$0]++ { printf "%s%s", sep, $0; sep=", " }'
+}
 
 wan_up=$(jval "$WANJSON" up)
 [ "$wan_up" = "true" ] && wan_up=1 || wan_up=0
@@ -122,7 +131,7 @@ wan_ip4=$(jaddr4 "$WANJSON")
 wan6_up=$(jval "$WAN6JSON" up)
 [ "$wan6_up" = "true" ] && wan6_up=1 || wan6_up=0
 wan6_ip=$(t2 ip -6 addr show "$DATA_DEVICE" 2>/dev/null | awk '/inet6 [23]/{split($2,s,"/"); print s[1]; exit}')
-wan_dns=$(jarr_dns "$WANJSON")
+wan_dns=$(wan_dns_servers "$WANJSON" "$WAN6JSON")
 apn=$(t3 uci -q get "network.$DATA_IFACE.apn")
 [ -n "$apn" ] || apn="(SIM default)"
 
@@ -191,44 +200,23 @@ net_obj() {  # net_obj IFACE -> {"rx":N,"tx":N,"up":0|1} or null
 # ------------------------------------------------------------------- Wi-Fi
 # configuration truth is uci (the driver reports nothing useful); per-client detail
 # comes from the driver's station table, names and addresses from the DHCP leases.
-# ONE "uci show wireless" instead of nine "uci get": each uci call costs a fork
-# plus config parse and they added up to most of this script's runtime.
-WSHOW=$(t3 uci -q show wireless 2>/dev/null)
-# anonymous sections appear in "uci show" under their cfg id, and named ones use
-# their name - either way the section type line has no quotes; resolve the first
-# wifi-iface section once and read its options through that key
-IFKEY=
-while IFS= read -r line; do
-    case "$line" in
-        wireless.*=wifi-iface)
-            IFKEY=${line#wireless.}; IFKEY=${IFKEY%%=*}
-            case "$IFKEY" in *.*) IFKEY= ;; *) break ;; esac
-            ;;
-    esac
-done <<EOF_WIFI
-$WSHOW
-EOF_WIFI
-IFKEY=${IFKEY:-x}
-W_SSID= W_CH= W_BAND= W_HW= W_HT= W_COUNTRY= W_ENC= W_HIDDEN= W_DIS=
-while IFS= read -r line; do
-    key=${line%%=*}; [ "$key" != "$line" ] || continue
-    val=${line#*=}
-    case "$val" in \'*\') val=${val#\'}; val=${val%\'} ;; *) continue ;; esac
+# One ucode process selects the same AP as the switch and reads its radio.
+# Key/value lines preserve quotes without evaluating untrusted SSID text.
+W_SSID= W_CH= W_BAND= W_HT= W_COUNTRY= W_ENC= W_HIDDEN=
+W_AVAILABLE=0 W_ENABLED=0 W_PENDING=0 W_ERROR= W_SECTION= W_RADIO= W_UP=0
+WFIELDS=$(t3 "${MU300_DASH_BIN:-/usr/libexec/unisoc-modem}/hotspot" fields)
+while IFS= read -r key && IFS= read -r val; do
     case "$key" in
-        "wireless.$IFKEY.ssid") W_SSID=$val ;;
-        wireless.radio0.channel) W_CH=$val ;;
-        wireless.radio0.band) W_BAND=$val ;;
-        wireless.radio0.hwmode) W_HW=$val ;;
-        wireless.radio0.htmode) W_HT=$val ;;
-        wireless.radio0.country) W_COUNTRY=$val ;;
-        "wireless.$IFKEY.encryption") W_ENC=$val ;;
-        "wireless.$IFKEY.hidden") W_HIDDEN=$val ;;
-        wireless.radio0.disabled) W_DIS=$val ;;
+        available) W_AVAILABLE=$val ;; enabled) W_ENABLED=$val ;;
+        pending) W_PENDING=$val ;; up) W_UP=$val ;; error) W_ERROR=$val ;;
+        section) W_SECTION=$val ;; radio) W_RADIO=$val ;;
+        device) WIFI_DEVICE=$val ;; ssid) W_SSID=$val ;;
+        channel) W_CH=$val ;; band) W_BAND=$val ;; htmode) W_HT=$val ;;
+        country) W_COUNTRY=$val ;; enc) W_ENC=$val ;; hidden) W_HIDDEN=$val ;;
     esac
 done <<EOF_WIFI
-$WSHOW
+$WFIELDS
 EOF_WIFI
-[ -n "$W_BAND" ] || W_BAND=$W_HW
 # HE80 / VHT40 / HT20: retain the first two digits, as before.
 W_WIDTH=; digits=$W_HT
 while [ -n "$digits" ] && [ "${#W_WIDTH}" -lt 2 ]; do
@@ -238,9 +226,9 @@ done
 [ -n "$W_WIDTH" ] && W_WIDTH="$W_WIDTH MHz"
 [ -n "$W_ENC" ] || W_ENC=none
 W_HOSTAPD=0
-HAPD=$(t3 ubus call "hostapd.$WIFI_DEVICE" get_status 2>/dev/null)
+HAPD=
+[ -n "$WIFI_DEVICE" ] && [ "$W_AVAILABLE" = 1 ] && HAPD=$(t3 ubus call "hostapd.$WIFI_DEVICE" get_status 2>/dev/null)
 printf '%s' "$HAPD" | grep -q '"status": *"ENABLED"' && W_HOSTAPD=1
-[ "$W_DIS" = "1" ] && W_UP=0 || W_UP=1
 [ -d "/sys/class/net/$WIFI_DEVICE" ] || W_UP=0
 [ "$W_HOSTAPD" = 1 ] || W_UP=0
 # SC2355 may report only associated MACs, with no station metrics. Count the
@@ -354,8 +342,8 @@ printf '"net":{"mobile":%s,"sipa_eth0":%s,"brlan":%s,"wlan0":%s,"usb0":%s},' \
     "$MOBILE_NET" "$MOBILE_NET" "$(net_obj "$LAN_DEVICE")" "$(net_obj "$WIFI_DEVICE")" "$(net_obj "$USB_DEVICE")"
 printf '"wan":{"up":%d,"uptime":%s,"proto":%s,"apn":%s,"ip4":%s,"ip6":%s,"dns":%s},' \
     "$wan_up" "$(n_or_null "$wan_uptime")" "$(qs "$wan_proto")" "$(qs "$apn")" "$(qs "$wan_ip4")" "$(qs "$wan6_ip")" "$(qs "$wan_dns")"
-printf '"wifi":{"up":%d,"ssid":%s,"channel":%s,"band":%s,"width":%s,"country":%s,"enc":%s,"hidden":%s,"hostapd":%d,"clients":[%s],"clients_n":%s},' \
-    "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_WIDTH")" "$(qs "$W_COUNTRY")" "$(qs "$W_ENC")" "$(n_or_null "$W_HIDDEN")" "$W_HOSTAPD" "${W_CLIST:-}" "$W_CN"
+printf '"wifi":{"available":%d,"enabled":%d,"pending":%d,"section":%s,"radio":%s,"error":%s,"up":%d,"ssid":%s,"channel":%s,"band":%s,"width":%s,"country":%s,"enc":%s,"hidden":%s,"hostapd":%d,"clients":[%s],"clients_n":%s},' \
+    "$W_AVAILABLE" "$W_ENABLED" "$W_PENDING" "$(qs "$W_SECTION")" "$(qs "$W_RADIO")" "$(qs "$W_ERROR")" "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_WIDTH")" "$(qs "$W_COUNTRY")" "$(qs "$W_ENC")" "$(n_or_null "$W_HIDDEN")" "$W_HOSTAPD" "${W_CLIST:-}" "$W_CN"
 printf '"lan":{"leases":%s,"ip":%s,"list":[%s]},' "$(n_or_null "$LAN_LEASES")" "$(qs "$LAN_IP")" "${LEASES:-}"
 printf '"modem":{"alive":%d,"atd":%d,"data_paused":%d},' "$MODEM_ALIVE" "$ATD_OK" "$DATA_PAUSED"
 printf '"capabilities":{"vpn":%d,"dualboot":%d},' "$CAP_VPN" "$CAP_DUALBOOT"

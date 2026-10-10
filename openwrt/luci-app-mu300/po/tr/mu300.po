@@ -29,3 +29,9 @@ msgstr "Bağdaştırıcı ayarları"
 
 msgid "设备管理"
 msgstr "Cihaz yönetimi"
+
+msgid "CPU 设置"
+msgstr "CPU ayarları"
+
+msgid "SIM 卡管理"
+msgstr "SIM yönetimi"
