@@ -45,6 +45,12 @@ def main():
                                     .map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];});
                             }''', [pending, failed]))
                         assert all(s == sizes[0] for s in sizes), (width, theme, dark, lang, 'layout shift')
+                        gap = page.evaluate('''() => {
+                            const label=document.querySelector('.mud-hero .mud-heading-label').getBoundingClientRect();
+                            const progress=document.querySelector('#mud-serving-progress').getBoundingClientRect();
+                            return progress.left-label.right;
+                        }''')
+                        assert abs(gap - 8) < 1, (width, theme, dark, lang, 'not next to serving label', gap)
                         assert page.evaluate("[...document.querySelectorAll('.mud-lock-progress')].every(e=>e.parentElement.classList.contains('mud-lock-heading'))")
                         assert page.evaluate("[...document.querySelectorAll('.mud-lock-progress')].every(e=>getComputedStyle(e).whiteSpace==='nowrap')")
                         page.close()

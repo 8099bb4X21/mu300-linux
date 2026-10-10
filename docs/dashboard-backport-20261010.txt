@@ -97,3 +97,6 @@ ucode 集成检查只能在一次性容器中运行，不能在路由器上执�
 备份：/etc/unisoc-modem/backup/lock-progress.iBanKM
 36 组离线布局检查及 14 项翻译回归通过；实际 390px 页面验证空闲/更新/错误
 切换时各区域坐标一致，4.5 秒实际轮询观察到了更新/空闲两种状态，标题高度不变。
+按后续验收意见，驻网卡片的提示改为紧挨“当前驻网”文字右侧（8px 间距），
+不再靠标题行最右端；36 组布局回归及实机间距/轮询稳定检查通过，已热应用。
+此次仅更新 common.js，备份：/etc/unisoc-modem/backup/serving-progress.ePMDMl。
