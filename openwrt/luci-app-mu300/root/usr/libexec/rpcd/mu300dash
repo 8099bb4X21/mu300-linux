@@ -28,6 +28,10 @@
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/libexec/unisoc-modem:/usr/sbin:/sbin"
 
 DASH=${MU300_DASH_BIN:-/usr/libexec/unisoc-modem}
+# The 1 s counter lane needs neither SMS configuration nor forensic logging.
+if [ "${1:-}" = call ] && [ "${2:-}" = rates ]; then
+    exec "$DASH/dashboard-rates"
+fi
 # One pool everywhere: a platform SMS adapter may honor this environment value.
 # Keep the former MU300 path as an automatic upgrade fallback.
 SMS_POOL=$(uci -q get unisoc_modem.main.sms_pool 2>/dev/null)
@@ -69,7 +73,8 @@ age_of() { [ -s "$1" ] && echo $(( $(now) - $(date -r "$1" +%s 2>/dev/null || ec
 
 m_status() {
     local info cage sage busy=0 fbusy=0
-    info=$("$DASH/dashboard-info" 2>/dev/null)
+    if [ "${1:-}" = cells ]; then info=null
+    else info=$("$DASH/dashboard-info" 2>/dev/null); fi
     [ -n "$info" ] || info='{"error":"dashboard-info failed"}'
     cage=$(age_of "$CELL"); sage=$(age_of "$SIGF")
     # two refresh tiers, both detached: the fast one keeps the serving-cell data
@@ -82,10 +87,10 @@ m_status() {
     fast_busy && fbusy=1
     # A full round also refreshes sig.json. Prefer it when both tiers are stale;
     # starting full and fast together doubles the AT burst for no benefit.
-    if { [ "$cage" -lt 0 ] || [ "$cage" -gt "$TTL" ]; } && [ "$busy" = 0 ]; then
+    if { [ "$cage" -lt 0 ] || [ "$cage" -ge "$TTL" ]; } && [ "$busy" = 0 ]; then
         setsid "$DASH/cell" >/dev/null 2>&1 &
         busy=1; fbusy=1
-    elif { [ "$sage" -lt 0 ] || [ "$sage" -gt "$TTL_FAST" ]; } && [ "$fbusy" = 0 ]; then
+    elif { [ "$sage" -lt 0 ] || [ "$sage" -ge "$TTL_FAST" ]; } && [ "$fbusy" = 0 ]; then
         setsid "$DASH/cell" fast >/dev/null 2>&1 &
         fbusy=1
     fi
@@ -332,6 +337,8 @@ do_list() {
 {
 	"sysinfo": { },
 	"status": { },
+	"rates": { },
+	"cells": { },
 	"signal": { },
 	"act": { "op": "String", "arg": "String" },
 	"at": { "cmd": "String" },
@@ -378,6 +385,9 @@ call)
     case ${2:-} in
         sysinfo)    run_m sysinfo    'm_sysinfo' ;;
         status)     run_m status     'm_status' ;;
+        cells)      m_status cells ;;
+        # Avoid the forensic log's fork/tail/rewrite on every speed sample.
+        rates)      "$DASH/dashboard-rates" ;;
         signal)     run_m signal     'm_signal' ;;
         act)        run_m act        'm_act' ;;
         at)         run_m at         'm_at' ;;

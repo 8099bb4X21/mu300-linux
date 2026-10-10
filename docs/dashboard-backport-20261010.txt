@@ -1,0 +1,73 @@
+E5 看板增量回迁 MU300：第一批（2026-10-10）
+
+来源：D:\Git\e5-linux，feat/t551m-openwrt，HEAD 7d7df8e。
+范围依据：来源 docs/MU300-DASHBOARD-BACKPORT-TASKS.zh-CN.md。
+目标基线：MU300 clean-tf-7.2 的 f092671；实施分支 feat/dashboard-backports-20261010。
+运营商解析参考 b026b49；短信局部样式参考 edbc146。
+这是选择性移植，不是两个设备分支的整树合并。
+
+本批实现
+
+M01：状态与网速分别刷新。新 rates RPC 只读所选网卡计数，不发 AT、
+不采集完整系统状态、不更新流量账本，也不写每秒诊断日志。
+网卡仍由 data_device 或 data_interface/netifd 决定，原有 sipa_eth0 回退保留。
+速率采用设备 uptime，检查 boot_id、ifindex 和计数回退；失效时重新建立基线。
+主页状态默认/最小 2 秒、最大 60 秒，网速固定独立 1 秒。
+轮询按请求开始时间计时；同类请求不重叠，隐藏暂停、返回重设速率基线，
+卸载或移除页面停止轮询，迟到结果不再绘制。
+
+旧设置迁移：0.5–<2 秒改为 2 秒，2–60 秒（含小数）保留；空或无效值改为 2。
+运行中的旧配置在设置页/主页按同一规则解释；安装 postinst 和 UI 服务启动
+会持久化迁移，已经合规时不写配置。不触碰其他适配设置或锁定状态。
+
+M02：核心信号、完整工程信号先发布，随后独立发布邻区和最终 QoS/身份资料。
+前端通过 partial/neigh_pending 区分“还没读完”和“读完但没有数据”。
+刷新时保留尚未完成的旧字段并提示更新，完成后的空值会正常替换旧值。
+锁定页元数据使用 cells RPC，不再重复采集完整系统状态；实时信号仍走
+原来每轮新读的 signal RPC，不把缓存改装成实时数据。
+相关 RPC 不合批，各区域独立加载；同页在途查询去重，退出后忽略旧响应。
+沿用原来的 AT 池、1 秒/5 秒后台缓存层，只修正 >= 的过期边界。
+
+M05：一次 AT+CSCS?;+COPS? 查询匹配字符集与运营商，仅在字符集确认为
+UCS2 且名称格式合法时解码。数字 PLMN、普通十六进制样式名称不猜测解码。
+移动、联通、电信、广电常见英文别名统一随界面语言显示，国外名称保留。
+
+M06：短信收件人移入发送区，会话/消息区和操作按钮改为独立响应式样式。
+保留全部 MU300 短信 API、短信存储、转发及历史重发屏障。
+没有引入来源的双卡筛选/发送卡选择器，避免单卡 UI 依赖 E5 后端。
+样式只作用于短信页面，沿用 Aurora/官方 Bootstrap 的颜色变量。
+
+M13：新增界面文案同步中文、英语、土耳其语；菜单没有变化，现有 PO/LMO
+校验通过。ACL 已允许 mu300dash 对象，rates/cells 使用同一权限，不增加
+文件读取或其他服务权限。插件版本为 1.2.0，仍是独立 luci-app-mu300。
+包安装和 rootfs 的目录拷贝会纳入新增文件；TF Magisk/通用 release 两条
+构建入口都新增了 refresh.js、sms.css、rates、operator 和配置迁移的漏件检查。
+
+明确未移植
+
+M03/M04：锁定任务 ID、写入后的统一核验；原控制流程暂时保持。
+M07/M08：清空流量账本、按实际 AP 定位热点开关。
+M09/M10：USB 状态增强及新网卡自动加入 LAN。
+M11/M12：没有改动早期回放/AT 服务，原有相关回归仍通过；并未完成新的实机并发审计。
+双卡、屏幕、驱动、设备树、充电/音频、NV、启动镜像、Wi-Fi 内核补丁全部不带入。
+保留 f092671 的平台修复和 0d93695 的本机号码实时读取。
+
+验证记录
+
+183 项 Python 回归通过（MU300_TEST_SHELLS=dash,bash）。
+417 项 PowerShell 安装脚本检查通过。
+OpenWrt 25.12.5 ARM64 隔离容器：64 项后台检查通过。
+离线浏览器：主页真实 render/独立网速刷新/移除停止请求通过；短信 390px 与
+1280px、Aurora/Bootstrap 变量、明暗模式、中英土共 24 组布局/翻译检查通过。
+git diff --check 通过。
+
+复现命令（在目标仓库执行）
+
+MU300_TEST_SHELLS=dash,bash python3 -m unittest discover -s tests -v
+pwsh -NoProfile -File tests/installer.Tests.ps1
+docker run --rm --platform linux/arm64 -e MU300_TEST_CONTAINER=1 -v REPO:/src:ro --entrypoint ucode mu300-openwrt-base:25.12.5 /src/tests/dashboard_backport.uc
+python tests/dashboard_sms_layout.py --browser PATH_TO_CHROME
+
+ucode 集成检查只能在一次性容器中运行，不能在路由器上执行；它会写容器的测试 UCI。
+布局检查使用隔离浏览器和模拟 RPC，不连接设备或互联网，不等同于完整 LuCI 实机验收。
+本批未接触实机、未构建 rootfs/Magisk 包、未推送远端；现有安装包仍为旧版本。

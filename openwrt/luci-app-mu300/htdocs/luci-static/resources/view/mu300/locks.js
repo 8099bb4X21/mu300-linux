@@ -1,6 +1,6 @@
 'use strict';
 'require view';
-'require poll';
+'require mu300.refresh as R';
 'require mu300.common as M';
 
 /* 网络锁定 -- 模式 / 频段 / 小区 / EN-DC，全部经 ubus mu300dash lock_set -> 后端
@@ -8,7 +8,7 @@
  * 开机由插件自己的 procd 服务在 AT 适配器就绪后回放，不依赖平台拨号脚本。
  *
  * 当前驻网 hero 每 2 秒执行一次独立的实时 AT 快照，不读取蜂窝缓存；运营商与
- * 邻区等低频元数据只在打开页面时从 status 取一次。
+ * 邻区等低频元数据独立轮询 cells，按阶段显示，不阻塞实时信号。
  * 邻区表每行带「锁定」按钮，与主页共用 M.neighborRows。 */
 
 var MODES = [ [ 'auto', '自动' ], [ '4g', '仅 4G' ], [ 'sa', '5G SA' ], [ 'nsa', '5G NSA' ] ];
@@ -22,6 +22,9 @@ return view.extend({
 		M.injectCss();
 		M.watchSms();
 		var root = document.createElement('div');
+		this._root = root;
+		this._disposed = false;
+		this._timers = [];
 		root.className = 'mud';
 		root.innerHTML = `
 <!-- 与主页同一套 hero 结构：mud-hero-l/mud-hero-r 让手机端媒体查询统一生效
@@ -31,6 +34,7 @@ return view.extend({
     <div style="font-size:.78rem;color:var(--text-muted,var(--text-light,#777))">当前驻网</div>
     <div style="font-size:1.25rem;font-weight:700;margin-top:2px" id="mud-srv-rat">--</div>
     <div class="mud-cellline" id="mud-srv"></div>
+    <div class="mud-note mud-progress" id="mud-serving-progress" role="status"></div>
   </div>
   <div class="mud-hero-r">
     <div class="mud-rsrp" id="mud-srv-rsrp" style="font-size:1.9rem">--</div>
@@ -40,6 +44,7 @@ return view.extend({
 
 <div class="mud-sec">
   <h3>网络模式 · EN-DC</h3>
+  <div class="mud-note mud-progress" id="mud-lock-progress" role="status"></div>
   <div class="mud-ctl" id="mud-lock-modes" style="grid-template-columns:repeat(4,1fr);max-width:520px"></div>
   <div class="mud-ctl" style="margin-top:7px;grid-template-columns:1fr 1fr;max-width:340px">
     <button class="mud-btn" id="mud-lock-endc">EN-DC</button>
@@ -75,6 +80,7 @@ return view.extend({
 
 <div class="mud-sec">
   <h3>邻区与小区锁定</h3>
+  <div class="mud-note mud-progress" id="mud-neighbor-progress" role="status"></div>
   <div id="mud-lockedcells"></div>
   <div class="mud-ctl" style="max-width:400px;margin-bottom:8px">
     <button class="mud-btn" id="mud-lock-cell">锁定当前服务小区</button>
@@ -103,7 +109,8 @@ return view.extend({
 			M.confirmBox('应用「' + what + '」？',
 				opts.noSfun ? '' : '协议栈会重启（SFUN），蜂窝断开约半分钟。',
 				{ danger: !opts.noSfun, okText: '应用' })
-				.then(function(go) { if (go) applyNow(kind, val, what, opts); });
+				.then(function(go) {
+			if (self._disposed) return; if (go) applyNow(kind, val, what, opts); });
 		};
 		var applyNow = function(kind, val, what, opts) {
 			var btn = opts.btn;
@@ -111,6 +118,7 @@ return view.extend({
 			M.busy(btn, true);   /* 在 optimistic 之后：它可能重置按钮的 className */
 			self.note('正在后台应用 ' + what + ' …' + (opts.noSfun ? '' : '（SFUN 重启 + 重新驻网，约半分钟）'), 'busy');
 			L.resolveDefault(M.callLockSet(kind, val)).then(function(r) {
+			if (self._disposed) return;
 				r = r || {};
 				if (!r.ok) {
 					M.busy(btn, false);
@@ -170,12 +178,13 @@ return view.extend({
 			M.busy(btn, true);
 			self.note('正在直读调制解调器（最多几秒）…', 'busy');
 			L.resolveDefault(M.callLockFresh('1')).then(function(l) {
+			if (self._disposed) return;
 				M.busy(btn, false);
 				self.lastLock = l || {};
 				self.paint();
 				self.note('已刷新', 'success');
 				var nb = self.Q('neigh');
-				if (nb && self.lastCell) nb.innerHTML = M.neighborRows(self.lastCell, self.lastLock.cells || []);
+				if (nb && self.lastCell) nb.innerHTML = M.neighborRows(self.neighborCell || self.lastCell, self.lastLock.cells || []);
 			}, function() { M.busy(btn, false); self.note('刷新失败', 'error'); });
 			self.loadServing();
 		};
@@ -226,10 +235,12 @@ return view.extend({
 			var rat = btn.getAttribute('data-unlock');
 			M.confirmBox('解除 ' + rat.toUpperCase() + ' 的小区锁定', '协议栈会重启（SFUN），约半分钟。', { danger: true })
 				.then(function(go) {
+			if (self._disposed) return;
 				if (!go) return;
 				M.busy(btn, true);
 			self.note('正在解除 ' + rat.toUpperCase() + ' 小区锁定…', 'busy');
 			L.resolveDefault(M.callLockSet('cell', 'off-' + rat)).then(function(r) {
+			if (self._disposed) return;
 				r = r || {};
 				M.busy(btn, false);
 				if (!r.ok) { self.note('解锁失败：' + (r.error || '未知错误'), 'error'); return; }
@@ -246,10 +257,12 @@ return view.extend({
 			var key = btn.getAttribute('data-lock');
 			M.confirmBox('锁定小区 ' + key.replace(':', ' ') + '?', '协议栈会重启（SFUN），蜂窝断开约半分钟。', { danger: true })
 				.then(function(go) {
+			if (self._disposed) return;
 				if (!go) return;
 				M.busy(btn, true);
 			self.note('正在后台锁定 ' + key + ' …', 'busy');
 			L.resolveDefault(M.callLockSet('cell', key)).then(function(r) {
+			if (self._disposed) return;
 				r = r || {};
 				M.busy(btn, false);
 				if (!r.ok) { self.note('锁定失败：' + (r.error || '未知错误'), 'error'); return; }
@@ -259,43 +272,96 @@ return view.extend({
 			});
 		});
 
+		this.loading('serving', true);
+		this.loading('neighbor', true);
+		this.loading('lock', true);
 		this.refresh();
-		this.loadServingMeta();
-		this.loadServing();
-		poll.add(function() { return self.loadServing(); }, 2);
+		var active = function() { return !self._disposed && root.isConnected; };
+		this._stopMeta = R.poll(function() { return self.loadServingMeta(); }, function() {}, function() { return 2000; }, null, null, active);
+		this._stopSignal = R.poll(function() { return self.loadServing(); }, function() {}, function() { return 2000; }, null, null, active);
 	},
 
 	/* 统一反馈：所有提示走顶部 toast（M.toast），进行中的用 busy 自带转圈；
 	 * 同一时间只保留一条（新提示顶掉旧提示，进度→结果一路更新不堆叠）。 */
 	note: function(txt, type) {
+		if (this._disposed) return;
 		if (this._toast) this._toast.close();
 		this._toast = M.toast(txt, { type: type || 'info' });
 	},
 
-	/* 运营商与邻区属于低频元数据；实时信号不会从这里读取。 */
-	loadServingMeta: function() {
-		var self = this;
-		return L.resolveDefault(M.callStatus()).then(function(st) {
-			self.servingMeta = (st || {}).cell || {};
-		});
+	unload: function() {
+		this._disposed = true;
+		if (this._stopMeta) this._stopMeta();
+		if (this._stopSignal) this._stopSignal();
+		(this._timers || []).forEach(clearTimeout);
+		if (this._toast) this._toast.close();
 	},
 
-	/* 每次都由后端完成一轮新的 AT 快照；不接受上一轮 signal/cell 缓存。 */
-	loadServing: function() {
+	later: function(fn, ms) {
 		var self = this;
-		return L.resolveDefault(M.callSignal()).then(function(live) {
-			live = live || {};
-			var c = {}, meta = self.servingMeta || {};
-			Object.keys(meta).forEach(function(k) { c[k] = meta[k]; });
-			Object.keys(live).forEach(function(k) { c[k] = live[k]; });
-			self.paintServing(c);
+		if (this._disposed) return;
+		var timer = setTimeout(function() {
+			self._timers = self._timers.filter(function(t) { return t !== timer; });
+			if (!self._disposed) fn();
+		}, ms);
+		this._timers.push(timer);
+		return timer;
+	},
+
+	loading: function(part, pending, failed) {
+		var el = this.Q(part + '-progress');
+		if (!el || this._disposed) return;
+		el.classList.toggle('is-loading', !!pending && !failed);
+		el.textContent = M.translate(failed ? '读取失败，稍后重试' : pending ? '正在更新…' : '');
+	},
+
+	loadServingMeta: function() {
+		if (this._disposed) return Promise.resolve();
+		if (this._metaRequest) return this._metaRequest;
+		var self = this;
+		this._metaRequest = M.callCells().then(function(st) {
+			if (self._disposed || (self._root && !self._root.isConnected) || document.hidden) return;
+			st = st || {};
+			self.servingMeta = M.mergeCell(self.servingMeta, st.cell) || {};
+			if (st.cell && !st.cell.neigh_pending && !st.cell.error) self.neighborCell = st.cell;
+			// A cheap cached core paints immediately while the live lane completes.
+			var signal = self.liveSignal || st.sig;
+			if (signal && signal.partial && self.servingMeta.ts)
+				signal = { ts: signal.ts, cfun: signal.cfun, reg: signal.reg, reg5g: signal.reg5g };
+			self.paintServing(Object.assign({}, self.servingMeta, signal || {}));
+			self.loading('neighbor', !st.cell || !!st.cell.neigh_pending || !!st.refreshing,
+				!!(st.cell && st.cell.error));
+		}, function() { self.loading('neighbor', false, true); }).finally(function() {
+			self._metaRequest = null;
 		});
+		return this._metaRequest;
+	},
+
+	/* Always a newly completed AT round; never replace the 2 s live hero
+	 * with the full-cache engineering fields while a live request is pending. */
+	loadServing: function() {
+		if (this._disposed) return Promise.resolve();
+		if (this._signalRequest) return this._signalRequest;
+		var self = this;
+		this.loading('serving', true);
+		this._signalRequest = M.callSignal().then(function(live) {
+			if (self._disposed || (self._root && !self._root.isConnected) || document.hidden) return;
+			if (!live || live.error || !live.ts) {
+				self.loading('serving', false, true); return;
+			}
+			self.liveSignal = live;
+			self.paintServing(Object.assign({}, self.servingMeta || {}, live));
+			self.loading('serving', false);
+		}, function() { self.loading('serving', false, true); }).finally(function() {
+			self._signalRequest = null;
+		});
+		return this._signalRequest;
 	},
 
 	paintServing: function(c) {
-		var e = this.Q('srv'); if (!e) return;
+		var e = this.Q('srv'); if (!e || this._disposed) return;
 		this.lastCell = c;
-		if (!c || c.error) {
+		if (!c || !c.ts || c.error) {
 			this.Q('srv-rat').textContent = c && c.error ? c.error : M.translate('暂无驻网数据');
 			e.innerHTML = '';
 			return;
@@ -308,6 +374,7 @@ return view.extend({
 			this.Q('srv-rat').textContent = ratTxt + ' · ' + operName;
 		this.Q('srv-rat').style.color = M.qCol(label);
 		var rsrpEl = this.Q('srv-rsrp');
+		rsrpEl.textContent = '--';
 		if (sig.rsrp != null) { rsrpEl.innerHTML = sig.rsrp.toFixed(1) + '<small> dBm</small>'; rsrpEl.style.color = M.qCol(label); }
 		this.Q('srv-chips').innerHTML =
 			(sig.rsrq != null ? '<span class="mud-tag">RSRQ ' + sig.rsrq.toFixed(1) + '</span>' : '') +
@@ -319,7 +386,7 @@ return view.extend({
 			return '<div class="mud-srvline"><span class="k">' + M.esc(M.translate(x[0])) + '</span><span class="v">' + M.esc(x[1]) + '</span></div>';
 		}).join('');
 		var nb = this.Q('neigh');
-		if (nb) nb.innerHTML = M.neighborRows(c, (this.lastLock || {}).cells || []);
+		if (nb) nb.innerHTML = M.neighborRows(this.neighborCell || c, (this.lastLock || {}).cells || []);
 	},
 
 	/* 应用后自动回读：轮询缓存 lock_get 直到 ts 越过本次应用（后端 apply 后会 fresh 刷新缓存） */
@@ -329,20 +396,21 @@ return view.extend({
 		var self = this, tries = 0, t0 = t0ms || Date.now();
 		var step = function() {
 			L.resolveDefault(M.callLockGet()).then(function(l) {
+			if (self._disposed) return;
 				l = l || {};
 				if ((l.ts && l.ts * 1000 > t0) || ++tries > 40) {
 					M.busy(btn, false);
 					self.lastLock = l; self.paint(); self.paintServing(self.lastCell);
 					self.note((l.ts && l.ts * 1000 > t0) ? '状态已回读' : '回读超时，请点「刷新锁定状态」',
 						(l.ts && l.ts * 1000 > t0) ? 'success' : 'error');
-				} else setTimeout(step, 2500);
+				} else self.later(step, 2500);
 			});
 		};
 		step();
 	},
 	refreshSoon: function() {
 		var self = this;
-		setTimeout(function() { self.refresh(); }, 1500);
+		self.later(function() { self.refresh(); }, 1500);
 	},
 
 	/* 即时开关（EN-DC / 开机自动应用）确认式回读：后端已把这些状态即时写进
@@ -357,6 +425,7 @@ return view.extend({
 		};
 		var step = function() {
 			L.resolveDefault(M.callLockGet()).then(function(l) {
+			if (self._disposed) return;
 				l = l || {};
 				if (matches(l) || ++tries > 10) {
 					M.busy(btn, false);
@@ -366,25 +435,28 @@ return view.extend({
 						self.note(kind == 'endc' ? '已生效（EN-DC 不需要重启协议栈）' : '开机自动应用已' + (val == 'on' ? '开启' : '关闭'), 'success');
 					else
 						self.note((kind == 'endc' ? 'EN-DC' : '开机自动应用') + '状态回读超时，点「刷新锁定状态」确认', 'error');
-				} else setTimeout(step, 1500);
+				} else self.later(step, 1500);
 			});
 		};
-		setTimeout(step, 1500);
+		self.later(step, 1500);
 	},
 
 	refresh: function() {
+		if (this._disposed) return;
 		var self = this;
 		L.resolveDefault(M.callLockGet()).then(function(l) {
+			if (self._disposed) return;
 			l = l || {};
 			/* 空结果多半是 rpcd 高并发下的一次瞬时失败（实测同请求重发即好）：轻量重试 */
 			if (!l.mode && !l.error && (self._retry = (self._retry || 0) + 1) <= 3)
-				return setTimeout(function() { self.refresh(); }, 1800);
+				return self.later(function() { self.refresh(); }, 1800);
 			self._retry = 0;
+			self.loading('lock', false, !l.mode || !!l.error);
 			self.lastLock = l;
 			self.paint();
 			/* 锁定状态回来了，把邻区表的“已锁定”标记也刷新一下 */
 			var nb = self.Q('neigh');
-			if (nb && self.lastCell) nb.innerHTML = M.neighborRows(self.lastCell, self.lastLock.cells || []);
+			if (nb && self.lastCell) nb.innerHTML = M.neighborRows(self.neighborCell || self.lastCell, self.lastLock.cells || []);
 		});
 	},
 

@@ -67,6 +67,10 @@ for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
     ./etc/init.d/mu300-smsd ./etc/sysctl.d/99-mu300-console.conf \
     ./usr/share/luci/menu.d/luci-app-mu300.json \
     ./www/luci-static/resources/view/mu300/home.js \
+    ./www/luci-static/resources/mu300/refresh.js \
+    ./www/luci-static/resources/view/mu300/sms.css \
+    ./usr/libexec/unisoc-modem/dashboard-rates \
+    ./usr/libexec/unisoc-modem/operator.uc ./usr/libexec/unisoc-modem/refresh-config \
     ./www/luci-static/resources/view/mu300/device.js \
     ./usr/libexec/unisoc-modem/device-usb \
     ./etc/hotplug.d/net/90-unisoc-usb-host \

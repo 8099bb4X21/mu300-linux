@@ -11,14 +11,16 @@
  * 质量色不用写死的色值，走 --success/--warning/--danger 与 color-mix，
  * 深浅两套模式都跟随主题。 */
 
-var callStatus = rpc.declare({ object: 'mu300dash', method: 'status', expect: { '': {} } });
-var callSignal = rpc.declare({ object: 'mu300dash', method: 'signal', expect: { '': {} } });
-var callSysinfo = rpc.declare({ object: 'mu300dash', method: 'sysinfo', expect: { '': {} } });
+var callRates = rpc.declare({ object: 'mu300dash', method: 'rates', nobatch: true, expect: { '': {} } });
+var callCells = rpc.declare({ object: 'mu300dash', method: 'cells', nobatch: true, expect: { '': {} } });
+var callStatus = rpc.declare({ object: 'mu300dash', method: 'status', nobatch: true, expect: { '': {} } });
+var callSignal = rpc.declare({ object: 'mu300dash', method: 'signal', nobatch: true, expect: { '': {} } });
+var callSysinfo = rpc.declare({ object: 'mu300dash', method: 'sysinfo', nobatch: true, expect: { '': {} } });
 var callAct    = rpc.declare({ object: 'mu300dash', method: 'act', params: [ 'op', 'arg' ], expect: { '': {} } });
 var callAt     = rpc.declare({ object: 'mu300dash', method: 'at', params: [ 'cmd' ], expect: { '': {} } });
 var callAtHist = rpc.declare({ object: 'mu300dash', method: 'at_history', expect: { '': {} } });
-var callLockGet = rpc.declare({ object: 'mu300dash', method: 'lock_get', expect: { '': {} } });
-var callLockFresh = rpc.declare({ object: 'mu300dash', method: 'lock_get', params: [ 'fresh' ], expect: { '': {} } });
+var callLockGet = rpc.declare({ object: 'mu300dash', method: 'lock_get', nobatch: true, expect: { '': {} } });
+var callLockFresh = rpc.declare({ object: 'mu300dash', method: 'lock_get', nobatch: true, params: [ 'fresh' ], expect: { '': {} } });
 var callLockSet = rpc.declare({ object: 'mu300dash', method: 'lock_set', params: [ 'kind', 'val' ], expect: { '': {} } });
 var callSmsList = rpc.declare({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
 var callSmsShow = rpc.declare({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
@@ -372,7 +374,11 @@ var DASH_I18N = {
 	'AT 终端': ['AT terminal', 'AT terminali'],
 	'适配设置': ['Adapter settings', 'Bağdaştırıcı ayarları'],
 	'主页刷新间隔（秒）': ['Home dashboard refresh interval (seconds)', 'Ana pano yenileme aralığı (saniye)'],
-	'仅控制主页状态看板的刷新频率；允许 0.5–60 秒，保存后重新进入主页生效。': ['Controls only the home dashboard refresh rate; 0.5–60 seconds. Reopen Home after saving to apply.', 'Yalnızca ana panonun yenileme hızını kontrol eder; 0,5–60 saniye. Kaydettikten sonra uygulamak için Ana Sayfa’yı yeniden açın.'],
+	'主页状态每 2–60 秒刷新，网速独立每秒刷新；旧设置不足 2 秒时按 2 秒处理。保存后重新进入主页生效。': ['Status refreshes every 2–60 seconds; speed refreshes independently every second. Older settings below 2 seconds use 2 seconds. Reopen Home after saving.', 'Durum 2–60 saniyede bir, hız bağımsız olarak her saniye yenilenir. 2 saniyenin altındaki eski ayarlar 2 saniye olarak uygulanır. Kaydettikten sonra Ana Sayfa’yı yeniden açın.'],
+	'正在更新…': ['Updating…', 'Güncelleniyor…'],
+	'读取失败，稍后重试': ['Read failed; retrying shortly', 'Okuma başarısız; kısa süre sonra yeniden denenecek'],
+	'收件人': ['Recipient', 'Alıcı'],
+	'会话': ['Conversations', 'Görüşmeler'],
 	'当前驻网': ['Serving network', 'Bağlı olunan ağ'],
 	'网络模式 · EN-DC': ['Network mode · EN-DC', 'Ağ modu · EN-DC'],
 	'自动（5G/4G）': ['Automatic (5G/4G)', 'Otomatik (5G/4G)'],
@@ -579,7 +585,28 @@ var PLMN_CN = {
 
 function carrierName(op) {
 	if (!op) return '--';
-	return translate(op.name || PLMN_CN[op.plmn] || op.plmn || '--');
+	var name = op.name || PLMN_CN[op.plmn] || op.plmn || '--';
+	var key = String(name).toUpperCase().replace(/[\s_\-]/g, '');
+	var aliases = [
+		[['中国移动', '中国移动通信', 'CHINAMOBILE', 'CHNMOBILE', 'CMCC'], '中国移动'],
+		[['中国联通', 'CHINAUNICOM', 'CHNUNICOM', 'UNICOM', 'CUCC'], '中国联通'],
+		[['中国电信', 'CHINATELECOM', 'CHNCT', 'CHNCTLTE', 'CTCC'], '中国电信'],
+		[['中国广电', 'CHINABROADNET', 'CHNBG', 'CBN', 'CHINABROADCASTINGNETWORK'], '中国广电']
+	];
+	for (var i = 0; i < aliases.length; i++)
+		if (aliases[i][0].indexOf(key) >= 0) return translate(aliases[i][1]);
+	return translate(name);
+}
+
+/* Staged snapshots retain only slow fields that have not completed yet.
+ * Explicit null in a completed stage means unavailable, not stale data. */
+function mergeCell(previous, next) {
+	if (!next) return previous || null;
+	if (!next.partial || !previous || next.error) return Object.assign({}, next);
+	var merged = Object.assign({}, next);
+	['ident', 'qos'].forEach(function(k) { merged[k] = previous[k]; });
+	if (next.neigh_pending) merged.neigh = previous.neigh;
+	return merged;
 }
 
 /* 信号质量分级（阈值来自 ufi_tools 的 SignalQuality.kt），返回 CSS 颜色表达式 */
@@ -813,7 +840,8 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-toast.notify .mud-nb{display:flex;flex-direction:column;gap:2px;min-width:0}
 .mud-toast.notify .mud-nb b{font-size:.82rem;font-weight:700}
 .mud-toast.notify .mud-nb span{font-size:.76rem;color:var(--text-muted,var(--text-light,#888));overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.mud-btn .mud-spin,.mud-lockbtn .mud-spin{flex:0 0 auto;width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in oklab,currentColor 30%,transparent);border-top-color:currentColor;animation:mudspin .7s linear infinite}
+.mud-progress.is-loading::before{content:'';display:inline-block;margin-right:6px;vertical-align:middle}
+.mud-progress.is-loading::before,.mud-btn .mud-spin,.mud-lockbtn .mud-spin{flex:0 0 auto;width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in oklab,currentColor 30%,transparent);border-top-color:currentColor;animation:mudspin .7s linear infinite}
 .mud-btn.busy,.mud-lockbtn.busy{pointer-events:none;opacity:.75}
 /* ---- 主题化对话框（替代浏览器 confirm/alert） ---- */
 .mud-dlg-wrap{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.42);animation:mudfade-in .16s ease-out;padding:20px}
@@ -1132,7 +1160,7 @@ function choiceBox(title, message, choices, opts) {
 
 /* LuCI 的 require 把模块当类工厂：必须返回 baseclass 派生的类，加载后拿到的是它的实例 */
 return baseclass.extend({
-	callStatus: callStatus, callSignal: callSignal, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
+	callRates: callRates, callCells: callCells, mergeCell: mergeCell, callStatus: callStatus, callSignal: callSignal, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
 	callLockGet: callLockGet, callLockFresh: callLockFresh, callLockSet: callLockSet,
 	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,

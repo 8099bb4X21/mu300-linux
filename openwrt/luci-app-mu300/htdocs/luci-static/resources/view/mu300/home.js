@@ -1,6 +1,7 @@
 'use strict';
 'require view';
 'require uci';
+'require mu300.refresh as R';
 'require mu300.common as M';
 
 /* MU300 状态看板 -- LuCI 落地页（menu.d 挂在 admin/home）。
@@ -8,18 +9,15 @@
  * 布局：顶部驻网卡片是唯一的卡片；其余都是全宽分区（链路与流量 / 邻区 / 无线·局域网·
  * 设备·SIM / 快捷控制）。锁频、短信、AT 终端在「蜂窝」子菜单。
  *
- * 数据只有一个来源：ubus mu300dash status（info 快照 + sig 快档蜂窝缓存 + cell 慢档缓存）。
- * 页面默认 1.5 s 一轮：信号/速率/CPU 每轮都刷；邻区/QoS/身份只在慢档时间戳变化时重绘。
+ * 状态走 status，网速独立走无 AT 的 rates；隐藏页面停止轮询。
+ * 状态默认 2 s 一轮、网速 1 s 一轮；慢档数据分段发布并保留尚未完成的旧值。
  * 邻区行内「锁定」走 lock_set cell（SFUN 重启协议栈，约半分钟断网）；锁定状态来自
  * lock_get（页面加载时取一次，锁定操作后刷新）。 */
 
-var DEFAULT_POLL_S = 1.5;
+var DEFAULT_POLL_S = 2;
 var RATE_WIN = 40;
 
-function pollSeconds(value) {
-	var seconds = Number(value);
-	return Number.isFinite(seconds) && seconds >= 0.5 && seconds <= 60 ? seconds : DEFAULT_POLL_S;
-}
+function pollSeconds(value) { return R.seconds(value); }
 
 /* 工程口只提供 MCS/BLER；调制方式按 3GPP 常用 MCS table 1 就地换算，
  * 不为展示项增加 AT 请求。LTE 上行的 MCS 分界与下行/NR 不同。 */
@@ -68,30 +66,51 @@ return view.extend({
 		this.wire(root);
 		var self = this;
 		var intervalMs = DEFAULT_POLL_S * 1000;
-		var config = L.resolveDefault(uci.load('unisoc_modem')).then(function() {
+		L.resolveDefault(uci.load('unisoc_modem')).then(function() {
 			intervalMs = pollSeconds(uci.get('unisoc_modem', 'main', 'home_refresh_interval')) * 1000;
 		});
-		/* 立即取一次完整状态；不要同时重复执行 sysinfo 与 status 两轮本地采集。 */
-		var first = L.resolveDefault(M.callStatus()).then(function(st) {
-			self.update(st || {});
-		});
-		/* LuCI poll.add() truncates intervals to whole seconds. Use a one-shot
-		 * timer so 1.5 s remains 1.5 s and slow requests never overlap. */
-		function refresh() {
-			if (!document.documentElement.contains(root)) return;
-			L.resolveDefault(M.callStatus()).then(function(st) { self.update(st || {}); }).finally(function() {
-				if (document.documentElement.contains(root))
-					self._refreshTimer = setTimeout(refresh, intervalMs);
-			});
-		}
-		Promise.all([first, config]).then(function() {
-			self._refreshTimer = setTimeout(refresh, intervalMs);
-		});
+		this._disposed = false;
+		var active = function() { return !self._disposed && root.isConnected; };
+		this._stopStatus = R.poll(M.callStatus, function(st) { self.update(st || {}); },
+			function() { return intervalMs; }, null, null, active);
+		this._stopRates = R.poll(M.callRates, function(sample) { self.updateRates(sample); },
+			function() { return 1000; }, function() { self.updateRates(null); },
+			function() { self.lastNet = null; }, active);
+
 		return root;
 	},
 
 	unload: function() {
-		clearTimeout(this._refreshTimer);
+		this._disposed = true;
+		clearTimeout(this._lockTimer);
+		if (this._stopStatus) this._stopStatus();
+		if (this._stopRates) this._stopRates();
+	},
+
+	updateRates: function(sample) {
+		var delta = R.rateDelta(this.lastNet, sample);
+		if (!delta) {
+			this.dlHist = []; this.ulHist = [];
+			M.v('spark-dl').innerHTML = ''; M.v('spark-ul').innerHTML = '';
+		}
+		this.lastNet = sample && sample.available ? sample : null;
+		if (!this.lastNet) {
+			M.set('dl', '--'); M.set('ul', '--');
+			M.set('rx', '--'); M.set('tx', '--');
+			return;
+		}
+		M.set('rx', M.fmtBytes(sample.rx)); M.set('tx', M.fmtBytes(sample.tx));
+		if (!delta) {
+			M.set('dl', '--'); M.set('ul', '--');
+			this.dlHist = []; this.ulHist = [];
+		} else {
+			M.set('dl', M.fmtRate(delta.dl)); M.set('ul', M.fmtRate(delta.ul));
+			this.dlHist.push(delta.dl); this.ulHist.push(delta.ul);
+			if (this.dlHist.length > RATE_WIN) { this.dlHist.shift(); this.ulHist.shift(); }
+		}
+		var peak = Math.max(1, Math.max.apply(null, this.dlHist.concat(this.ulHist)));
+		M.spark(M.v('spark-dl'), this.dlHist, 0, peak, RATE_WIN);
+		M.spark(M.v('spark-ul'), this.ulHist, 0, peak, RATE_WIN);
 	},
 
 	html: function() {
@@ -226,6 +245,7 @@ return view.extend({
 </div>
 <div class="mud-sec">
   <h3>邻区</h3>
+  <div class="mud-note mud-progress" id="mud-slow-progress" role="status"></div>
   <div class="mud-scroll">
   <table class="mud-table"><thead><tr><th>制式/频段</th><th>PCI</th><th>频点</th><th>RSRP</th><th>RSRQ</th><th>SINR</th><th></th></tr></thead>
   <tbody id="mud-neigh"><tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">--</td></tr></tbody></table>
@@ -311,7 +331,7 @@ return view.extend({
 				M.busy(btn, false);
 					M.toast(r.ok ? '已后台锁定 ' + key + '，稍后自动刷新状态' : '锁定失败：' + (r.error || '未知错误'),
 						{ type: r.ok ? 'success' : 'error' });
-					setTimeout(function() { self.refreshLock(); }, 35000);
+					self._lockTimer = setTimeout(function() { self.refreshLock(); }, 35000);
 				});
 			});
 		});
@@ -319,8 +339,10 @@ return view.extend({
 	},
 
 	refreshLock: function() {
+		if (this._disposed) return;
 		var self = this;
 		L.resolveDefault(M.callLockGet()).then(function(l) {
+			if (self._disposed) return;
 			self.lockedCell = (l || {}).cells || [];
 			self.repaintNeigh();
 		});
@@ -352,8 +374,15 @@ return view.extend({
 			this._bootEl.classList.remove('mud-booting');
 			this._bootEl = null;
 		}
-		/* 快档覆盖：sig（服务小区/注册，1.5 s 级）盖在慢档缓存 c 的对应字段上 */
-		var c = st.cell || null;
+		/* 快档覆盖：sig（服务小区/注册）盖在慢档缓存 c 的对应字段上 */
+		this._slowCell = M.mergeCell(this._slowCell, st.cell);
+		var pending = !st.cell || !!st.cell.partial || !!st.refreshing;
+		var progress = M.v('slow-progress');
+		if (progress) {
+			progress.classList.toggle('is-loading', pending && !(st.cell && st.cell.error));
+			progress.textContent = M.translate(st.cell && st.cell.error ? '读取失败，稍后重试' : pending ? '正在更新…' : '');
+		}
+		var c = this._slowCell;
 		var s = st.sig || null;
 		if (s && !s.error && (!c || !c.ts || (s.ts || 0) >= c.ts)) {
 			if (c && s.partial) {
@@ -368,7 +397,7 @@ return view.extend({
 		}
 		this.lastCell = c;
 		/* 慢档数据（邻区/运营商/身份）只在整份缓存的时间戳变化时重绘 */
-		var fullTs = (st.cell && st.cell.ts) || 0;
+		var fullTs = st.cell ? [st.cell.ts, st.cell.partial || 0, st.cell.neigh_pending || 0].join(':') : '';
 		var slowChanged = fullTs !== this.lastFullTs;
 		this.lastFullTs = fullTs;
 
@@ -439,23 +468,6 @@ return view.extend({
 		M.set('qci', qos && qos.qci != null ? qos.qci : '--');
 		M.set('ambr', qos && qos.dl != null ? qos.dl + ' / ' + qos.ul + ' Mbps' : '--');
 
-		var net = (i.net && (i.net.mobile || i.net.sipa_eth0)) || null;
-		if (net && this.lastNet && i.ts && this.lastNet.ts) {
-			var dt = i.ts - this.lastNet.ts;
-			if (dt > 0) {
-				var dl = (net.rx - this.lastNet.rx) / dt, ul = (net.tx - this.lastNet.tx) / dt;
-				M.set('dl', M.fmtRate(dl)); M.set('ul', M.fmtRate(ul));
-				this.dlHist.push(dl); this.ulHist.push(ul);
-				if (this.dlHist.length > RATE_WIN) { this.dlHist.shift(); this.ulHist.shift(); }
-				var peak = Math.max(1, Math.max.apply(null, this.dlHist.concat(this.ulHist)));
-				M.spark(M.v('spark-dl'), this.dlHist, 0, peak, RATE_WIN);
-				M.spark(M.v('spark-ul'), this.ulHist, 0, peak, RATE_WIN);
-			}
-		}
-		if (net) {
-			M.set('rx', M.fmtBytes(net.rx)); M.set('tx', M.fmtBytes(net.tx));
-			this.lastNet = { ts: i.ts, rx: net.rx, tx: net.tx };
-		}
 		var w = i.wan || {};
 		var traffic = i.traffic && i.traffic.clock_ok && i.ts - i.traffic.updated_at < 30 ? i.traffic : null;
 		M.set('tr-day', traffic ? M.fmtTrafficBytes(traffic.today_used) : '--');

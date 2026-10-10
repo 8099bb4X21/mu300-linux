@@ -1,5 +1,7 @@
 'use strict';
 'require form';
+'require uci';
+'require mu300.refresh as R';
 'require view';
 'require mu300.common as M';
 
@@ -51,11 +53,12 @@ return view.extend({
 		o.datatype = 'uinteger';
 		o.placeholder = '90';
 		o = s.option(form.Value, 'home_refresh_interval', t('主页刷新间隔（秒）'));
-		o.datatype = 'range(0.5,60)';
-		o.placeholder = '1.5';
-		o.default = '1.5';
+		o.datatype = 'range(2,60)';
+		o.placeholder = '2';
+		o.default = '2';
 		o.rmempty = false;
-		o.description = t('仅控制主页状态看板的刷新频率；允许 0.5–60 秒，保存后重新进入主页生效。');
+		o.cfgvalue = function(section) { return String(R.seconds(uci.get('unisoc_modem', section, 'home_refresh_interval'))); };
+		o.description = t('主页状态每 2–60 秒刷新，网速独立每秒刷新；旧设置不足 2 秒时按 2 秒处理。保存后重新进入主页生效。');
 		o = s.option(form.Value, 'state_dir', t('持久化状态目录'));
 		o.placeholder = '/etc/unisoc-modem/lock-state.d';
 

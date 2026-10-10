@@ -69,6 +69,30 @@ const M = new Function('rpc', 'baseclass', 'L', 'document', 'navigator', 'getCom
         result = subprocess.run(['node', '-', str(COMMON)], input=harness, capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_staged_cell_merge_does_not_erase_pending_fields(self):
+        self.run_js("""
+const old = {ts:1, ident:{msisdn:'123'}, qos:{qci:9}, neigh:[{pci:2}], lte:{band:3}};
+let merged = M.mergeCell(old, {ts:2, partial:1, neigh_pending:1, ident:null, qos:null, neigh:null, lte:{band:1}});
+if (merged.ident.msisdn !== '123' || merged.neigh.length !== 1 || merged.qos.qci !== 9 || merged.lte.band !== 1)
+    throw Error('pending fields erased');
+merged = M.mergeCell(merged, {ts:2, partial:1, neigh_pending:0, neigh:null});
+if (merged.neigh !== null || merged.ident.msisdn !== '123') throw Error('neighbor completion');
+merged = M.mergeCell(merged, {ts:2, partial:0, ident:{msisdn:null}, qos:null, neigh:null});
+if (merged.ident.msisdn !== null || merged.qos !== null) throw Error('completed empty value must replace old value');
+if (old.ts !== 1 || old.lte.band !== 3) throw Error('input mutated');
+""")
+
+    def test_operator_aliases_leave_foreign_names_unchanged(self):
+        self.run_js("""
+for (const locale of ['en', 'tr', 'zh_Hans']) {
+    lang = locale;
+    for (const [alias, name] of [['CHN-UNICOM','中国联通'], ['CHN_CT','中国电信'], ['CHINA MOBILE','中国移动'], ['CBN','中国广电']])
+        if (M.carrierName({name:alias}) !== M.translate(name)) throw Error(locale + ':' + alias);
+    for (const name of ['Vodafone', 'Turkcell', 'FACE', 'Orange F'])
+        if (M.carrierName({name}) !== name) throw Error('foreign name changed:' + name);
+}
+""")
+
     def test_three_dashboard_languages(self):
         self.run_js("""
 lang = 'en';
@@ -125,7 +149,8 @@ const labels = [
     '删除这条短信', '本地 + SIM', '发送失败：未知错误',
     '收件人：号码，如 10086 或 +86...', '蜂窝逻辑接口',
     '等待 AT 就绪上限（秒）', '留空则从 netifd 自动获取',
-    '主页刷新间隔（秒）', '仅控制主页状态看板的刷新频率；允许 0.5–60 秒，保存后重新进入主页生效。'
+    '主页刷新间隔（秒）', '主页状态每 2–60 秒刷新，网速独立每秒刷新；旧设置不足 2 秒时按 2 秒处理。保存后重新进入主页生效。',
+    '正在更新…', '读取失败，稍后重试', '收件人', '会话'
 ];
 for (const locale of ['en', 'tr']) {
     lang = locale;

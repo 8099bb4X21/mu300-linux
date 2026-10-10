@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-mu300
-PKG_VERSION:=1.1.0
+PKG_VERSION:=1.2.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=MU300 Linux contributors
@@ -42,6 +42,7 @@ endef
 define Package/luci-app-mu300/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
+	/usr/libexec/unisoc-modem/refresh-config
 	state=$$(uci -q get unisoc_modem.main.state_dir 2>/dev/null)
 	state=$${state:-/etc/unisoc-modem/lock-state.d}
 	old=/etc/mu300/dash/lock-state.d
