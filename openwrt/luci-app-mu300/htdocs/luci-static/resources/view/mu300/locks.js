@@ -25,16 +25,18 @@ return view.extend({
 		this._root = root;
 		this._disposed = false;
 		this._timers = [];
-		root.className = 'mud';
+		root.className = 'mud mud-locks';
 		root.innerHTML = `
 <!-- 与主页同一套 hero 结构：mud-hero-l/mud-hero-r 让手机端媒体查询统一生效
      （信息块在上，RSRP 行左对齐、芯片右对齐），桌面端保持 RSRP 块右对齐 -->
 <div class="mud-card mud-hero">
   <div class="mud-hero-l">
-    <div style="font-size:.78rem;color:var(--text-muted,var(--text-light,#777))">当前驻网</div>
+    <div class="mud-lock-heading" style="font-size:.78rem;color:var(--text-muted,var(--text-light,#777))">
+      <span class="mud-heading-label">当前驻网</span>
+      <span class="mud-progress mud-lock-progress" id="mud-serving-progress" role="status"></span>
+    </div>
     <div style="font-size:1.25rem;font-weight:700;margin-top:2px" id="mud-srv-rat">--</div>
     <div class="mud-cellline" id="mud-srv"></div>
-    <div class="mud-note mud-progress" id="mud-serving-progress" role="status"></div>
   </div>
   <div class="mud-hero-r">
     <div class="mud-rsrp" id="mud-srv-rsrp" style="font-size:1.9rem">--</div>
@@ -43,8 +45,7 @@ return view.extend({
 </div>
 
 <div class="mud-sec">
-  <h3>网络模式 · EN-DC</h3>
-  <div class="mud-note mud-progress" id="mud-lock-progress" role="status"></div>
+  <h3 class="mud-lock-heading"><span class="mud-heading-label">网络模式 · EN-DC</span><span class="mud-progress mud-lock-progress" id="mud-lock-progress" role="status"></span></h3>
   <div class="mud-ctl" id="mud-lock-modes" style="grid-template-columns:repeat(4,1fr);max-width:520px"></div>
   <div class="mud-ctl" style="margin-top:7px;grid-template-columns:1fr 1fr;max-width:340px">
     <button class="mud-btn" id="mud-lock-endc">EN-DC</button>
@@ -79,8 +80,7 @@ return view.extend({
 </div>
 
 <div class="mud-sec">
-  <h3>邻区与小区锁定</h3>
-  <div class="mud-note mud-progress" id="mud-neighbor-progress" role="status"></div>
+  <h3 class="mud-lock-heading"><span class="mud-heading-label">邻区与小区锁定</span><span class="mud-progress mud-lock-progress" id="mud-neighbor-progress" role="status"></span></h3>
   <div id="mud-lockedcells"></div>
   <div class="mud-ctl" style="max-width:400px;margin-bottom:8px">
     <button class="mud-btn" id="mud-lock-cell">锁定当前服务小区</button>
@@ -313,6 +313,7 @@ return view.extend({
 		if (!el || this._disposed) return;
 		el.classList.toggle('is-loading', !!pending && !failed);
 		el.textContent = M.translate(failed ? '读取失败，稍后重试' : pending ? '正在更新…' : '');
+		el.title = el.textContent;
 	},
 
 	loadServingMeta: function() {

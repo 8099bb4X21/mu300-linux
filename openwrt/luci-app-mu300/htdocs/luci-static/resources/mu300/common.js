@@ -841,6 +841,13 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-toast.notify .mud-nb b{font-size:.82rem;font-weight:700}
 .mud-toast.notify .mud-nb span{font-size:.76rem;color:var(--text-muted,var(--text-light,#888));overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .mud-progress.is-loading::before{content:'';display:inline-block;margin-right:6px;vertical-align:middle}
+.mud-locks .mud-lock-heading{display:flex;align-items:center;gap:8px;min-width:0}
+.mud-locks .mud-lock-heading::before{flex-shrink:0;margin-right:0}
+.mud-locks .mud-heading-label{flex:1 1 auto;min-width:0}
+/* Keep an identical title-side slot for idle, loading and errors. No row is
+ * inserted or removed on each live AT poll, including on narrow screens. */
+.mud-locks .mud-lock-progress{flex:0 0 11em;max-width:50%;min-width:0;height:1.4em;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.7rem;font-weight:400;letter-spacing:normal;text-align:right;color:var(--text-muted,var(--text-light,#777))}
+.mud-locks .mud-lock-progress:empty{visibility:hidden}
 .mud-progress.is-loading::before,.mud-btn .mud-spin,.mud-lockbtn .mud-spin{flex:0 0 auto;width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in oklab,currentColor 30%,transparent);border-top-color:currentColor;animation:mudspin .7s linear infinite}
 .mud-btn.busy,.mud-lockbtn.busy{pointer-events:none;opacity:.75}
 /* ---- 主题化对话框（替代浏览器 confirm/alert） ---- */
