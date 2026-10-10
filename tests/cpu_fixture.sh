@@ -4,7 +4,9 @@ set -eu
 lib=$1
 base=$(mktemp -d /tmp/mu300-cpu-test.XXXXXX)
 export MU300_CPU_SYS=$base/sys MU300_CPU_CONFIG=$base/cpu.json
-mkdir -p "$MU300_CPU_SYS/policy0" "$MU300_CPU_SYS/policy4"
+export MU300_THERMAL_SYS=$base/thermal MU300_CPU_DEFAULTS=$base/defaults.json MU300_CPU_BOOT_ID=$base/boot
+mkdir -p "$MU300_CPU_SYS/policy0" "$MU300_CPU_SYS/policy4" "$MU300_THERMAL_SYS"
+printf 'cpu-fixture-boot\n' > "$base/boot"
 for id in policy0 policy4; do
     d=$MU300_CPU_SYS/$id
     printf '0 1\n' > "$d/affected_cpus"

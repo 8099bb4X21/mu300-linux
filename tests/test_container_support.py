@@ -52,6 +52,40 @@ class ContainerSupport(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'KVM'):
             support.check(self.out)
 
+    def test_incomplete_ebpf_or_tracing_cannot_ship(self):
+        for feature in ('BPF_JIT', 'DEBUG_INFO_BTF', 'DEBUG_INFO_BTF_MODULES',
+                        'PERF_EVENTS', 'KPROBE_EVENTS', 'FUNCTION_GRAPH_TRACER',
+                        'BPF_UNPRIV_DEFAULT_OFF'):
+            with self.subTest(feature=feature):
+                self.config[feature] = 'n'
+                self.write_config()
+                self.manifests()
+                with self.assertRaisesRegex(ValueError, feature):
+                    support.check(self.out)
+                self.config[feature] = 'y'
+
+    def test_bpf_network_module_cannot_be_omitted(self):
+        (self.out / 'modules/act_bpf.ko').unlink()
+        self.manifests()
+        with self.assertRaisesRegex(ValueError, 'act_bpf'):
+            support.check(self.out)
+
+    def test_btf_build_dependencies_and_no_early_debug_modules(self):
+        self.assertIn('pahole', (TOP/'upstream/Dockerfile').read_text())
+        self.assertIn('--strip-debug', (TOP/'upstream/build-modules.sh').read_text())
+        self.assertIn('BTF missing from built module', (TOP/'upstream/build-modules.sh').read_text())
+        self.assertIn('BTF missing from the linked kernel', (TOP/'upstream/build.sh').read_text())
+        for script in ('build.sh', 'build-modules.sh'):
+            btf_checks = [line for line in (TOP/'upstream'/script).read_text().splitlines()
+                          if 'readelf' in line and '|' in line]
+            self.assertTrue(btf_checks)
+            for line in btf_checks:
+                self.assertNotIn('grep -Eq', line)  # SIGPIPE under pipefail
+                self.assertIn('>/dev/null', line)
+        early = (TOP/'upstream/module-order.txt').read_text()
+        for name in ('act_bpf', 'sch_netem', 'ifb', 'ipvtap', 'geneve'):
+            self.assertNotIn(name, early)
+
     def test_old_builtin_cpufreq_cannot_silently_omit_voltage(self):
         self.config['ARM_SPRD_CPUFREQ_V2'] = 'y'
         self.write_config()

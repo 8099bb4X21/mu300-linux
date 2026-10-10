@@ -3,7 +3,6 @@
 START=99
 STOP=89
 start() {
-    [ -f /etc/unisoc-modem/cpu.json ] || return 0
     /usr/libexec/unisoc-modem/cpu boot | logger -t unisoc-cpu
 }
 shutdown() {

@@ -51,8 +51,9 @@ done
 # The TF path packages modules directly rather than going through make-bundle.sh.
 # Check both shared wireless modules: matching vermagic does not prove that
 # the IPv6 checksum or TX-pressure logging fixes reached the built binaries.
-for wireless_driver in sprd_wlan_combo wcn_bsp; do
+for wireless_driver in sprd_wlan_combo wcn_bsp mu300_thermal; do
     wireless_module=$UO/modules/$wireless_driver.ko
+    [ -s "$wireless_module" ] || { echo "missing $wireless_module" >&2; exit 1; }
     if [ -n "$(find "$TOP/upstream/modules/$wireless_driver" -type f -newer "$wireless_module" -print -quit)" ]; then
         echo "$wireless_driver source is newer than $wireless_module; rebuild it for $rel" >&2
         exit 1
@@ -79,6 +80,7 @@ for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
     ./www/luci-static/resources/view/mu300/traffic.js ./etc/init.d/unisoc-traffic \
     ./www/luci-static/resources/view/mu300/cpu.js ./etc/init.d/unisoc-cpu \
     ./usr/libexec/unisoc-modem/cpu ./usr/libexec/unisoc-modem/cpu.uc \
+    ./usr/libexec/unisoc-modem/cpu-thermal.uc \
     ./usr/libexec/unisoc-modem/cpu-voltage ./usr/libexec/unisoc-modem/cpu-voltage.uc \
     ./opt/mu300/bin/cpu-voltage-platform ./etc/init.d/mu300-cpu-driver \
     ./etc/rc.d/S08mu300-cpu-driver ./etc/rc.d/K89unisoc-cpu \

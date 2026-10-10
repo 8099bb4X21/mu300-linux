@@ -28,6 +28,12 @@ const tick=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
         const view=new Function('view','rpc','poll','M','document',fs.readFileSync(dir+'/view/mu300/sim.js','utf8'))(
             {extend:o=>o},rpc,{add(){},remove(){}},M,{createElement:element});
         const root=view.render([{slots:2},{ok:1,ready:true,saved_sim:0,actual_sim:0}]);
+        const section=find(root,'section'), row=find(section,'select');
+        assert(root.className.includes('mud-sim-page'));
+        assert(find(section,'h3'), 'heading belongs inside the card');
+        assert.equal(find(section,'label').htmlFor,row.id);
+        assert.equal(find(section,'button').type,'button');
+        assert(find(root,'style').textContent.includes('@media(max-width:480px)'));
         find(root,'select').value='1';find(root,'button').onclick();await tick();
         assert.equal(common.selectedSlot(),outcome==='done'?'1':'0',outcome);
         assert.equal(requests,outcome==='cancel'?0:1);

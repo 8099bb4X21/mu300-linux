@@ -13,6 +13,7 @@ function node(tag, text, cls) {
     if (cls) e.className = cls; return e;
 }
 function mhz(n) { return n == null ? '--' : (n / 1000) + ' MHz'; }
+function degrees(n) { return n == null ? '--' : (n / 1000).toFixed(1) + ' °C'; }
 function select(values, value, label) {
     var e = node('select');
     values.forEach(function(v) { var o = node('option', label ? label(v) : v); o.value = v; e.appendChild(o); });
@@ -83,6 +84,14 @@ var CSS = `
 .mud-cpu .mud-cpu-status[data-pending="true"]{color:var(--warning,#ad7420)}
 .mud-cpu-status::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:7px;vertical-align:1px}
 .mud-cpu .mud-cpu-warning{margin-top:16px;padding:12px 14px;border-left:2px solid var(--warning,#ad7420);border-radius:0 6px 6px 0;background:color-mix(in srgb,var(--warning,#ad7420) 5%,var(--surface,#fff));font-size:.7rem}
+.mud-cpu-thermal-trips{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:14px;margin-top:16px}
+.mud-cpu-thermal-readonly{display:block;padding:10px 0;color:var(--text,#222);font-size:.9rem;font-variant-numeric:tabular-nums}
+.mud-cpu-thermal-cooling{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.mud-cpu-sensors{margin-top:20px;border-top:1px solid var(--hairline,#ddd);padding-top:16px}
+.mud-cpu-sensors>summary{cursor:pointer;font-size:.8rem;color:var(--text,#222)}
+.mud-cpu-sensor-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,215px),1fr));gap:8px 20px;margin-top:14px}
+.mud-cpu-sensor{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--hairline,#ddd);font-size:.75rem;color:var(--text-muted,#777)}
+.mud-cpu-sensor strong{flex-shrink:0;color:var(--text,#222);font-variant-numeric:tabular-nums}
 @media(max-width:600px){.mud-cpu .mud-cpu-section{padding:16px}.mud-cpu-heading{flex-wrap:wrap;gap:8px;margin-bottom:16px}.mud-cpu-heading>div{flex-basis:100%}.mud-cpu-cluster{padding:16px}.mud-cpu-grid{grid-template-columns:minmax(0,1fr)}.mud-cpu-actions{gap:12px}.mud-cpu-actions>.mud-cpu-persist,.mud-cpu-actions>.mud-cpu-status{flex-basis:100%}.mud-cpu .mud-cpu-actions .mud-btn{flex:1}.mud-cpu .mud-cpu-title h2{font-size:1.3rem}}
 `;
 
@@ -93,7 +102,7 @@ return view.extend({
         var self = this, root = this.root = node('div', null, 'mud mud-cpu');
         root.appendChild(node('style', CSS));
         var title = node('div', null, 'mud-cpu-title');
-        title.append(node('h2', M.translate('CPU 设置')), node('p', M.translate('调速器与频率即时应用；电压偏移独立保存，重启后生效，不修改温控。'), 'mud-note'));
+        title.append(node('h2', M.translate('CPU 设置')), node('p', M.translate('频率、电压、温控分别保存。频率和温控即时生效，电压重启后生效。'), 'mud-note'));
         root.append(title);
         var frequency = node('section', null, 'mud-card mud-cpu-section');
         frequency.append(heading('频率与调速策略', '即时生效'));
@@ -115,31 +124,104 @@ return view.extend({
             grid.append(card); if (p.writable) self.inputs.push({ p: p, gov: gov, lo: lo, hi: hi });
         });
         if (!(data.policies || []).length) frequency.append(node('div', M.translate('CPU 调频驱动尚未就绪'), 'mud-note'));
-        var controls = node('div', null, 'mud-cpu-actions'), persist = this.persist = node('input'); persist.type = 'checkbox'; persist.checked = !!data.persist;
-        var label = node('label', null, 'mud-cpu-persist'), persistCopy = node('span');
-        persistCopy.append(node('span', M.translate('开机自动应用')), node('span', M.translate('未勾选时仅本次运行生效，并取消之前保存的开机应用设置。'), 'mud-note'));
-        label.append(persist, persistCopy);
-        var button = node('button', M.translate('应用设置'), 'mud-btn on'); button.disabled = !this.inputs.length;
-        controls.append(label, button); frequency.append(controls);
-        button.onclick = function() {
-            if (self.busy) return;
-            var changes = self.inputs.map(function(x) { return { id: x.p.id, cpus: x.p.cpus, governor: x.gov.value, min: Number(x.lo.value), max: Number(x.hi.value) }; });
-            if (changes.some(function(c) { return !Number.isInteger(c.min) || !Number.isInteger(c.max) || c.min > c.max; })) { M.toast(M.translate('CPU 配置无效'), { type: 'error' }); return; }
-            self.busy = true;
-            M.confirmBox('应用 CPU 设置？', '降低频率可能降低吞吐量；提高最低频率可能增加功耗和温度。').then(function(yes) {
-                if (!yes) return;
-                M.busy(button, true);
-                var toast = M.toast('正在应用 CPU 设置…', { type: 'busy', timeout: 0 });
-                return apply(JSON.stringify({ changes: changes, persist: persist.checked })).then(function(r) {
-                    if (!r.ok) throw new Error(r.rollback === false ? 'CPU 设置失败且回滚不完整，请检查实际状态' : r.error || 'CPU 配置无效');
-                    M.toast(M.translate('CPU 设置已应用'), { type: 'success' });
-                }).catch(function(e) { M.toast(M.translate(e.message), { type: 'error' }); }).finally(function() { toast.close(); M.busy(button, false); });
-            }).finally(function() { self.busy = false; });
-        };
+        var thermalSection = node('section', null, 'mud-card mud-cpu-section');
+        thermalSection.append(heading('温控管理', '即时生效', '按实际温区调整被动阈值；临界保护与回差只读，保留内核降频绑定。'));
+        this.thermalInputs = [];
+        this.thermalLive = [];
+        (data.zones || []).filter(function(z) { return z.trips.length; }).forEach(function(z) {
+            var card = node('div', null, 'mud-cpu-cluster'), head = node('div', null, 'mud-cpu-heading');
+            var copy = node('div'), temp = node('strong', degrees(z.temp), 'mud-cpu-thermal-readonly');
+            copy.append(node('h4', z.name), node('p', M.translate(z.mode === 'disabled' ? '温区已禁用' : '内核温控') + ' · ' + (z.policy || '--'), 'mud-note'));
+            head.append(copy, temp); card.append(head);
+            var live = { name: z.name, temp: temp, cooling: [] }; self.thermalLive.push(live);
+            var trips = node('div', null, 'mud-cpu-thermal-trips');
+            z.trips.forEach(function(t) {
+                var title = t.type === 'passive' ? (t.throttles_cpu ? '降频触发温度' : '被动温控起点') : t.type === 'critical' ? '临界保护温度' : t.type === 'hot' ? '高温保护温度' : '只读阈值';
+                var input;
+                if (t.writable) {
+                    input = node('input'); input.type = 'number'; input.min = z.minimum / 1000; input.max = z.maximum / 1000; input.step = z.step / 1000; input.value = t.temp / 1000;
+                    self.thermalInputs.push({ zone: z.name, trip: t.id, input: input });
+                } else input = node('span', degrees(t.temp), 'mud-cpu-thermal-readonly');
+                var row = field(title, input);
+                row.append(node('small', '#' + t.id + ' · ' + M.translate('回差') + ' ' + degrees(t.hysteresis) + (t.writable ? ' · ' + input.min + '–' + input.max + ' °C' : ' · ' + M.translate('只读')), 'mud-note'));
+                trips.append(row);
+            });
+            card.append(trips);
+            var devices = node('div', null, 'mud-cpu-thermal-cooling');
+            z.cooling.forEach(function(c) {
+                var badge = node('span', c.type + ' · ' + c.state + '/' + c.max_state, 'mud-cpu-badge');
+                badge.title = M.translate('降温等级（当前 / 最大）'); devices.append(badge); live.cooling.push({ id: c.id, node: badge });
+            });
+            card.append(devices); thermalSection.append(card);
+        });
+        if (!self.thermalInputs.length) thermalSection.append(node('p', M.translate('当前内核没有可写的 CPU 被动温控阈值，仅显示实际传感器。'), 'mud-note'));
+        var sensors = node('details', null, 'mud-cpu-sensors'), sensorGrid = node('div', null, 'mud-cpu-sensor-grid');
+        sensors.append(node('summary', M.translate('温度传感器') + ' · ' + (data.zones || []).filter(function(z) { return !z.trips.length; }).length));
+        (data.zones || []).filter(function(z) { return !z.trips.length; }).forEach(function(z) {
+            var row = node('div', null, 'mud-cpu-sensor'), temp = node('strong', degrees(z.temp));
+            row.append(node('span', z.name), temp); sensorGrid.append(row); self.thermalLive.push({ name: z.name, temp: temp, cooling: [] });
+        });
+        sensors.append(sensorGrid); thermalSection.append(sensors);
+        thermalSection.append(node('p', M.translate('提高阈值可能增加温度；此处不会关闭内核临界保护或设备紧急保护。'), 'mud-note mud-cpu-warning'));
+        function controlsFor(scope, target, enabled) {
+            var isThermal = scope === 'thermal';
+            target.dataset.scope = scope;
+            var controls = node('div', null, 'mud-cpu-actions'), persist = node('input');
+            persist.type = 'checkbox'; persist.checked = !!(isThermal ? data.thermal_persist : data.persist);
+            if (isThermal) self.thermalPersist = persist; else self.persist = persist;
+            var label = node('label', null, 'mud-cpu-persist'), copy = node('span');
+            copy.append(node('span', M.translate('开机自动应用')), node('span', M.translate('仅控制本区域；未勾选时只应用本次，并取消本区域的开机设置。'), 'mud-note'));
+            label.append(persist, copy);
+            var save = node('button', M.translate(isThermal ? '应用温控设置' : '应用频率设置'), 'mud-btn on');
+            var reset = node('button', M.translate('恢复启动基线'), 'mud-btn');
+            save.disabled = reset.disabled = persist.disabled = !enabled;
+            controls.append(label, reset, save); target.append(controls);
+            function reflect(r) {
+                // Never replace unsaved edits or persistence choices in another section.
+                if (isThermal) {
+                    (r.zones || []).forEach(function(z) { self.thermalInputs.forEach(function(x) { if (x.zone === z.name) z.trips.forEach(function(t) { if (x.trip === t.id) x.input.value = t.temp / 1000; }); }); });
+                    persist.checked = !!r.thermal_persist;
+                } else {
+                    (r.policies || []).forEach(function(p) { self.inputs.forEach(function(x) { if (x.p.id === p.id) { x.p = p; x.gov.value = p.governor; x.lo.value = p.min; x.hi.value = p.max; } }); });
+                    persist.checked = !!r.persist;
+                }
+            }
+            function submit(defaults) {
+                if (self.busy) return;
+                var payload = { scope: scope, persist: persist.checked };
+                if (defaults) payload = { scope: scope, reset: true };
+                else if (isThermal) {
+                    if (self.thermalInputs.some(function(x) { return x.input.value.trim() === '' || !x.input.checkValidity(); })) { M.toast('温控阈值超出保护范围', { type: 'error' }); return; }
+                    payload.thermal = self.thermalInputs.map(function(x) { return { zone: x.zone, trip: x.trip, temp: Math.round(Number(x.input.value) * 1000) }; });
+                } else {
+                    payload.changes = self.inputs.map(function(x) { return { id: x.p.id, cpus: x.p.cpus, governor: x.gov.value, min: Number(x.lo.value), max: Number(x.hi.value) }; });
+                    if (self.inputs.some(function(x) { return x.lo.value.trim() === '' || x.hi.value.trim() === ''; }) ||
+                        payload.changes.some(function(c) { return !Number.isInteger(c.min) || !Number.isInteger(c.max) || c.min > c.max; })) { M.toast('CPU 配置无效', { type: 'error' }); return; }
+                }
+                var title = defaults ? (isThermal ? '恢复温控启动基线？' : '恢复频率启动基线？') : (isThermal ? '应用温控设置？' : '应用频率设置？');
+                var message = defaults ? (isThermal ? '仅恢复本次启动记录的温控阈值并取消温控开机应用；不修改频率或电压设置。' : '仅恢复本次启动记录的频率并取消频率开机应用；不修改温控或电压设置。') :
+                    (isThermal ? '温控阈值将立即应用；提高阈值可能增加温度。不修改频率或电压设置。' : '降低频率可能降低吞吐量；提高最低频率可能增加功耗和温度。不修改温控或电压设置。');
+                self.busy = true;
+                M.confirmBox(title, message).then(function(yes) {
+                    if (!yes) return;
+                    var button = defaults ? reset : save; M.busy(button, true);
+                    var toast = M.toast(isThermal ? '正在应用温控设置…' : '正在应用频率设置…', { type: 'busy', timeout: 0 });
+                    return apply(JSON.stringify(payload)).then(function(r) {
+                        if (!r.ok) throw new Error(r.rollback === false ? 'CPU 设置失败且回滚不完整，请检查实际状态' : r.error || 'CPU 配置无效');
+                        reflect(r); M.toast(isThermal ? '温控设置已应用' : '频率设置已应用', { type: 'success' });
+                    }).catch(function(e) { M.toast(M.translate(e.message), { type: 'error' }); }).finally(function() { toast.close(); M.busy(button, false); });
+                }).finally(function() { self.busy = false; });
+            }
+            save.onclick = function() { submit(false); };
+            reset.onclick = function() { submit(true); };
+        }
+        controlsFor('frequency', frequency, !!this.inputs.length);
+        controlsFor('thermal', thermalSection, !!this.thermalInputs.length);
         var voltage = data.voltage || {}, section = node('section', null, 'mud-card mud-cpu-section');
         section.append(heading('CPU 电压偏移', '重启生效', '按 CPU 簇设置，步进 3.125 mV。偏移会同时作用于固件对应的 CPU/SRAM 电压表；不增加超频档位。'));
         section.append(node('p', M.translate('预设仅填入小幅偏移，不会直接保存；非零偏移仍需验证稳定性，不保证每颗芯片都安全。'), 'mud-note mud-cpu-preset-note'));
-        root.append(section);
+        section.dataset.scope = 'voltage';
+        root.append(section, thermalSection);
         var voltageGrid = node('div', null, 'mud-cpu-grid'), offsets = [], pending = node('p', null, 'mud-cpu-status'); pending.setAttribute('role', 'status');
         function updatePending(r) { pending.dataset.pending = String(!!r.pending); pending.textContent = M.translate(r.pending ? '已保存，将在下次重启时应用' : '当前电压偏移与保存值一致'); }
         updatePending(voltage);
@@ -224,6 +306,14 @@ return view.extend({
             return get().then(function(r) {
                 if (!root.isConnected) return;
                 (r.policies || []).forEach(function(p) { var e = root.querySelector('[data-policy="' + p.id + '"]'); if (e) e.textContent = p.current == null ? '--' : p.current / 1000; });
+                self.thermalLive.forEach(function(x) {
+                    var z = (r.zones || []).find(function(z) { return z.name === x.name; });
+                    x.temp.textContent = degrees(z ? z.temp : null);
+                    x.cooling.forEach(function(entry) {
+                        var c = z && z.cooling.find(function(c) { return c.id === entry.id; });
+                        entry.node.textContent = c ? c.type + ' · ' + c.state + '/' + c.max_state : '--';
+                    });
+                });
             }).catch(function() {}).finally(function() { self.inflight = false; });
         };
         poll.add(this.refresh, 2);

@@ -30,7 +30,7 @@ done
 # A matching vermagic is not enough: the shared WLAN/WCN source may have changed
 # after this output was built (the IPv6 RX checksum fix exposed exactly that).
 # Refuse a bundle containing the old binary rather than silently shipping it.
-for wireless_driver in sprd_wlan_combo wcn_bsp; do
+for wireless_driver in sprd_wlan_combo wcn_bsp mu300_thermal; do
     wireless_module=$UO/modules/$wireless_driver.ko
     [ -s "$wireless_module" ] || { echo "missing $wireless_module" >&2; exit 1; }
     if [ -n "$(find "$U/modules/$wireless_driver" -type f -newer "$wireless_module" -print -quit)" ]; then

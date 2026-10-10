@@ -44,7 +44,7 @@ record_delivery test
     def test_cpu_validation_and_no_platform_voltage_writes(self):
         source=(LIB/'cpu.uc').read_text()
         self.assertNotIn('voltage_offset',source)
-        self.assertNotIn('thermal_zone',source)
+        self.assertIn("import * as thermal from './cpu-thermal.uc'",source)
         self.assertIn('c.cpus!=p.cpus',source)
         self.assertIn('reverse(changed)',source)
         self.assertIn('index(p.frequencies,c.min)<0',source)

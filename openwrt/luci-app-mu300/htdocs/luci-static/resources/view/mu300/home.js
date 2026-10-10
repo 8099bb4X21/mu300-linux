@@ -282,42 +282,50 @@ return view.extend({
 				if (op === 'wifi') { self._wifiBusy = false; btn.disabled = false; }
 			});
 		};
+		/* Keep one confirmation/action in flight. Cancel, Escape and leaving
+		 * this view must never turn into a control request. */
+		var confirmAction = function(btn, title, body, options, op, arg, note) {
+			if (self._disposed || self._quickPending || btn.disabled) return;
+			self._quickPending = true;
+			return M.confirmBox(title, body, options).then(function(go) {
+				if (!go || self._disposed || !root.isConnected) return;
+				return act(op, arg, note, btn);
+			}).finally(function() { self._quickPending = false; });
+		};
 		q('btn-data').onclick = function() {
 			var up = self.lastInfo && self.lastInfo.wan && self.lastInfo.wan.up;
-			act('data', up ? 'down' : 'up', up ? '正在断开数据连接…' : '正在拨号…', this);
+			return confirmAction(this, up ? '断开数据连接' : '建立数据连接',
+				up ? '将断开蜂窝数据连接，依赖此连接的设备将无法上网。' : '将建立蜂窝数据连接，可能产生流量费用。',
+				{ danger: !!up }, 'data', up ? 'down' : 'up', up ? '正在断开数据连接…' : '正在拨号…');
 		};
 		q('btn-radio').onclick = function() {
 			var on = self.lastCell && self.lastCell.cfun === 1;
-			var btn = this;
-			(on
-				? M.confirmBox('关闭蜂窝射频', '蜂窝连接会中断。', { danger: true })
-				: M.confirmBox('打开蜂窝射频', '将执行 SFUN 上电序列（最多约 1 分钟）。')
-			).then(function(go) { if (go) act('radio', on ? 'off' : 'on', null, btn); });
+			return confirmAction(this, on ? '关闭蜂窝射频' : '打开蜂窝射频',
+				on ? '蜂窝连接会中断。' : '将执行 SFUN 上电序列（最多约 1 分钟）。',
+				{ danger: !!on }, 'radio', on ? 'off' : 'on');
 		};
 		q('btn-wifi').onclick = function() {
 			var wifi = self.lastInfo && self.lastInfo.wifi;
 			if (!wifi || wifi.available === 0 || wifi.pending || self._wifiBusy) return;
 			var on = self.lastInfo && self.lastInfo.wifi && self.lastInfo.wifi.up;
-			act('wifi', on ? 'off' : 'on', null, this);
+			return confirmAction(this, on ? '关闭 Wi-Fi 热点' : '打开 Wi-Fi 热点',
+				on ? '热点客户端会断开；若正通过此热点管理设备，需要重新连接后才能继续访问。' : '将使用已保存的配置开启 Wi-Fi 热点。',
+				{ danger: !!on }, 'wifi', on ? 'off' : 'on');
 		};
 		q('btn-modem').onclick = function() {
-			var btn = this;
-			M.confirmBox('重启调制解调器', '蜂窝连接会中断 1-2 分钟。', { danger: true })
-				.then(function(go) { if (go) act('modem-reset', null, null, btn); });
+			return confirmAction(this, '重启调制解调器', '蜂窝连接会中断 1-2 分钟。',
+				{ danger: true }, 'modem-reset', null);
 		};
 		q('btn-reboot').onclick = function() {
-			var btn = this;
-			M.confirmBox('重启整个设备', '所有连接会断开。', { danger: true })
-				.then(function(go) { if (go) act('reboot', null, null, btn); });
+			return confirmAction(this, '重启整个设备', '所有连接会断开。',
+				{ danger: true }, 'reboot', null);
 		};
 		q('btn-android').onclick = function() {
-			var btn = this;
-			M.confirmBox('切换到 Android 系统',
+			return confirmAction(this, '切换到 Android 系统',
 				'下次启动将进入 Android 并立即重启，此管理页面与蜂窝共享都会断开。\n' +
 				'回到 OpenWrt：在 Android 上执行 mu300-next-boot linux 后重启；\n' +
 				'或什么都不做，连续 5 次开机未完成会自动回退。',
-				{ danger: true, okText: '切换并重启' })
-				.then(function(go) { if (go) act('os', 'android', '正在武装 Android 引导并重启…', btn); });
+				{ danger: true, okText: '切换并重启' }, 'os', 'android', '正在武装 Android 引导并重启…');
 		};
 		q('reveal').onclick = function() {
 			self.identShown = !self.identShown;

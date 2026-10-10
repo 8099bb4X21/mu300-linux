@@ -13,6 +13,12 @@ JS = PKG / 'htdocs/luci-static/resources'
 
 class Refresh(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node required')
+    def test_all_quick_controls_require_confirmation(self):
+        result = subprocess.run(['node', str(TOP / 'tests/dashboard_quick_controls.js')],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node required')
     def test_scheduler_and_counter_resets(self):
         result = subprocess.run(['node', str(TOP / 'tests/dashboard_refresh.js'),
                                  str(JS / 'mu300/refresh.js'), str(JS / 'view/mu300/locks.js')],

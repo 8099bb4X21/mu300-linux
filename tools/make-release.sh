@@ -92,6 +92,7 @@ for f in ./opt/mu300/bin/mu300-at ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/
     ./www/luci-static/resources/view/mu300/traffic.js ./etc/init.d/unisoc-traffic \
     ./www/luci-static/resources/view/mu300/cpu.js ./etc/init.d/unisoc-cpu \
     ./usr/libexec/unisoc-modem/cpu ./usr/libexec/unisoc-modem/cpu.uc \
+    ./usr/libexec/unisoc-modem/cpu-thermal.uc \
     ./usr/libexec/unisoc-modem/cpu-voltage ./usr/libexec/unisoc-modem/cpu-voltage.uc \
     ./opt/mu300/bin/cpu-voltage-platform ./etc/init.d/mu300-cpu-driver \
     ./etc/rc.d/S08mu300-cpu-driver ./etc/rc.d/K89unisoc-cpu \

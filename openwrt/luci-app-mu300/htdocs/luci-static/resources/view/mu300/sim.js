@@ -12,20 +12,40 @@ errors.dual_boot_required='双卡尚未共同初始化，请重启后检查状�
 function message(s){return M.translate(errors[s]||s);}
 function el(tag,text,cls) { var n=document.createElement(tag); if(text!=null)n.textContent=text; if(cls)n.className=cls; return n; }
 function card(n) { return n===0||n===1 ? 'SIM '+(n+1) : M.translate('未连接'); }
+var CSS = `
+.mud-sim-page .mud-sim-panel{padding:20px;min-width:0}
+.mud-sim-page .mud-sim-panel h3{margin:0 0 10px;padding:0;border:0;font-size:1rem;font-weight:600;color:var(--text,#222)}
+.mud-sim-page .mud-sim-intro{margin:0 0 16px;line-height:1.65}
+.mud-sim-page .mud-data-sim{display:grid;gap:10px;margin:0;padding:14px;border:1px solid var(--hairline,var(--border-color,#ddd));border-radius:10px;min-width:0}
+.mud-sim-page .mud-data-sim-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px}
+.mud-sim-page .mud-data-sim-controls label{flex:1;min-width:110px;font-weight:600;margin:0;color:var(--text,#222)}
+.mud-sim-page .mud-data-sim-controls select{width:auto;min-width:100px;max-width:100%;margin:0}
+.mud-sim-page .mud-data-sim-controls .mud-btn{margin:0;max-width:100%;white-space:normal}
+.mud-sim-page .mud-sim-status{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px 0 0;border-top:1px solid var(--hairline,var(--border-color,#ddd));font-size:.8rem;line-height:1.6;color:var(--text-muted,#777)}
+.mud-sim-page .mud-sim-status span{min-width:0;overflow-wrap:anywhere}
+.mud-sim-page .mud-note{line-height:1.65;overflow-wrap:anywhere}
+.mud-sim-page .mud-data-sim .mud-note{margin:0}
+@media(max-width:480px){.mud-sim-page .mud-sim-panel{padding:16px}.mud-sim-page .mud-data-sim{padding:12px}.mud-sim-page .mud-data-sim-controls label{flex-basis:100%}.mud-sim-page .mud-data-sim-controls select{flex:1;min-width:0}.mud-sim-page .mud-data-sim-controls .mud-btn{flex:1}.mud-sim-page .mud-sim-status{flex-direction:column;gap:3px}}
+`;
 return view.extend({
     load:function() { return Promise.all([M.callSimGet(),get()]); },
     render:function(data) {
         M.injectCss(); M.localizeMenu();
-        var self=this, root=this.root=el('div',null,'mud');
-        root.append(el('h2',M.translate('SIM 卡管理')));
-        var panel=el('section',null,'mud-card'); root.append(panel);
-        var actual=el('p'), saved=el('p'), connection=el('p'), select=el('select'), button=el('button',M.translate('切换上网卡'),'mud-btn on');
-        panel.append(actual,saved,connection);
+        var self=this, root=this.root=el('div',null,'mud mud-sim-page');
+        root.append(el('style',CSS));
+        var panel=el('section',null,'mud-card mud-sim-panel'); root.append(panel);
+        panel.append(el('h3',M.translate('SIM 卡管理')));
+        panel.append(el('p',M.translate('切换上网卡后，看板、锁定和 AT 的查看卡槽会同步；仍可手动查看另一张卡。'),'mud-note mud-sim-intro'));
+        var controls=el('div',null,'mud-data-sim'); panel.append(controls);
+        var actual=el('span'), saved=el('span'), connection=el('span'), select=el('select'), button=el('button',M.translate('切换上网卡'),'mud-btn');
+        select.id='mud-data-sim-select'; button.type='button';
         [0,1].forEach(function(n) { var o=el('option',card(n)); o.value=n; select.append(o); });
-        var row=el('div'); row.style.cssText='display:flex;gap:12px;flex-wrap:wrap;align-items:center';
-        var label=el('label',M.translate('默认上网卡')+' '); label.append(select); row.append(label,button); panel.append(row);
-        panel.append(el('p',M.translate('切换会短暂中断蜂窝网络，成功后作为开机默认上网卡；不会切换 USB 或 Wi-Fi。'),'mud-note'));
-        panel.append(el('p',M.translate('欠费或无信号不影响选卡；数据连接失败不会自动切回。'),'mud-note'));
+        var row=el('div',null,'mud-data-sim-controls');
+        var label=el('label',M.translate('默认上网卡')); label.htmlFor=select.id;
+        row.append(label,select,button); controls.append(row);
+        var summary=el('div',null,'mud-sim-status'); summary.append(actual,connection,saved); controls.append(summary);
+        controls.append(el('p',M.translate('切换会短暂中断蜂窝网络，成功后作为开机默认上网卡；不会切换 USB 或 Wi-Fi。'),'mud-note'));
+        controls.append(el('p',M.translate('欠费或无信号不影响选卡；数据连接失败不会自动切回。'),'mud-note'));
         function paint(r,initial) {
             actual.textContent=M.translate('当前上网卡')+'：'+card(r.actual_sim);
             saved.textContent=M.translate('开机默认')+'：'+card(r.saved_sim);

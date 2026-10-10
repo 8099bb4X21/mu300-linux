@@ -128,5 +128,5 @@ int main(void) {
             self.assertTrue((TOP / f'kernel/patches/{name}.patch').is_file())
         for path in ('tools/build-openwrt-tf-magisk.sh', 'upstream/make-bundle.sh'):
             packaging = (TOP / path).read_text()
-            self.assertIn('for wireless_driver in sprd_wlan_combo wcn_bsp; do', packaging)
+            self.assertIn('for wireless_driver in sprd_wlan_combo wcn_bsp mu300_thermal; do', packaging)
             self.assertIn('-newer "$wireless_module"', packaging)
