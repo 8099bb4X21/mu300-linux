@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-mu300
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=9
+PKG_RELEASE:=10
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=MU300 Linux contributors
 PKGARCH:=all
@@ -26,6 +26,7 @@ endef
 define Package/luci-app-mu300/conffiles
 /etc/config/unisoc_modem
 /etc/unisoc-modem/cpu.json
+/etc/unisoc-modem/cpu-voltage.json
 endef
 
 define Build/Compile

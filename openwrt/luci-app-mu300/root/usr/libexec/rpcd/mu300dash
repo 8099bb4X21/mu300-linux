@@ -376,12 +376,14 @@ do_list() {
 	"sms_send": { "num": "String", "text": "String", "slot": "String" },
 	"sms_delete": { "id": "String", "sim": "String", "slot": "String" },
 	"sms_sync": { "slot": "String" },
-	"forward_get": { },
+	"forward_get": { "profile": "String" },
 	"cpu_get": { },
 	"cpu_apply": { "payload": "String" },
-	"forward_status": { },
+	"cpu_voltage_get": { },
+	"cpu_voltage_save": { "payload": "String" },
+	"forward_status": { "profile": "String" },
 	"forward_set": { "payload": "String" },
-	"forward_test": { },
+	"forward_test": { "profile": "String" },
 	"traffic_get": { "slot": "String" },
 	"traffic_set": { "payload": "String", "slot": "String" },
 	"traffic_clear": { "confirm": false, "slot": "String" },
@@ -446,18 +448,23 @@ call)
         sms_send)   run_m sms_send   'm_sms_send' ;;
         sms_delete) run_m sms_delete 'm_sms_delete' ;;
         sms_sync)   run_m sms_sync   'm_sms_sync' ;;
-        forward_get) "$DASH/sms-forward" get ;;
+        forward_get) "$DASH/sms-forward" get "$(inp '@.profile' shared)" ;;
         cpu_get) "$DASH/cpu" get ;;
         cpu_apply) inp '@.payload' | "$DASH/cpu" apply ;;
-        forward_status) "$DASH/sms-forward" status ;;
+        cpu_voltage_get) "$DASH/cpu-voltage" get ;;
+        cpu_voltage_save) inp '@.payload' | "$DASH/cpu-voltage" save ;;
+        forward_status) "$DASH/sms-forward" status "$(inp '@.profile' shared)" ;;
         forward_set)
             payload=$(inp '@.payload')
             printf '%s' "$payload" | "$DASH/sms-forward" set
             ;;
         forward_test)
-            # Delivery can take 25 s and must not tie up the LuCI RPC request.
-            setsid "$DASH/sms-forward" test-run >/dev/null 2>&1 &
-            printf '{"ok":1,"started":1}\n'
+            profile=$(inp '@.profile' shared)
+            case "$profile" in shared|sim0) ;; sim1)
+                [ "$(uci -q get unisoc_modem.main.sim_slots 2>/dev/null)" = 2 ] || { printf '{"ok":0,"error":"invalid_config"}\n'; exit 0; } ;;
+                *) printf '{"ok":0,"error":"invalid_config"}\n'; exit 0 ;; esac
+            # The backend admits one worker, then returns without holding RPC.
+            "$DASH/sms-forward" test-start "$profile"
             ;;
         traffic_get)
             ubus -t 3 call unisoc.traffic get "{\"slot\":${MU300_SIM_SLOT:-0}}" 2>/dev/null || printf '{"error":"traffic_unavailable"}\n'

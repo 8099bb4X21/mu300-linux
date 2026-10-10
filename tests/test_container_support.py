@@ -52,6 +52,13 @@ class ContainerSupport(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'KVM'):
             support.check(self.out)
 
+    def test_old_builtin_cpufreq_cannot_silently_omit_voltage(self):
+        self.config['ARM_SPRD_CPUFREQ_V2'] = 'y'
+        self.write_config()
+        self.manifests()
+        with self.assertRaisesRegex(ValueError, 'boot voltage profiles'):
+            support.check(self.out)
+
     def test_missing_builtin_index_rejected_before_any_packaging(self):
         (self.out / 'modules.builtin').unlink()
         with self.assertRaisesRegex(ValueError, 'modules.builtin missing'):

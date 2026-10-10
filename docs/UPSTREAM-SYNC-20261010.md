@@ -57,3 +57,13 @@ startup. No kernel version/configuration change is included.
   repository/build checks; runtime boot-cycle acceptance remains outstanding.
 - No rootfs/ZIP rebuild or remote push. Old r4 packages do not contain these
   changes; rebuilt module directories do.
+
+## Follow-up: vendor preservation during online updates
+
+Reviewed main again at `5582413`. Backported `f7df326` into `mu300-update`:
+merge missing vendor files instead of BusyBox `cp -an`, preserve image entries
+and target symlinks, and abort before the directory swap on copy failure.
+This narrowly updates the earlier decision to leave the updater untouched;
+it does not import unrelated VPN, suspend or boot-policy changes.
+See `WIFI-R4-AUDIT-20261010.zh-CN.md` for the inspected r4 payload, validation
+and the limits of attributing the reported Wi-Fi failure without device logs.

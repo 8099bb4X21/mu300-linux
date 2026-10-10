@@ -92,6 +92,11 @@ for f in ./opt/mu300/bin/mu300-at ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/
     ./www/luci-static/resources/view/mu300/traffic.js ./etc/init.d/unisoc-traffic \
     ./www/luci-static/resources/view/mu300/cpu.js ./etc/init.d/unisoc-cpu \
     ./usr/libexec/unisoc-modem/cpu ./usr/libexec/unisoc-modem/cpu.uc \
+    ./usr/libexec/unisoc-modem/cpu-voltage ./usr/libexec/unisoc-modem/cpu-voltage.uc \
+    ./opt/mu300/bin/cpu-voltage-platform ./etc/init.d/mu300-cpu-driver \
+    ./etc/rc.d/S08mu300-cpu-driver ./etc/rc.d/K89unisoc-cpu \
+    ./usr/libexec/unisoc-modem/sms-forward ./usr/libexec/unisoc-modem/forward-template.uc \
+    ./www/luci-static/resources/view/mu300/forward.js ./etc/init.d/unisoc-sms-forward \
     ./usr/libexec/unisoc-modem/data-sim ./www/luci-static/resources/view/mu300/sim.js \
     ./www/luci-static/resources/view/mu300/device.js ./usr/libexec/unisoc-modem/device-usb \
     ./etc/hotplug.d/net/90-unisoc-usb-host ./etc/hotplug.d/iface/90-unisoc-usb-host \

@@ -398,7 +398,7 @@ static int tx_eachmode_data(struct sprd_hif *hif, enum sprd_mode mode)
 	else
 		send_num = sc2355_fc_test_send_num(hif, mode, total);
 	if (total != 0 && send_num <= 0) {
-		pr_err("%s, %d: _fc_ no credit!\n", __func__, __LINE__);
+		pr_debug_ratelimited("%s, %d: _fc_ no credit!\n", __func__, __LINE__);
 		return -ENOMEM;
 	}
 

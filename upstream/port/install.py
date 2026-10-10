@@ -168,11 +168,25 @@ config SPRD_SIP_SVC
 append_once('drivers/cpufreq/Makefile', 'sprd-cpufreq-v2-driver.o', 'obj-$(CONFIG_ARM_SPRD_CPUFREQ_V2) += sprd-cpufreq-v2-driver.o\n')
 append_once('drivers/cpufreq/Kconfig.arm', 'ARM_SPRD_CPUFREQ_V2', '''
 config ARM_SPRD_CPUFREQ_V2
-	bool "Unisoc UMS9620 cpufreq (v2, ATF DVFS)"
+	tristate "Unisoc UMS9620 cpufreq (v2, ATF DVFS)"
 	depends on SPRD_SIP_SVC && NVMEM
 	select PM_OPP
 ''')
 # PCIe RC for the Marlin3 (SC2355) Wi-Fi/BT chip: vendor pcie-sprd glue ported to the 6.18 DWC host API
+cp = os.path.join(tree, 'drivers/cpufreq/Kconfig.arm')
+ct = open(cp).read()
+ct = ct.replace('bool "Unisoc UMS9620 cpufreq (v2, ATF DVFS)"',
+                'tristate "Unisoc UMS9620 cpufreq (v2, ATF DVFS)"')
+open(cp, 'w').write(ct)
+# The vendor driver updates scheduler frequency invariance after DVFS. Mainline
+# has no export for modular cpufreq drivers; retain the call, export GPL-only.
+ap = os.path.join(tree, 'drivers/base/arch_topology.c')
+at = open(ap).read()
+if 'EXPORT_SYMBOL_GPL(topology_set_freq_scale)' not in at:
+    start = at.index('void topology_set_freq_scale(')
+    end = at.index('\n}', start) + 2
+    at = at[:end] + '\nEXPORT_SYMBOL_GPL(topology_set_freq_scale);' + at[end:]
+    open(ap, 'w').write(at)
 append_once('drivers/pci/controller/dwc/Makefile', 'pcie-sprd.o', 'obj-$(CONFIG_PCIE_SPRD) += pcie-sprd-misc.o pcie-sprd.o\n')
 append_once('drivers/pci/controller/dwc/Kconfig', 'config PCIE_SPRD', '''
 config PCIE_SPRD

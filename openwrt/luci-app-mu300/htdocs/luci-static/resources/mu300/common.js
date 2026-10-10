@@ -40,6 +40,7 @@ function simSelector(root) {
         var panel = document.createElement('details'); panel.className = 'mud-card mud-sim-selector';
         panel.style.marginBottom = '14px';
         var summary = document.createElement('summary');
+        summary.className = 'mud-sim-toggle';
         summary.textContent = translate('正在查看') + ' SIM ' + (Number(selectedSlot()) + 1);
         var label = document.createElement('label'), select = document.createElement('select');
         label.textContent = translate('查看卡槽') + ' ';
@@ -93,10 +94,10 @@ var callSmsShow = scopedRpc({ object: 'mu300dash', method: 'sms_show', params: [
 var callSmsSend = scopedRpc({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
 var callSmsDel  = scopedRpc({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
 var callSmsSync = scopedRpc({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
-var callForwardGet = rpc.declare({ object: 'mu300dash', method: 'forward_get', expect: { '': {} } });
-var callForwardStatus = rpc.declare({ object: 'mu300dash', method: 'forward_status', expect: { '': {} } });
+var callForwardGet = rpc.declare({ object: 'mu300dash', method: 'forward_get', params: [ 'profile' ], expect: { '': {} } });
+var callForwardStatus = rpc.declare({ object: 'mu300dash', method: 'forward_status', params: [ 'profile' ], expect: { '': {} } });
 var callForwardSet = rpc.declare({ object: 'mu300dash', method: 'forward_set', params: [ 'payload' ], expect: { '': {} } });
-var callForwardTest = rpc.declare({ object: 'mu300dash', method: 'forward_test', expect: { '': {} } });
+var callForwardTest = rpc.declare({ object: 'mu300dash', method: 'forward_test', params: [ 'profile' ], expect: { '': {} } });
 var callTrafficGet = scopedRpc({ object: 'mu300dash', method: 'traffic_get', expect: { '': {} } });
 var callTrafficSet = scopedRpc({ object: 'mu300dash', method: 'traffic_set', params: [ 'payload' ], expect: { '': {} } });
 var callTrafficClear = scopedRpc({ object: 'mu300dash', method: 'traffic_clear', nobatch: true, params: [ 'confirm' ], expect: { '': {} } });
@@ -224,6 +225,38 @@ var DASH_I18N = {
 	'短信转发': ['SMS forwarding', 'SMS yönlendirme'],
 	'开启短信转发': ['Enable SMS forwarding', 'SMS yönlendirmeyi aç'],
 	'转发已开启': ['Forwarding enabled', 'Yönlendirme açık'],
+	'转发配置': ['Forwarding profiles', 'Yönlendirme profilleri'],
+	'启用当前配置': ['Enable this profile', 'Bu profili etkinleştir'],
+	'电源通知使用共用配置；请同时开启该配置并设置渠道。': ['Power notifications use the shared profile; enable that profile and configure its channel.', 'Güç bildirimleri ortak profili kullanır; bu profili etkinleştirip kanalını yapılandırın.'],
+	'转发正在执行，请稍后再试': ['A delivery is running; please try again shortly', 'Bir gönderim sürüyor; lütfen biraz sonra tekrar deneyin'],
+	'配置模式': ['Configuration mode', 'Yapılandırma modu'],
+	'所有 SIM 共用': ['Shared by all SIMs', 'Tüm SIM kartları için ortak'],
+	'按 SIM 独立配置': ['Separate profile per SIM', 'SIM başına ayrı profil'],
+	'正在编辑': ['Editing profile', 'Düzenlenen profil'],
+	'共用配置 / 电源通知': ['Shared profile / power notifications', 'Ortak profil / güç bildirimleri'],
+	'独立模式按收到短信的卡选择渠道和黑名单，不受上网卡切换影响。电源通知始终使用共用配置。': ['Separate mode selects the channel and blacklist by the receiving SIM, not the data SIM. Power notifications always use the shared profile.', 'Ayrı modda kanal ve kara liste veri SIM kartına değil, SMS alan karta göre seçilir. Güç bildirimleri her zaman ortak profili kullanır.'],
+	'当前配置用于新短信转发。': ['This profile handles new incoming SMS.', 'Bu profil yeni gelen SMS mesajlarını yönlendirir.'],
+	'当前配置不用于短信；保存后仍保留，可单独测试。': ['This profile is inactive for SMS; its settings are retained and can be tested separately.', 'Bu profil SMS için etkin değil; ayarları korunur ve ayrı olarak test edilebilir.'],
+	'电源通知请在共用配置中设置，独立模式下仍生效。': ['Configure power notifications in the shared profile; they remain active in separate mode.', 'Güç bildirimlerini ortak profilde ayarlayın; ayrı modda da etkin kalır.'],
+	'填入推送预设': ['Fill from a push preset', 'Bildirim ön ayarını doldur'],
+	'自定义 / 兼容旧版': ['Custom / legacy compatible', 'Özel / eski sürümle uyumlu'],
+	'企业微信': ['WeCom', 'WeCom'],
+	'钉钉 Webhook': ['DingTalk Webhook', 'DingTalk Webhook'],
+	'预设只填入表单，请替换密钥后保存；需要钉钉加签时请选择“钉钉机器人”。': ['Presets only fill the form. Replace the keys and save; use DingTalk bot for signed requests.', 'Ön ayarlar yalnızca formu doldurur. Anahtarları değiştirip kaydedin; imzalı istekler için DingTalk botunu seçin.'],
+	'请求方法': ['Request method', 'İstek yöntemi'],
+	'请求超时（秒，1–120）': ['Request timeout (seconds, 1–120)', 'İstek zaman aşımı (saniye, 1–120)'],
+	'正文格式': ['Body format', 'Gövde biçimi'],
+	'正文模板': ['Body template', 'Gövde şablonu'],
+	'纯文本': ['Plain text', 'Düz metin'],
+	'占位符：{from}、{text}、{time}、{sim}、{device}、{kind}。JSON 占位符放在字符串内；按格式自动转义，绝不执行命令。': ['Placeholders: {from}, {text}, {time}, {sim}, {device}, {kind}. Put JSON placeholders inside strings; values are escaped for the format, never executed.', 'Yer tutucular: {from}, {text}, {time}, {sim}, {device}, {kind}. JSON yer tutucularını dizgelerin içine koyun; değerler biçime göre kaçışlanır, komut olarak çalıştırılmaz.'],
+	'GET 只发送 URL 参数；JSON 模板留空时沿用旧版 from/text/date 格式。仅支持公网 HTTPS，验证证书且不跟随重定向。': ['GET sends URL parameters only. An empty JSON template preserves the legacy from/text/date format. Public HTTPS only, with certificate verification and no redirects.', 'GET yalnızca URL parametrelerini gönderir. Boş JSON şablonu eski from/text/date biçimini korur. Yalnızca genel HTTPS; sertifika doğrulanır, yönlendirmeler izlenmez.'],
+	'附加请求头（每行 Name: value）': ['Extra headers (Name: value, one per line)', 'Ek başlıklar (satır başına Name: value)'],
+	'请求超时必须为 1–120 秒': ['Request timeout must be 1–120 seconds', 'İstek zaman aşımı 1–120 saniye olmalıdır'],
+	'正文模板必须是有效 JSON': ['Body template must be valid JSON', 'Gövde şablonu geçerli JSON olmalıdır'],
+	'填入推送预设？': ['Fill from this push preset?', 'Bu bildirim ön ayarı doldurulsun mu?'],
+	'将替换当前 Webhook 地址、正文及请求头，保存后才会生效。': ['This replaces the Webhook URL, body and headers in the form. Changes take effect only after saving.', 'Formdaki Webhook adresi, gövde ve başlıklar değiştirilir. Değişiklikler yalnızca kaydettikten sonra geçerli olur.'],
+	'切换编辑配置？': ['Switch the profile being edited?', 'Düzenlenen profil değiştirilsin mi?'],
+	'未保存的修改将被丢弃。': ['Unsaved changes will be discarded.', 'Kaydedilmemiş değişiklikler silinecek.'],
 	'转发未开启': ['Forwarding disabled', 'Yönlendirme kapalı'],
 	'转发方式': ['Forwarding method', 'Yönlendirme yöntemi'],
 	'模板语言': ['Template language', 'Şablon dili'],
@@ -317,6 +350,35 @@ var DASH_I18N = {
 	'CPU 设置已应用': ['CPU settings applied', 'CPU ayarları uygulandı'],
 	'CPU 设置失败且回滚不完整，请检查实际状态': ['CPU settings failed and rollback was incomplete; check actual state', 'CPU ayarları başarısız ve geri alma eksik; gerçek durumu kontrol edin'],
 	'CPU 配置无效': ['Invalid CPU settings', 'Geçersiz CPU ayarları'],
+	'调速器与频率即时应用；电压偏移独立保存，重启后生效，不修改温控。': ['Governors and frequency limits apply immediately. Voltage offsets are saved separately and apply after reboot; thermal controls are unchanged.', 'Yönetici ve frekans sınırları hemen uygulanır. Voltaj ofsetleri ayrı kaydedilir ve yeniden başlatmada uygulanır; sıcaklık denetimi değişmez.'],
+	'CPU 电压偏移': ['CPU voltage offsets', 'CPU voltaj ofsetleri'],
+	'频率与调速策略': ['Frequency & governor', 'Frekans ve yönetici'],
+	'即时生效': ['Applies immediately', 'Hemen uygulanır'],
+	'重启生效': ['Applies after reboot', 'Yeniden başlatmada uygulanır'],
+	'当前频率': ['Current frequency', 'Geçerli frekans'],
+	'按 CPU 簇设置，步进 3.125 mV。偏移会同时作用于固件对应的 CPU/SRAM 电压表；不增加超频档位。': ['Set each CPU cluster in 3.125 mV steps. Firmware adjusts the corresponding CPU/SRAM voltage tables together; no overclock states are added.', 'Her CPU kümesini 3.125 mV adımlarla ayarlayın. Donanım yazılımı ilgili CPU/SRAM voltaj tablolarını birlikte ayarlar; hız aşırtma kademesi eklenmez.'],
+	'已保存，将在下次重启时应用': ['Saved; applies on next reboot', 'Kaydedildi; sonraki yeniden başlatmada uygulanır'],
+	'当前电压偏移与保存值一致': ['Active voltage offsets match the saved values', 'Etkin voltaj ofsetleri kayıtlı değerlerle aynı'],
+	'当前内核或固件不支持电压调整': ['This kernel or firmware does not support voltage adjustment', 'Bu çekirdek veya donanım yazılımı voltaj ayarını desteklemiyor'],
+	'检测到异常关机，已停用上次的电压设置并恢复默认。': ['An unclean shutdown was detected. The previous voltage profile was disabled and defaults restored.', 'Düzgün kapanmama algılandı. Önceki voltaj profili devre dışı bırakılıp varsayılanlar geri yüklendi.'],
+	'当前偏移': ['Active offset', 'Etkin ofset'],
+	'偏移预设': ['Offset presets', 'Ofset ön ayarları'],
+	'默认电压': ['Default voltage', 'Varsayılan voltaj'],
+	'预设仅填入小幅偏移，不会直接保存；非零偏移仍需验证稳定性，不保证每颗芯片都安全。': ['Presets only fill in small offsets; they do not save. Non-zero offsets still require stability testing and are not guaranteed safe for every chip.', 'Ön ayarlar yalnızca küçük ofsetleri doldurur; kaydetmez. Sıfır dışı ofsetler kararlılık testi gerektirir ve her çip için güvenli olduğu garanti edilmez.'],
+	'当前偏移 → 下次启动偏移': ['Active offset → Next boot offset', 'Etkin ofset → Sonraki açılış ofseti'],
+	'请核对各簇偏移。非零偏移可能导致死机或数据损坏，预设也不保证稳定。确认仅保存配置，下次重启生效，不会立即调压。': ['Check the offsets for each cluster. Non-zero offsets may cause crashes or data corruption; presets do not guarantee stability. Confirming only saves the configuration for the next reboot; voltage will not change now.', 'Her kümenin ofsetini kontrol edin. Sıfır dışı ofsetler çökmeye veya veri bozulmasına yol açabilir; ön ayarlar kararlılığı garanti etmez. Onaylama yalnızca sonraki yeniden başlatma için yapılandırmayı kaydeder; voltaj şimdi değişmez.'],
+	'确认保存': ['Confirm save', 'Kaydetmeyi onayla'],
+	'下次启动偏移（mV）': ['Next boot offset (mV)', 'Sonraki açılış ofseti (mV)'],
+	'当前固件电压表': ['Current firmware voltage table', 'Geçerli donanım yazılımı voltaj tablosu'],
+	'保存电压设置': ['Save voltage settings', 'Voltaj ayarlarını kaydet'],
+	'恢复默认电压': ['Restore default voltage', 'Varsayılan voltajı geri yükle'],
+	'调压可能导致死机或数据丢失，请从小幅调整开始。异常断电或重启后会停用电压配置；正常关机保留。保存不会立即调压或自动重启。': ['Voltage changes may cause crashes or data loss; start with small adjustments. An unclean shutdown disables the profile; clean shutdown preserves it. Saving does not change live voltage or reboot.', 'Voltaj değişiklikleri çökmeye veya veri kaybına yol açabilir; küçük ayarlarla başlayın. Düzgün olmayan kapanma profili devre dışı bırakır; normal kapanma korur. Kaydetmek anlık voltajı değiştirmez veya yeniden başlatmaz.'],
+	'CPU 电压配置无效': ['Invalid CPU voltage settings', 'Geçersiz CPU voltaj ayarları'],
+	'恢复默认电压？': ['Restore default voltage?', 'Varsayılan voltaj geri yüklensin mi?'],
+	'保存电压设置？': ['Save voltage settings?', 'Voltaj ayarları kaydedilsin mi?'],
+	'电压设置仅在下次重启时应用；请确认已了解调压风险。': ['Voltage settings apply only after reboot. Please confirm that you understand the risks.', 'Voltaj ayarları yalnızca yeniden başlatmada uygulanır. Riskleri anladığınızı onaylayın.'],
+	'正在保存电压设置…': ['Saving voltage settings…', 'Voltaj ayarları kaydediliyor…'],
+	'电压设置已保存，重启后生效': ['Voltage settings saved; reboot to apply', 'Voltaj ayarları kaydedildi; uygulamak için yeniden başlatın'],
 	'CPU 设置正忙，请稍后重试': ['CPU settings are busy; try again later', 'CPU ayarları meşgul; daha sonra tekrar deneyin'],
 	'CPU 配置回读不一致': ['CPU settings did not match readback', 'CPU ayarları geri okumayla eşleşmedi'],
 	'无法保存 CPU 设置': ['Could not save CPU settings', 'CPU ayarları kaydedilemedi'],
@@ -913,6 +975,7 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px;margin-top:6px}
 .mud-card{background:var(--surface,var(--background-alt,var(--background,#fff)));border:1px solid var(--hairline,var(--border,#e3e6ea));border-radius:calc(var(--radius-base,.5rem) + .375rem);padding:14px 16px;box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.04));transition:border-color .15s}
 .mud-card:hover{border-color:color-mix(in oklab,var(--brand,var(--primary,#2f7bf6)) 30%,var(--hairline,var(--border,#e3e6ea)))}
+.mud .mud-sim-toggle,.mud .mud-sim-toggle:hover{background:transparent}
 .mud-card>h3{margin:0 0 8px;font-size:.7rem;font-weight:600;color:var(--text-muted,var(--text-light,#787d85));letter-spacing:.08em}
 .mud-card>h3::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand,var(--primary,#2f7bf6));margin-right:7px;vertical-align:1px}
 .mud-hero{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center;background:var(--brand-subtle,var(--surface,#fff));margin-bottom:12px;padding:16px 20px}
@@ -1229,9 +1292,9 @@ function busy(btn, on) {
 
 /* ------------------------------------------------------------------ 对话框
  * M.confirmBox(title, message, opts) -> Promise<boolean>：主题化确认框，
- * 取消/遮罩/Escape 都 resolve(false)，确定/Enter resolve(true)。
+ * 取消/遮罩/Escape 都 resolve(false)，确定 resolve(true)，Enter 遵循当前按钮焦点。
  * M.alertBox(title, message, opts) -> Promise<true>：单按钮提示框。
- * opts: { danger:true 红色确认键, okText, cancelText }；danger 时默认焦点在取消上。 */
+ * opts: { danger:true 红色确认键, okText, cancelText, content: DOM Node }；danger 时默认焦点在取消上。 */
 function dialog(opts) {
 	opts = opts || {};
 	return new Promise(function(resolve) {
@@ -1245,6 +1308,7 @@ function dialog(opts) {
 			'</div></div>';
 		wrap.querySelector('h4').textContent = translate(opts.title || '确认');
 		wrap.querySelector('.mud-dlg-msg').textContent = translate(opts.message || '');
+		if (opts.content instanceof Node) wrap.querySelector('.mud-dlg-msg').appendChild(opts.content);
 		var btns = wrap.querySelectorAll('.mud-dlg-btns .mud-btn');
 		btns[btns.length - 1].textContent = translate(opts.okText || '确定');
 		if (withCancel) btns[0].textContent = translate(opts.cancelText || '取消');
@@ -1255,10 +1319,10 @@ function dialog(opts) {
 		};
 		var onKey = function(ev) {
 			if (ev.key == 'Escape') { ev.preventDefault(); done(withCancel ? false : true); }
-			else if (ev.key == 'Enter') { ev.preventDefault(); done(true); }
+			else if (ev.key == 'Enter') { ev.preventDefault(); done(!(withCancel && document.activeElement === btns[0])); }
 		};
 		wrap.addEventListener('click', function(ev) {
-			var b = ev.target.closest('button');
+			var b = ev.target.closest('.mud-dlg-btns button[data-r]');
 			if (b) done(b.getAttribute('data-r') == '1');
 			else if (ev.target === wrap && withCancel) done(false);
 		});

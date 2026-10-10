@@ -19,6 +19,7 @@ MODULES = {
     'IP_VS': 'ip_vs', 'IP_VS_RR': 'ip_vs_rr', 'IP_VS_WRR': 'ip_vs_wrr',
     'IP_VS_SH': 'ip_vs_sh', 'VXLAN': 'vxlan', 'IPVLAN': 'ipvlan',
     'MACVTAP': 'macvtap', 'BINFMT_MISC': 'binfmt_misc', 'FUSE_FS': 'fuse',
+    'ARM_SPRD_CPUFREQ_V2': 'sprd_cpufreq_v2_driver',
 }
 
 
@@ -31,6 +32,8 @@ def config_check(path):
     for key in MODULES:
         if config.get('CONFIG_' + key) not in ('y', 'm'):
             raise ValueError(f'CONFIG_{key} missing in built kernel.config; rebuild kernel')
+    if config.get('CONFIG_ARM_SPRD_CPUFREQ_V2') != 'm':
+        raise ValueError('CONFIG_ARM_SPRD_CPUFREQ_V2=m required for boot voltage profiles; rebuild kernel')
     return config
 
 
