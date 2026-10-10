@@ -5,7 +5,7 @@ fail_apply() { printf '%s\n' "$1" >&2; return 1; }
 validate_apply() {
     local kind=$1 val=$2 cap encoded pair fr pc
     case "$kind:$val" in
-        mode:auto|mode:4g|mode:sa|mode:nsa|endc:on|endc:off|auto_apply:on|auto_apply:off) return 0 ;;
+        mode:auto|mode:4g|mode:sa|mode:nsa|endc:on|endc:off|auto_apply:on|auto_apply:off|reset:auto) return 0 ;;
         cell:auto|cell:off|cell:off-nr|cell:off-lte) return 0 ;;
     esac
     case "$kind" in
@@ -93,6 +93,80 @@ verify_apply() {
     esac
 }
 
+# A committed reset is a tombstone for the old five keys. Never swap/remove
+# STATE_DIR itself: SIM 0's directory may contain SIM 1 and identity data.
+# Replay/apply finish interrupted cleanup before consuming another saved lock.
+finish_reset_state() {
+    [ -e "$STATE_DIR/reset_pending" ] || return 0
+    local key
+    for key in mode endc lte nr cell; do
+        [ ! -d "$STATE_DIR/$key" ] || return 1
+    done
+    rm -f "$STATE_DIR/mode" "$STATE_DIR/endc" "$STATE_DIR/lte" \
+        "$STATE_DIR/nr" "$STATE_DIR/cell" || return 1
+    rm -f "$STATE_DIR/reset_pending"
+}
+
+verify_reset() {
+    local kind val
+    for kind in mode endc lte nr cell; do
+        case "$kind" in mode) val=auto ;; endc) val=on ;; *) val= ;; esac
+        verify_apply || return 1
+    done
+}
+
+reset_modem_settings() {
+    write_setting 'AT+SP5GRAN=1' &&
+    write_setting "AT+SPTESTMODE=134,$m1,$prim" &&
+    write_setting 'AT+SPENDC=1' &&
+    write_setting 'AT+SPLBAND=1,0,0,0,0,0' &&
+    write_setting 'AT+SPLBAND=2,0,0,0,0' &&
+    write_setting 'AT+SPFORCEFRQ=12,4' &&
+    write_setting 'AT+SPFORCEFRQ=16,4'
+}
+
+# F50 NR band masks are modem-wide even with atomic SPACTCARD addressing.
+# Do not leave the other view showing stale shared fields for ten minutes.
+# Saved settings remain per-SIM; never delete the other SIM's intent here.
+invalidate_reset_cache() {
+    rm -f "$LOCKCACHE"
+    [ "$(cfg sim_slots)" = 2 ] || return 0
+    case ${MU300_SIM_SLOT:-0}:$RUNDIR in
+        0:*) rm -f "$RUNDIR/sim1/lock.json" ;;
+        1:*/sim1) rm -f "${RUNDIR%/sim1}/lock.json" ;;
+    esac
+}
+
+do_reset_apply() {
+    local tm m0=134 gran=1 m1 prim want_lte= want_nr=
+    tm=$(read_field 'AT+SPTESTMODE?' SPTESTMODE)
+    printf '%s\n' "$tm" | grep -Eq '^[0-9]+,[0-9]+,[01](,[0-9]+)*$' ||
+        { fail_apply '无法读取当前 SIM 模式，未发送设置'; return 1; }
+    m1=$(printf '%s' "$tm" | cut -d, -f2)
+    prim=$(printf '%s' "$tm" | cut -d, -f3)
+    # A partial modem write cannot be rolled back atomically. Invalidate the
+    # old display, preserve saved intent on failure, and tell the caller.
+    invalidate_reset_cache
+    reset_modem_settings ||
+        { fail_apply '清除未完成，部分设置可能已生效；已保存锁定未删除，请刷新后重试'; return 1; }
+    verify_reset ||
+        { fail_apply '清除回读不一致，部分设置可能已生效；已保存锁定未删除，请刷新后重试'; return 1; }
+    sfun_restart || { fail_apply '协议栈重启被拒绝，请检查模组状态'; return 1; }
+    at 'AT+CFUN?' 4 | grep -q '+CFUN: 1' ||
+        { fail_apply '设置已写入，但射频未恢复，请检查模组状态'; return 1; }
+    verify_reset || { fail_apply '协议栈重启后设置不一致，未保存'; return 1; }
+    # Publish the replay barrier before deleting any file, so an interrupted
+    # worker cannot leave a mixture of old locks for the next replay.
+    save_state reset_pending 1 ||
+        { fail_apply '模组已恢复自动，但清除结果保存失败；旧锁定仍可能在开机回放，请重试'; return 1; }
+    finish_reset_state ||
+        { fail_apply '模组已恢复自动，旧锁定回放已阻止，但保存文件清理失败，请重试'; return 1; }
+    say "verified reset to automatic for SIM ${MU300_SIM_SLOT:-0}"
+    invalidate_reset_cache
+    "$0" get fresh >/dev/null 2>&1
+    return 0
+}
+
 do_apply() {
     local kind=$1 val=$2 m0 m1 prim gran tm v rat p fr pc pair want_lte want_nr c INTERACTIVE_APPLY=1
     validate_apply "$kind" "$val" || return 1
@@ -106,6 +180,11 @@ do_apply() {
     trap 'rm -f "$APPLY_DIR/pid"; rmdir "$APPLY_DIR" 2>/dev/null' EXIT
     trap 'exit 1' INT TERM
     [ ! -d /run/unisoc-data-sim-switch ] || { fail_apply '另一项网络设置仍在执行，请稍后重试'; return 1; }
+    finish_reset_state || { fail_apply '上次清除的保存文件尚未清理完成，请检查存储后重试'; return 1; }
+    if [ "$kind" = reset ]; then
+        do_reset_apply
+        return $?
+    fi
     case "$kind" in
         mode)
             set -- $(mode_pair "$val"); m0=$1; gran=$2

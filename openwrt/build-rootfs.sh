@@ -129,7 +129,7 @@ mkdir -p /var/lock /var/run /tmp
 apk update >/dev/null
 # openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure;
 # i2c-tools, gpiod-tools: mu300-usb (the charger of the U30 Air) and mu300-nfc (its NFC tag)
-apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop \
+apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
     i2c-tools gpiod-tools >/dev/null
 apk add --allow-untrusted /in/luci-theme-aurora.apk >/dev/null
 apk add --allow-untrusted /in/luci-app-aurora-config.apk /in/aurora-config-zh-cn.apk /in/aurora-config-tr.apk >/dev/null
@@ -154,6 +154,7 @@ printf "mu300\n" > $R/etc/hostname   # the real one comes from uci (etc/uci-defa
 cp -a /in/opt-mu300 $R/opt/mu300
 cp -a /in/overlay/. $R/
 chmod 0755 $R/opt/mu300/bin/cpu-voltage-platform $R/etc/init.d/mu300-cpu-driver
+chmod 0755 $R/opt/mu300/bin/ra-deprecate $R/opt/mu300/bin/wcn-reopen
 [ -s $R/www/luci-static/aurora/main.css ] || { echo "Aurora theme assets missing" >&2; exit 1; }
 for f in www/luci-static/resources/view/aurora/studio.js \
     www/luci-static/resources/view/aurora/marketplace.js \

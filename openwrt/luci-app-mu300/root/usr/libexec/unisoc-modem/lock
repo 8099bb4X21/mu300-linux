@@ -11,6 +11,7 @@
 #   nr    "78,41" or ""                 NR band lock (SPLBAND); empty = automatic
 #   cell  auto | off | "nr:627264,393" | "lte:1650,211"   serving-cell lock (SPFORCEFRQ)
 #   auto_apply on | off                 enable/disable boot replay without deleting settings
+#   reset auto                         clear this SIM's locks, verify, then remove saved lock keys
 #
 # All encodings are the ones the ufi_tools standalone mode uses against this modem
 # family, cross-checked against this device's own read-backs (see the header of
@@ -406,6 +407,16 @@ verify_replay() {
 do_replay() {
     local phase=${1:-late} marker=$REPLAY_MARKER replay_m1= replay_primary= INTERACTIVE_APPLY=1
     case $phase in early|late) ;; *) return 2 ;; esac
+    # An interrupted, already-verified reset must never replay old files.
+    # Only finish storage cleanup: no AT/SFUN is needed for this recovery.
+    if [ -e "$STATE_DIR/reset_pending" ]; then
+        apply_lock || return 1
+        trap 'rm -f "$APPLY_DIR/pid"; rmdir "$APPLY_DIR" 2>/dev/null' EXIT
+        trap 'exit 1' INT TERM
+        finish_reset_state || { say 'reset cleanup failed; refusing old lock replay'; return 1; }
+        : > "$marker"
+        return $?
+    fi
     [ -e "$marker" ] && return 0
     if ! auto_apply_enabled; then
         say "boot replay disabled"
@@ -416,6 +427,7 @@ do_replay() {
     trap 'rm -f "$APPLY_DIR/pid"; rmdir "$APPLY_DIR" 2>/dev/null' EXIT
     trap 'exit 1' INT TERM
     # Another caller may have completed replay while this one waited for the lock.
+    finish_reset_state || { say 'reset cleanup failed; refusing old lock replay'; return 1; }
     [ -e "$marker" ] && return 0
     auto_apply_enabled || return 0
     # boot hook: the AT settings do not all survive a modem power cycle, so re-send

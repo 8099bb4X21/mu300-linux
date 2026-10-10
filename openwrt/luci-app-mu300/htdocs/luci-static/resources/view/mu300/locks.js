@@ -89,6 +89,15 @@ return view.extend({
   <tbody id="mud-neigh"><tr><td colspan="7" style="color:var(--text-muted,var(--text-light,#777))">--</td></tr></tbody></table>
   </div>
   <div class="mud-note">应用后协议栈重启（SFUN），蜂窝会短暂断开；设置会持久保存，并在启用“开机自动应用”时由插件于 AT 就绪后回放。接入平台的射频前钩子时可无重启回放。频段全不选再点应用 = 恢复自动。</div>
+</div>
+
+<div class="mud-sec">
+  <h3>清除全部蜂窝锁定</h3>
+  <div class="mud-note">按当前查看 SIM 恢复自动模式和频段、解除小区锁定并开启 EN-DC；只删除当前卡的已保存锁定，保留两张卡的开机自动应用开关。</div>
+  <div class="mud-ctl" style="margin-top:10px;max-width:400px">
+    <button class="mud-btn warn" id="mud-lock-reset">清除当前 SIM 全部锁定</button>
+  </div>
+  <div class="mud-note">注意：部分模组的频段或小区锁定由双卡共享（F50 的 NR 频段已确认共享），清除也会影响另一张卡。另一张卡的保存配置不会删除，其开机回放可能再次改变共享设置。清除会短暂中断蜂窝连接；全部回读通过后才删除当前卡的保存项。</div>
 </div>`;
 		M.localize(root);
 		this.wire(root);
@@ -105,11 +114,14 @@ return view.extend({
 		/* 主题化确认框替代浏览器 confirm；确认后再进入实际执行 */
 		var apply = function(kind, val, what, opts) {
 			opts = opts || {};
-			M.confirmBox('应用「' + what + '」？',
-				opts.noSfun ? '' : '协议栈会重启（SFUN），蜂窝断开约半分钟。',
-				{ danger: !opts.noSfun, okText: '应用' })
+			var slot = M.selectedSlot();
+			M.confirmBox(opts.title || ('应用「' + what + '」？'),
+				opts.message || (opts.noSfun ? '' : '协议栈会重启（SFUN），蜂窝断开约半分钟。'),
+				{ danger: !opts.noSfun, okText: opts.okText || '应用' })
 				.then(function(go) {
-			if (self._disposed) return; if (go) applyNow(kind, val, what, opts); });
+			if (self._disposed || !go) return;
+			if (M.selectedSlot() !== slot) { self.note('查看卡槽已改变，请重新确认操作', 'info'); return; }
+			applyNow(kind, val, what, opts); });
 		};
 		var applyNow = function(kind, val, what, opts) {
 			if (self._applying) { self.note('另一项网络设置仍在执行，请稍后重试', 'info'); return; }
@@ -222,6 +234,13 @@ return view.extend({
 		};
 		this.Q('lock-cell').onclick = function() { apply('cell', 'auto', '锁定当前服务小区', { btn: this }); };
 		this.Q('lock-cell-off').onclick = function() { apply('cell', 'off', '解除小区锁定', { btn: this }); };
+		this.Q('lock-reset').onclick = function() {
+			apply('reset', 'auto', '清除当前 SIM 全部锁定', {
+				btn: this, okText: '确认清除',
+				title: M.translate('清除 SIM %s 的全部锁定？').replace('%s', Number(M.selectedSlot()) + 1),
+				message: '恢复自动模式和频段、解除 LTE/NR 小区锁定并开启 EN-DC。双卡共享的模组设置也会影响另一张卡（F50 的 NR 频段共享）。只清除当前卡的保存项，保留另一张卡配置和开机自动应用开关；另一张卡的回放可能重新改变共享设置。蜂窝会短暂断开；全部回读通过才算成功。'
+			});
+		};
 
 		/* 已锁定小区表的解锁按钮（委托） */
 		this.Q('lockedcells').addEventListener('click', function(ev) {
@@ -395,7 +414,8 @@ return view.extend({
 			M.busy(btn, false);
 		}).then(function() {
 			if (self._disposed) return;
-			self.note(operation.kind === 'auto_apply' ? '开机自动应用设置已保存' : '已应用并核对模组状态', 'success');
+			self.note(operation.kind === 'auto_apply' ? '开机自动应用设置已保存' :
+				operation.kind === 'reset' ? '当前 SIM 的全部锁定已清除，已核对并清理保存配置' : '已应用并核对模组状态', 'success');
 			return self.refresh();
 		}).catch(function(error) {
 			if (self._disposed) return;

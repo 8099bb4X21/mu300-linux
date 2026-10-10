@@ -54,8 +54,55 @@ async function main() {
         messages.push(...[...src.matchAll(/'([^'\n]*[\u3400-\u9fff][^'\n]*)'/g)]
             .map(m=>m[1]).filter(s=>!s.includes('{')));
     }
+    const locks = fs.readFileSync(path.join(root, 'htdocs/luci-static/resources/view/mu300/locks.js'), 'utf8');
+    messages.push('清除全部蜂窝锁定', '清除当前 SIM 全部锁定', '清除 SIM %s 的全部锁定？', '确认清除',
+        '查看卡槽已改变，请重新确认操作', '当前 SIM 的全部锁定已清除，已核对并清理保存配置',
+        '正在后台应用 清除当前 SIM 全部锁定 …（SFUN 重启 + 重新驻网，约半分钟）');
+    messages.push(...[...locks.matchAll(/(?:<div class="mud-note">|message: ')([^<'\n]*清除[^<'\n]*)/g)].map(m=>m[1]));
     for (lang of ['en','tr']) for (const text of messages)
         assert(!/[\u3400-\u9fff]/.test(M.translate(text)),lang+': '+text);
+    // Execute the actual page handlers with a minimal DOM: don't clear a
+    // modem in a browser test, but do check confirmation, SIM scope and busy.
+    let selected=1, confirm, modal, requests=[], finishJob, failJob, notes=[];
+    const elements=new Map();
+    const pageRoot={isConnected:true, querySelectorAll:()=>[], querySelector:selector=>{
+        if(!elements.has(selector)) elements.set(selector, {
+            classList:{toggle:()=>{}}, addEventListener:()=>{}, querySelectorAll:()=>[], children:[]
+        });
+        return elements.get(selector);
+    }};
+    const fakeM={selectedSlot:()=>selected, translate:M.translate, esc:s=>s,
+        confirmBox:(title,message,options)=>{
+            modal={title,message,options}; return new Promise(r=>{confirm=r;});
+        }, busy:(button,on)=>{button.busy=on;},
+        callLockSet:(kind,val)=>{requests.push({kind,val,slot:selected}); return Promise.resolve({...start,kind});},
+        waitLockJob:()=>new Promise((resolve,reject)=>{finishJob=resolve;failJob=reject;})};
+    const page = new Function('view','R','M','L',locks)(
+        {extend:x=>x},{poll:()=>()=>{}},fakeM,{resolveDefault:x=>Promise.resolve(x)});
+    page.refresh=()=>Promise.resolve();
+    page.note=(text,type)=>notes.push({text,type});
+    page.wire(pageRoot);
+    const reset=elements.get('#mud-lock-reset');
+    lang='en'; reset.onclick();
+    assert.equal(modal.title,'Clear all locks for SIM 2?');
+    assert.equal(modal.options.danger,true);
+    assert.equal(modal.options.okText,'确认清除');
+    confirm(false); await flush(); assert.equal(requests.length,0);
+    reset.onclick(); selected=0; confirm(true); await flush();
+    assert.equal(requests.length,0); assert.match(notes.at(-1).text,/查看卡槽已改变/);
+    selected=1; reset.onclick(); confirm(true); await flush();
+    assert.deepEqual(requests,[{kind:'reset',val:'auto',slot:1}]);
+    assert.equal(reset.busy,true); assert.equal(page._applying,true);
+    reset.onclick(); confirm(true); await flush(); assert.equal(requests.length,1);
+    finishJob({...start,kind:'reset'}); await flush();
+    assert.equal(reset.busy,false); assert.equal(page._applying,false);
+    assert.equal(notes.at(-1).type,'success'); assert.match(notes.at(-1).text,/全部锁定已清除/);
+    reset.onclick(); confirm(true); await flush();
+    failJob(Error('readback mismatch')); await flush();
+    assert.equal(reset.busy,false); assert.equal(page._applying,false);
+    assert.equal(notes.at(-1).type,'error'); assert.match(notes.at(-1).text,/readback mismatch/);
+    reset.onclick(); page._disposed=true; confirm(true); await flush();
+    assert.equal(requests.length,2);
     console.log('Lock jobs: verified completion, failures, clock skew, single-flight, timeout, dispose and i18n OK');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

@@ -25,7 +25,7 @@ class LockWrites(ShellTest):
             shutil.copyfile(LIB / name, self.lock.parent / name)
             (self.lock.parent / name).chmod(0o755)
         self.modem = self.tmp / 'modem.json'
-        self.stub('uci', f'case "$3" in unisoc_modem.main.state_dir) echo "{self.state}";; esac')
+        self.stub('uci', f'case "$3" in unisoc_modem.main.state_dir) echo "{self.state}";; *.sim_slots) echo "${{TEST_SIM_SLOTS:-1}}";; esac')
         self.stub('logger', ':')
         self.stub('ifup', 'echo ifup >> "$STUBLOG/commands"')
         self.stub('sleep', ':')
@@ -48,7 +48,7 @@ if cmd in reads:
 if cmd=='AT+SP5GCMDS="get nr support_band"':
  print('+SP5GCMDS: get nr support_band,6,41,78,1,8,28,5'); print('OK'); sys.exit(0)
 if cmd in ('AT+SPFORCEFRQ=12,3','AT+SPFORCEFRQ=16,3'):
- tag=cmd.split('=')[1].split(',')[0]; cells=s['cells'+tag]
+ tag=cmd.split('=')[1].split(',')[0]; cells=s.get('cell_read_override',{}).get(tag,s['cells'+tag])
  print('+SPFORCEFRQ: '+tag+',3'+(''.join(','+x for x in cells))); print('OK'); sys.exit(0)
 if s.get('reject'): print('+CME ERROR: 3'); sys.exit(0)
 if s.get('reject_restart') and cmd.startswith('AT+SFUN='): print('ERROR'); sys.exit(0)
@@ -61,6 +61,7 @@ if cmd.startswith('AT+SPFORCEFRQ='):
  if args[1]=='4': s[key]=[]
  elif args[1]=='6': s[key]=sorted(set(s[key]+[','.join(args[2:])]))
 if cmd=='AT+SFUN=4' and s.get('drift'): s['lte']='0,0,0,0,0'
+if cmd=='AT+SFUN=4' and s.get('reset_drift'): s['lte']='0,0,0,5,0'
 f.write_text(json.dumps(s))
 if s.get('omit_ok'): sys.exit(1)
 print('OK')
@@ -71,12 +72,190 @@ print('OK')
         self.reset()
 
     def reset(self, **extra):
-        self.modem.write_text(json.dumps(dict(tm='134,128,1,0,0,0', gran='1', endc='1',
-            lte='0,0,0,0,0', nr='0,0,0,0', cfun='1', cells12=['1650,10'], cells16=[], **extra)))
+        state = dict(tm='134,128,1,0,0,0', gran='1', endc='1',
+            lte='0,0,0,0,0', nr='0,0,0,0', cfun='1', cells12=['1650,10'], cells16=[])
+        state.update(extra)
+        self.modem.write_text(json.dumps(state))
         (self.tmp / 'commands').write_text('')
 
     def apply(self, shell, kind, val):
         return self.script(shell, self.lock, 'apply', kind, val, **self.extra)
+
+    def seed_locks(self, directory=None):
+        directory = directory or self.state
+        directory.mkdir(parents=True, exist_ok=True)
+        saved = dict(mode='nsa', endc='off', lte='1,3', nr='41,78',
+                     cell='lte:1650,10\nnr:627264,393', auto_apply='off')
+        for key, value in saved.items():
+            (directory / key).write_text(value)
+        return saved
+
+    def test_reset_clears_all_types_once_preserving_other_sim_and_identity(self):
+        for shell in self.each_shell():
+            for omit_ok in (False, True):
+                self.reset(tm='131,128,1', gran='0', endc='0', lte='0,0,0,5,0',
+                           nr='0,0,272,0', cells16=['627264,393'], omit_ok=omit_ok)
+                self.seed_locks()
+                other = self.seed_locks(self.state / 'sim1')
+                (self.state / 'identity').mkdir(exist_ok=True)
+                (self.state / 'identity/iccid').write_text('keep')
+                r = self.apply(shell, 'reset', 'auto')
+                self.assertEqual(r.returncode, 0, r.stderr)
+                modem = json.loads(self.modem.read_text())
+                for key, value in dict(tm='134,128,1', gran='1', endc='1',
+                                       lte='0,0,0,0,0', nr='0,0,0,0', cells12=[], cells16=[]).items():
+                    self.assertEqual(modem[key], value, key)
+                for key in ('mode', 'endc', 'lte', 'nr', 'cell', 'reset_pending'):
+                    self.assertFalse((self.state / key).exists(), key)
+                self.assertEqual((self.state / 'auto_apply').read_text(), 'off')
+                self.assertEqual((self.state / 'identity/iccid').read_text(), 'keep')
+                for key, value in other.items():
+                    self.assertEqual((self.state / 'sim1' / key).read_text(), value)
+                commands = (self.tmp / 'commands').read_text()
+                self.assertEqual(commands.count('AT+SFUN=5\n'), 1)
+                self.assertEqual(commands.count('AT+SFUN=4\n'), 1)
+                self.assertEqual(json.loads((self.run / 'lock.json').read_text())['cells'], [])
+
+    def test_reset_slot1_keeps_slot0_state_and_mode_and_does_not_redial_it(self):
+        for shell in self.each_shell():
+            self.reset(tm='128,131,0', gran='0')
+            original = self.seed_locks()
+            self.seed_locks(self.state / 'sim1')
+            env = dict(self.extra, MU300_SIM_SLOT='1', MU300_STATE_DIR=self.state / 'sim1',
+                       MU300_DASH_DIR=self.run / 'sim1')
+            r = self.script(shell, self.lock, 'apply', 'reset', 'auto', **env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(self.modem.read_text())['tm'], '128,134,0')
+            for key, value in original.items():
+                self.assertEqual((self.state / key).read_text(), value)
+            self.assertEqual(list(p.name for p in (self.state / 'sim1').iterdir()), ['auto_apply'])
+            self.assertNotIn('ifup\n', (self.tmp / 'commands').read_text())
+
+    def test_reset_invalidates_other_sim_cache_but_not_its_saved_settings(self):
+        for shell in self.each_shell():
+            for slot in ('0', '1'):
+                self.reset()
+                self.seed_locks()
+                self.seed_locks(self.state / 'sim1')
+                (self.run / 'sim1').mkdir(exist_ok=True)
+                (self.run / 'lock.json').write_text('{}')
+                (self.run / 'sim1/lock.json').write_text('{}')
+                state = self.state if slot == '0' else self.state / 'sim1'
+                cache = self.run if slot == '0' else self.run / 'sim1'
+                other_state = self.state / 'sim1' if slot == '0' else self.state
+                other_cache = self.run / 'sim1' if slot == '0' else self.run
+                env = dict(self.extra, TEST_SIM_SLOTS='2', MU300_SIM_SLOT=slot,
+                           MU300_STATE_DIR=state, MU300_DASH_DIR=cache)
+                r = self.script(shell, self.lock, 'apply', 'reset', 'auto', **env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertFalse((other_cache / 'lock.json').exists())
+                self.assertTrue((cache / 'lock.json').exists())
+                self.assertEqual((other_state / 'mode').read_text(), 'nsa')
+                self.assertEqual((other_state / 'nr').read_text(), '41,78')
+
+    def test_reset_failure_never_discards_saved_intent(self):
+        for shell in self.each_shell():
+            for failure in ('reject', 'ignore', 'silent', 'reject_restart', 'reset_drift', 'corrupt_mode_fields'):
+                self.reset(tm='131,128,1', **{failure: True})
+                original = self.seed_locks()
+                r = self.apply(shell, 'reset', 'auto')
+                self.assertNotEqual(r.returncode, 0, failure)
+                for key, value in original.items():
+                    self.assertEqual((self.state / key).read_text(), value, (failure, key))
+                self.assertFalse((self.state / 'reset_pending').exists())
+                if failure in ('reject', 'ignore', 'silent', 'corrupt_mode_fields'):
+                    self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
+
+    def test_reset_checks_each_readback_not_just_mode(self):
+        for shell in self.each_shell():
+            for key, value in [('endc', '0'), ('lte', '0,0,0,1,0'), ('nr', '0,0,256,0'),
+                               ('gran', '0'), ('lte', 'ERROR'), ('nr', '0,0')]:
+                self.reset(read_override={key: value})
+                original = self.seed_locks()
+                r = self.apply(shell, 'reset', 'auto')
+                self.assertNotEqual(r.returncode, 0, (key, value))
+                self.assertEqual((self.state / 'mode').read_text(), original['mode'])
+                self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
+
+    def test_interrupted_reset_cleanup_prevents_replay_even_with_marker_and_auto_off(self):
+        for shell in self.each_shell():
+            for phase in ('early', 'late'):
+                self.reset()
+                self.seed_locks()
+                other = self.seed_locks(self.state / 'sim1')
+                (self.state / 'reset_pending').write_text('1')
+                (self.tmp / 'marker').write_text('')
+                r = self.script(shell, self.lock, 'replay', phase, **self.extra)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual((self.tmp / 'commands').read_text(), '')
+                self.assertFalse((self.state / 'mode').exists())
+                self.assertFalse((self.state / 'reset_pending').exists())
+                self.assertEqual((self.state / 'auto_apply').read_text(), 'off')
+                for key, value in other.items():
+                    self.assertEqual((self.state / 'sim1' / key).read_text(), value)
+
+    def test_reset_rejects_remaining_cells_on_either_rat(self):
+        for shell in self.each_shell():
+            for rat in ('12', '16'):
+                self.reset(cell_read_override={rat: ['1650,10']})
+                self.seed_locks()
+                r = self.apply(shell, 'reset', 'auto')
+                self.assertNotEqual(r.returncode, 0, rat)
+                self.assertIn('清除回读不一致', r.stderr)
+                self.assertTrue((self.state / 'cell').exists())
+                self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
+
+    def test_reset_barrier_publication_failure_keeps_all_old_files(self):
+        self.stub('mv', 'case "$2" in */reset_pending) exit 1;; esac; exec /bin/mv "$@"')
+        for shell in self.each_shell():
+            self.reset()
+            original = self.seed_locks()
+            r = self.apply(shell, 'reset', 'auto')
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('旧锁定仍可能在开机回放', r.stderr)
+            self.assertFalse((self.state / 'reset_pending').exists())
+            for key, value in original.items():
+                self.assertEqual((self.state / key).read_text(), value)
+
+    def test_reset_persistence_failures_are_explicit_and_block_old_replay(self):
+        for shell in self.each_shell():
+            self.reset()
+            self.seed_locks()
+            (self.state / 'mode').unlink()
+            (self.state / 'mode').mkdir()
+            r = self.apply(shell, 'reset', 'auto')
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('旧锁定回放已阻止', r.stderr)
+            self.assertTrue((self.state / 'reset_pending').exists())
+            self.reset()
+            for phase in ('early', 'late'):
+                self.assertNotEqual(self.replay(shell, phase).returncode, 0)
+            self.assertNotEqual(self.apply(shell, 'endc', 'on').returncode, 0)
+            self.assertEqual((self.tmp / 'commands').read_text(), '')
+            (self.state / 'mode').rmdir()
+            # Once storage is repaired, replay finishes cleanup without AT.
+            self.assertEqual(self.replay(shell, 'early').returncode, 0)
+            self.assertFalse((self.state / 'reset_pending').exists())
+            self.assertEqual((self.tmp / 'commands').read_text(), '')
+
+    def test_reset_job_done_only_after_verified_cleanup(self):
+        for shell in self.each_shell():
+            self.reset()
+            self.seed_locks()
+            job = json.loads(self.script(shell, self.lock, 'start', 'reset', 'auto', **self.extra).stdout)
+            self.assertEqual(job['ok'], 1, job)
+            self.assertEqual(job['kind'], 'reset')
+            for _ in range(150):
+                result = json.loads(self.script(shell, self.lock, 'status', job['id'], **self.extra).stdout)
+                if result.get('state') in ('done', 'error'):
+                    break
+                time.sleep(.02)
+            self.assertEqual(result['state'], 'done', result)
+            self.assertEqual(result['ok'], 1)
+            self.assertFalse((self.state / 'mode').exists())
+            commands = (self.tmp / 'commands').read_text()
+            self.script(shell, self.lock, 'status', job['id'], **self.extra)
+            self.assertEqual((self.tmp / 'commands').read_text(), commands)
 
     def test_verified_mode_preserves_slot1_and_primary(self):
         for shell in self.each_shell():
@@ -287,7 +466,8 @@ print('OK')
         for shell in self.each_shell():
             for kind, val in [('lte', '1,79'), ('nr', '6'), ('nr','78;reboot'), ('nr','1,,2'),
                               ('mode','bogus'), ('endc','2'), ('cell','nr:123,1008'),
-                              ('cell','lte:123,504'), ('cell','other:1,2'), ('auto_apply','yes')]:
+                              ('cell','lte:123,504'), ('cell','other:1,2'), ('auto_apply','yes'),
+                              ('reset',''), ('reset','all'), ('reset','auto;reboot')]:
                 self.reset()
                 r = self.apply(shell, kind, val)
                 self.assertNotEqual(r.returncode, 0, (kind,val))
