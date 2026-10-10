@@ -71,3 +71,23 @@ python tests/dashboard_sms_layout.py --browser PATH_TO_CHROME
 ucode 集成检查只能在一次性容器中运行，不能在路由器上执行；它会写容器的测试 UCI。
 布局检查使用隔离浏览器和模拟 RPC，不连接设备或互联网，不等同于完整 LuCI 实机验收。
 本批未接触实机、未构建 rootfs/Magisk 包、未推送远端；现有安装包仍为旧版本。
+
+后续实机落地记录（同日，按用户新要求补做）
+
+以后每批改动完成后部署实机、自检，再通知用户验收；不能将离线回归当作用户验收。
+50a7fcd 已热部署到原 SSH 主机密钥匹配的 F50：OpenWrt 25.12.5、Linux 7.2.8、TF 根目录。
+替换前核对了 8 个已有文件的 SHA256，均与该提交父版本一致，没有覆盖未知现场改动。
+13 个文件热更新；未覆盖整份 UCI 配置，只将主页刷新间隔 1.5 迁为 2。
+仅 reload rpcd 注册新方法，未重启网络、基带、USB、Wi-Fi 或整机。
+备份：/etc/unisoc-modem/backup/dashboard-50a7fcd.ddHfKb
+
+实机结果：rates/cells 已注册；rates 返回 sipa_eth0 的有效计数和 uptime；
+6 个前端 JS/CSS 资源 HTTP 200。隔离浏览器实际登录并加载页面，采到 6 次 rates、
+3 次 status；锁定页读到 5G SA / China Unicom 及实时 RSRP；设置页读回 2 秒。
+登录后的主页、锁定页无 JS 异常，WAN 保持 up，Wi-Fi 仍是原来的 5 GHz/80 MHz。
+短信页面只验证资源及之前的离线布局，本次不发送短信，也不打开现有会话改变未读状态。
+
+另记现存问题：未登录时 LuCI 初始化报 String.format is not a function，
+在未改动的 admin/status/overview 登录入口同样复现；登录后刷新不复现。
+未将该问题算作已修复，也未扩大本批范围去修改主题或 LuCI 核心。
+此时状态：已部署并完成上述自检，待用户验收；仍未重打包或推送。
