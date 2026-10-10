@@ -33,10 +33,25 @@ if [ "${1:-}" = call ] && [ "${2:-}" = rates ]; then
     exec "$DASH/dashboard-rates"
 fi
 # One pool everywhere: a platform SMS adapter may honor this environment value.
+INPUT=$(cat 2>/dev/null)
+case "${1:-}:${2:-}" in
+call:status|call:cells|call:signal|call:at|call:at_history|call:lock_get|call:lock_set|call:lock_status|call:act|call:sms_*|call:traffic_*)
+    requested_slot=$(printf '%s' "$INPUT" | jsonfilter -e '@.slot' 2>/dev/null)
+    if [ -n "$requested_slot" ]; then
+        . "$DASH/sim-scope.sh"
+        sim_scope "$requested_slot" || { printf '{"ok":0,"error":"SIM 卡槽不可用"}\n'; exit 1; }
+    fi
+    ;;
+esac
 # Keep the former MU300 path as an automatic upgrade fallback.
 SMS_POOL=$(uci -q get unisoc_modem.main.sms_pool 2>/dev/null)
 [ -d "${SMS_POOL:-/etc/unisoc-modem/sms}" ] || [ ! -d /etc/mu300/sms ] || SMS_POOL=/etc/mu300/sms
 export MU300_SMS_POOL=${MU300_SMS_POOL:-${SMS_POOL:-/etc/unisoc-modem/sms}}
+if [ "${MU300_SIM_SLOT:-0}" = 1 ]; then
+    export MU300_SMS_POOL=$MU300_SMS_POOL/sim1
+    export MU300_SMS_OP_LOCK=/tmp/mu300-sms-op-sim1.lock
+    export MU300_SMS_DIRECT_FLAG=/run/mu300-sms-direct-sim1
+fi
 SMS=${MU300_SMS_BIN:-$(uci -q get unisoc_modem.main.sms_command 2>/dev/null)}
 [ -n "$SMS" ] || SMS=$(command -v mu300-sms 2>/dev/null || true)
 AT=${MU300_AT:-/usr/libexec/unisoc-modem/at}
@@ -51,7 +66,6 @@ TTL_FAST=${MU300_DASH_TTL_FAST:-1} # serving tier: kick whenever older than 1 s 
 MU300_AT_LOCK_WAIT=12
 export MU300_AT_LOCK_WAIT
 
-INPUT=$(cat 2>/dev/null)
 inp() {  # inp JSONPATH [default] -> param value
     _v=$(printf '%s' "$INPUT" | jsonfilter -e "$1" 2>/dev/null)
     case $_v in ''|null) _v=${2-} ;; esac
@@ -82,7 +96,7 @@ m_status() {
     # a full round in flight also writes the fast cache, so it counts for both.
     # During a lock apply (SFUN restart) do not kick anything: the modem answers
     # garbage mid-restart and the collectors would only burn the AT channel.
-    if [ -d /run/unisoc-modem-lock-apply ]; then busy=1; fbusy=1; fi
+    if [ -d /run/unisoc-modem-lock-apply ] || [ -d /run/unisoc-data-sim-switch ]; then busy=1; fbusy=1; fi
     if collecting; then busy=1; fbusy=1; fi
     fast_busy && fbusy=1
     # A full round also refreshes sig.json. Prefer it when both tiers are stale;
@@ -111,7 +125,7 @@ m_signal() {
     # that window return garbage or wedge, and rpcd died with a userspace
     # segfault (sessions wiped -> LuCI login loop) on at least one live
     # read's output. Serve the last snapshot until the apply finishes.
-    if [ -d /run/unisoc-modem-lock-apply ]; then
+    if [ -d /run/unisoc-modem-lock-apply ] || [ -d /run/unisoc-data-sim-switch ]; then
         if [ -s "$SIGF" ]; then
             cat "$SIGF"
         else
@@ -139,6 +153,12 @@ m_act() {
     op=$(inp '@.op')
     arg=$(inp '@.arg')
     case "$op" in
+        radio|data|modem-reset)
+            if [ -d /run/unisoc-modem-lock-apply ] || [ -d /run/unisoc-data-sim-switch ]; then
+                printf '{"ok":0,"error":"另一项网络设置仍在执行，请稍后重试"}\n'; return
+            fi ;;
+    esac
+    case "$op" in
         radio)      # the SFUN dance can run half a minute: never inside the request
             setsid "$DASH/action" radio "$arg" >/dev/null 2>&1 &
             printf '{"ok":1,"started":1,"op":"radio %s"}\n' "$arg"
@@ -160,7 +180,14 @@ m_act() {
 
 m_at() {
     local cmd reply
+    if [ -d /run/unisoc-modem-lock-apply ] || [ -d /run/unisoc-data-sim-switch ]; then
+        printf '{"ok":0,"error":"另一项网络设置仍在执行，请稍后重试"}\n'; return
+    fi
     cmd=$(inp '@.cmd')
+    case "$(printf '%s' "$cmd" | tr 'a-z' 'A-Z')" in
+        *+SPACTCARD=*|*+SMMSWAP=*|*+SPSWDATA*)
+            printf '{"ok":0,"error":"请使用 SIM 管理切换卡槽，终端禁止改写卡槽寻址"}\n'; return ;;
+    esac
     case "$cmd" in
         AT+SPENGMD=0,1,0)
             printf '{"ok":0,"error":"denied: this command wedges the AT port until a reboot"}\n'
@@ -330,28 +357,34 @@ do_list() {
     cat <<EOF
 {
 	"sysinfo": { },
-	"status": { },
+	"sim_get": { },
+	"data_sim_get": { },
+	"data_sim_set": { "target": "String" },
+	"data_sim_status": { "id": "String" },
+	"status": { "slot": "String" },
 	"rates": { },
-	"cells": { },
-	"signal": { },
-	"act": { "op": "String", "arg": "String" },
-	"at": { "cmd": "String" },
-	"at_history": { },
-	"lock_get": { "fresh": "String" },
-	"lock_set": { "kind": "String", "val": "String" },
-	"lock_status": { "id": "String" },
-	"sms_list": { "page": "String" },
-	"sms_show": { "id": "String" },
-	"sms_send": { "num": "String", "text": "String" },
-	"sms_delete": { "id": "String", "sim": "String" },
-	"sms_sync": { },
+	"cells": { "slot": "String" },
+	"signal": { "slot": "String" },
+	"act": { "op": "String", "arg": "String", "slot": "String" },
+	"at": { "cmd": "String", "slot": "String" },
+	"at_history": { "slot": "String" },
+	"lock_get": { "fresh": "String", "slot": "String" },
+	"lock_set": { "kind": "String", "val": "String", "slot": "String" },
+	"lock_status": { "id": "String", "slot": "String" },
+	"sms_list": { "page": "String", "slot": "String" },
+	"sms_show": { "id": "String", "slot": "String" },
+	"sms_send": { "num": "String", "text": "String", "slot": "String" },
+	"sms_delete": { "id": "String", "sim": "String", "slot": "String" },
+	"sms_sync": { "slot": "String" },
 	"forward_get": { },
+	"cpu_get": { },
+	"cpu_apply": { "payload": "String" },
 	"forward_status": { },
 	"forward_set": { "payload": "String" },
 	"forward_test": { },
-	"traffic_get": { },
-	"traffic_set": { "payload": "String" },
-	"traffic_clear": { "confirm": false },
+	"traffic_get": { "slot": "String" },
+	"traffic_set": { "payload": "String", "slot": "String" },
+	"traffic_clear": { "confirm": false, "slot": "String" },
 	"usb_get": { },
 	"usb_set": { "kind": "String", "value": "String", "scope": "String", "auto": "String" },
 	"usb_net_list": { },
@@ -380,6 +413,14 @@ list)
 call)
     case ${2:-} in
         sysinfo)    run_m sysinfo    'm_sysinfo' ;;
+        sim_get)
+            slots=$(uci -q get unisoc_modem.main.sim_slots); [ "$slots" = 2 ] || slots=1
+            card=$(uci -q get unisoc_modem.main.data_sim); [ "$card" = 1 ] || card=0
+            printf '{"ok":1,"slots":%s,"saved_sim":%s}\n' "$slots" "$card"
+            ;;
+        data_sim_get) "$DASH/data-sim" get ;;
+        data_sim_set) "$DASH/data-sim" start "$(inp '@.target')" ;;
+        data_sim_status) "$DASH/data-sim" status "$(inp '@.id')" ;;
         status)     run_m status     'm_status' ;;
         cells)      m_status cells ;;
         # Avoid the forensic log's fork/tail/rewrite on every speed sample.
@@ -406,6 +447,8 @@ call)
         sms_delete) run_m sms_delete 'm_sms_delete' ;;
         sms_sync)   run_m sms_sync   'm_sms_sync' ;;
         forward_get) "$DASH/sms-forward" get ;;
+        cpu_get) "$DASH/cpu" get ;;
+        cpu_apply) inp '@.payload' | "$DASH/cpu" apply ;;
         forward_status) "$DASH/sms-forward" status ;;
         forward_set)
             payload=$(inp '@.payload')
@@ -417,18 +460,18 @@ call)
             printf '{"ok":1,"started":1}\n'
             ;;
         traffic_get)
-            ubus -t 3 call unisoc.traffic get 2>/dev/null || printf '{"error":"traffic_unavailable"}\n'
+            ubus -t 3 call unisoc.traffic get "{\"slot\":${MU300_SIM_SLOT:-0}}" 2>/dev/null || printf '{"error":"traffic_unavailable"}\n'
             ;;
         traffic_set)
             # Do not forward the browser session into the private service.
-            params=$(printf '%s' "$INPUT" | ucode -e 'import * as fs from "fs"; let i=json(fs.readfile("/dev/stdin")); print(sprintf("%J", {payload:i.payload}));' 2>/dev/null) || params='{}'
+            params=$(printf '%s' "$INPUT" | ucode -e 'import * as fs from "fs"; let i=json(fs.readfile("/dev/stdin")); print(sprintf("%J", {payload:i.payload,slot:int(i.slot || 0)}));' 2>/dev/null) || params='{}'
             ubus -t 5 call unisoc.traffic set "$params" 2>/dev/null || printf '{"ok":0,"error":"traffic_unavailable"}\n'
             ;;
         traffic_clear)
             # Forward only the validated argument, not LuCI's ubus_rpc_session:
             # the internal service is intentionally not exposed by the UI ACL.
             case $(inp '@.confirm') in true) confirm=true ;; *) confirm=false ;; esac
-            ubus -t 5 call unisoc.traffic clear "{\"confirm\":$confirm}" 2>/dev/null || printf '{"ok":0,"error":"traffic_unavailable"}\n'
+            ubus -t 5 call unisoc.traffic clear "{\"confirm\":$confirm,\"slot\":${MU300_SIM_SLOT:-0}}" 2>/dev/null || printf '{"ok":0,"error":"traffic_unavailable"}\n'
             ;;
         usb_get)    run_m usb_get    '"$DASH/device-usb" get' ;;
         usb_set)

@@ -51,7 +51,7 @@ function rpc(method, input) {
 }
 function start() {
     let r = run('MU300_TRAFFIC_DIR='+quote(base)+' MU300_TRAFFIC_RUN='+quote(ram)+
-        ' MU300_TRAFFIC_SYS='+quote(net)+' MU300_TRAFFIC_BUS='+quote(bus)+
+        ' MU300_TRAFFIC_SIM_SLOTS=1 MU300_TRAFFIC_SYS='+quote(net)+' MU300_TRAFFIC_BUS='+quote(bus)+
         ' ucode '+quote(lib+'/traffic')+' >'+quote(root+'/daemon.log')+' 2>&1 & echo $!');
     pid=int(trim(r.out)); check(pid>1,'test worker PID');
     for(let i=0;i<10;i++) {

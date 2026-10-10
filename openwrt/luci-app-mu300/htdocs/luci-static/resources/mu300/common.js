@@ -11,18 +11,59 @@
  * 质量色不用写死的色值，走 --success/--warning/--danger 与 color-mix，
  * 深浅两套模式都跟随主题。 */
 
+function selectedSlot() {
+    try { return sessionStorage.getItem('mu300-view-slot') === '1' ? '1' : '0'; } catch(e) { return '0'; }
+}
+function selectViewedSlot(slot) {
+    if (String(slot) !== '0' && String(slot) !== '1') return false;
+    try { sessionStorage.setItem('mu300-view-slot', String(slot)); return true; } catch(e) { return false; }
+}
+function scopedRpc(options) {
+    var count = (options.params || []).length;
+    options.params = (options.params || []).concat(['slot']);
+    var call = rpc.declare(options);
+    return function() {
+        var args = Array.prototype.slice.call(arguments, 0, count);
+        while (args.length < count) args.push('');
+        args.push(selectedSlot());
+        return call.apply(null, args);
+    };
+}
+var callSimGet = rpc.declare({ object: 'mu300dash', method: 'sim_get', expect: { '': {} } });
+function simSelector(root) {
+    callSimGet().then(function(info) {
+        if (!root.isConnected) return;
+        if (info.slots !== 2) {
+            if (selectedSlot() !== '0') { sessionStorage.removeItem('mu300-view-slot'); location.reload(); }
+            return;
+        }
+        var panel = document.createElement('details'); panel.className = 'mud-card mud-sim-selector';
+        panel.style.marginBottom = '14px';
+        var summary = document.createElement('summary');
+        summary.textContent = translate('正在查看') + ' SIM ' + (Number(selectedSlot()) + 1);
+        var label = document.createElement('label'), select = document.createElement('select');
+        label.textContent = translate('查看卡槽') + ' ';
+        ['0','1'].forEach(function(v) { var o=document.createElement('option'); o.value=v; o.textContent='SIM '+(Number(v)+1); select.appendChild(o); });
+        select.value = selectedSlot(); label.appendChild(select);
+        var body=document.createElement('div'); body.style.cssText='padding-top:12px;animation:mudfade-in .2s ease';
+        var note=document.createElement('p'); note.className='mud-note';
+        note.textContent=translate('仅切换查看与控制对象，不切换上网卡。');
+        body.append(label,note); panel.append(summary,body); root.prepend(panel);
+        select.onchange=function() { selectViewedSlot(select.value); location.reload(); };
+    }).catch(function() {});
+}
 var callRates = rpc.declare({ object: 'mu300dash', method: 'rates', nobatch: true, expect: { '': {} } });
-var callCells = rpc.declare({ object: 'mu300dash', method: 'cells', nobatch: true, expect: { '': {} } });
-var callStatus = rpc.declare({ object: 'mu300dash', method: 'status', nobatch: true, expect: { '': {} } });
-var callSignal = rpc.declare({ object: 'mu300dash', method: 'signal', nobatch: true, expect: { '': {} } });
+var callCells = scopedRpc({ object: 'mu300dash', method: 'cells', nobatch: true, expect: { '': {} } });
+var callStatus = scopedRpc({ object: 'mu300dash', method: 'status', nobatch: true, expect: { '': {} } });
+var callSignal = scopedRpc({ object: 'mu300dash', method: 'signal', nobatch: true, expect: { '': {} } });
 var callSysinfo = rpc.declare({ object: 'mu300dash', method: 'sysinfo', nobatch: true, expect: { '': {} } });
-var callAct    = rpc.declare({ object: 'mu300dash', method: 'act', params: [ 'op', 'arg' ], expect: { '': {} } });
-var callAt     = rpc.declare({ object: 'mu300dash', method: 'at', params: [ 'cmd' ], expect: { '': {} } });
-var callAtHist = rpc.declare({ object: 'mu300dash', method: 'at_history', expect: { '': {} } });
-var callLockGet = rpc.declare({ object: 'mu300dash', method: 'lock_get', nobatch: true, expect: { '': {} } });
-var callLockFresh = rpc.declare({ object: 'mu300dash', method: 'lock_get', nobatch: true, params: [ 'fresh' ], expect: { '': {} } });
-var callLockSet = rpc.declare({ object: 'mu300dash', method: 'lock_set', nobatch: true, params: [ 'kind', 'val' ], expect: { '': {} } });
-var callLockStatus = rpc.declare({ object: 'mu300dash', method: 'lock_status', nobatch: true, params: [ 'id' ], expect: { '': {} } });
+var callAct    = scopedRpc({ object: 'mu300dash', method: 'act', params: [ 'op', 'arg' ], expect: { '': {} } });
+var callAt     = scopedRpc({ object: 'mu300dash', method: 'at', params: [ 'cmd' ], expect: { '': {} } });
+var callAtHist = scopedRpc({ object: 'mu300dash', method: 'at_history', expect: { '': {} } });
+var callLockGet = scopedRpc({ object: 'mu300dash', method: 'lock_get', nobatch: true, expect: { '': {} } });
+var callLockFresh = scopedRpc({ object: 'mu300dash', method: 'lock_get', nobatch: true, params: [ 'fresh' ], expect: { '': {} } });
+var callLockSet = scopedRpc({ object: 'mu300dash', method: 'lock_set', nobatch: true, params: [ 'kind', 'val' ], expect: { '': {} } });
+var callLockStatus = scopedRpc({ object: 'mu300dash', method: 'lock_status', nobatch: true, params: [ 'id' ], expect: { '': {} } });
 function waitLockJob(started, active) {
 	return new Promise(function(resolve, reject) {
 		if (!started || !started.ok || !started.id) { reject(new Error(started && started.error || '网络设置提交失败')); return; }
@@ -47,18 +88,18 @@ function waitLockJob(started, active) {
 		check();
 	});
 }
-var callSmsList = rpc.declare({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
-var callSmsShow = rpc.declare({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
-var callSmsSend = rpc.declare({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
-var callSmsDel  = rpc.declare({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
-var callSmsSync = rpc.declare({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
+var callSmsList = scopedRpc({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
+var callSmsShow = scopedRpc({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
+var callSmsSend = scopedRpc({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
+var callSmsDel  = scopedRpc({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
+var callSmsSync = scopedRpc({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
 var callForwardGet = rpc.declare({ object: 'mu300dash', method: 'forward_get', expect: { '': {} } });
 var callForwardStatus = rpc.declare({ object: 'mu300dash', method: 'forward_status', expect: { '': {} } });
 var callForwardSet = rpc.declare({ object: 'mu300dash', method: 'forward_set', params: [ 'payload' ], expect: { '': {} } });
 var callForwardTest = rpc.declare({ object: 'mu300dash', method: 'forward_test', expect: { '': {} } });
-var callTrafficGet = rpc.declare({ object: 'mu300dash', method: 'traffic_get', expect: { '': {} } });
-var callTrafficSet = rpc.declare({ object: 'mu300dash', method: 'traffic_set', params: [ 'payload' ], expect: { '': {} } });
-var callTrafficClear = rpc.declare({ object: 'mu300dash', method: 'traffic_clear', nobatch: true, params: [ 'confirm' ], expect: { '': {} } });
+var callTrafficGet = scopedRpc({ object: 'mu300dash', method: 'traffic_get', expect: { '': {} } });
+var callTrafficSet = scopedRpc({ object: 'mu300dash', method: 'traffic_set', params: [ 'payload' ], expect: { '': {} } });
+var callTrafficClear = scopedRpc({ object: 'mu300dash', method: 'traffic_clear', nobatch: true, params: [ 'confirm' ], expect: { '': {} } });
 var callUsbGet = rpc.declare({ object: 'mu300dash', method: 'usb_get', expect: { '': {} } });
 var callUsbSet = rpc.declare({ object: 'mu300dash', method: 'usb_set', params: [ 'kind', 'value', 'scope', 'auto' ], expect: { '': {} } });
 var callUsbNetList = rpc.declare({ object: 'mu300dash', method: 'usb_net_list', expect: { '': {} } });
@@ -224,6 +265,63 @@ var DASH_I18N = {
 	'发送测试消息': ['Send test message', 'Test mesajı gönder'],
 	'刷新状态': ['Refresh status', 'Durumu yenile'],
 	'最近转发：': ['Last forwarding: ', 'Son yönlendirme: '],
+	'最近投递记录': ['Recent deliveries', 'Son teslimatlar'],
+	'CPU 设置': ['CPU settings', 'CPU ayarları'],
+	'SIM 卡管理': ['SIM management', 'SIM yönetimi'],
+	'切换上网卡': ['Switch data SIM', 'Veri SIM kartını değiştir'],
+	'默认上网卡': ['Default data SIM', 'Varsayılan veri SIM kartı'],
+	'当前上网卡': ['Active data SIM', 'Etkin veri SIM kartı'],
+	'欠费或无信号不影响选卡；数据连接失败不会自动切回。': ['A SIM can be selected without credit or signal. A data connection failure does not switch back automatically.', 'Bakiye veya sinyal olmadan SIM seçilebilir. Veri bağlantısı başarısız olursa otomatik geri geçiş yapılmaz.'],
+	'数据连接': ['Data connection', 'Veri bağlantısı'],
+	'最低频率': ['Minimum frequency', 'En düşük frekans'],
+	'最高频率': ['Maximum frequency', 'En yüksek frekans'],
+	'开机默认': ['Boot default', 'Açılış varsayılanı'],
+	'切换上网卡？': ['Switch data SIM?', 'Veri SIM kartı değiştirilsin mi?'],
+	'目标卡槽': ['Target SIM slot', 'Hedef SIM yuvası'],
+	'正在切换上网卡…': ['Switching data SIM…', 'Veri SIM kartı değiştiriliyor…'],
+	'上网卡切换完成': ['Data SIM switch completed', 'Veri SIM kartı değiştirildi'],
+	'切换会短暂中断蜂窝网络，成功后作为开机默认上网卡；不会切换 USB 或 Wi-Fi。': ['Switching briefly interrupts cellular service. On success the card becomes the boot default. USB and Wi-Fi are unchanged.', 'Geçiş hücresel hizmeti kısa süreli keser. Başarılı olursa kart açılış varsayılanı olur. USB ve Wi-Fi değişmez.'],
+	'当前配置不支持双卡切换': ['Dual SIM switching is not supported by this configuration', 'Bu yapılandırma çift SIM geçişini desteklemiyor'],
+	'双卡尚未共同初始化，请重启后检查状态': ['Both SIMs have not been initialized together; reboot and check status', 'İki SIM birlikte başlatılmadı; yeniden başlatıp durumu kontrol edin'],
+	'SIM 卡槽无效': ['Invalid SIM slot', 'Geçersiz SIM yuvası'],
+	'另一项模组操作正在执行': ['Another modem operation is running', 'Başka bir modem işlemi çalışıyor'],
+	'无法核验当前上网卡': ['Could not verify the current data SIM', 'Geçerli veri SIM kartı doğrulanamadı'],
+	'目标 SIM 尚未就绪': ['The target SIM is not ready', 'Hedef SIM hazır değil'],
+	'旧数据连接未停止，已取消切换': ['The old data connection did not stop; switch cancelled', 'Eski veri bağlantısı durmadı; geçiş iptal edildi'],
+	'切换失败，已恢复原上网卡': ['Switch failed; the original SIM was restored', 'Geçiş başarısız; önceki SIM geri yüklendi'],
+	'切换失败且恢复不完整，请检查 SIM 和信号': ['Switch failed and recovery is incomplete; check the SIM and signal', 'Geçiş başarısız ve kurtarma eksik; SIM kartı ve sinyali kontrol edin'],
+	'上网卡切换适配器': ['Data SIM switch adapter', 'Veri SIM geçiş bağdaştırıcısı'],
+	'分卡网卡映射': ['Per-SIM network device mapping', 'SIM başına ağ aygıtı eşlemesi'],
+	'两张 SIM 映射到同一网卡，已暂停第二卡统计以避免重复计费': ['Both SIMs map to the same device; SIM 2 metering is paused to avoid duplicate counting', 'İki SIM aynı aygıta eşlenmiş; çift sayımı önlemek için SIM 2 ölçümü duraklatıldı'],
+	'启用双卡后请重启设备，以建立独立的第二卡短信接收通道。': ['After enabling dual SIM, reboot to establish the second SIM’s independent SMS receive channel.', 'Çift SIM etkinleştirildikten sonra ikinci SIM için bağımsız SMS alma kanalını oluşturmak üzere yeniden başlatın.'],
+	'留空使用平台默认映射，不影响已有流量账本。': ['Leave empty for platform defaults; existing traffic ledgers are preserved.', 'Platform varsayılanları için boş bırakın; mevcut trafik kayıtları korunur.'],
+	'正在查看': ['Viewing', 'Görüntülenen'],
+	'查看卡槽': ['View SIM slot', 'SIM yuvasını görüntüle'],
+	'仅切换查看与控制对象，不切换上网卡。': ['Changes the SIM being viewed and controlled, not the mobile data SIM.', 'Görüntülenen ve kontrol edilen SIM değişir; mobil veri SIM kartı değişmez.'],
+	'SIM 卡槽不可用': ['SIM slot unavailable', 'SIM yuvası kullanılamıyor'],
+	'请使用 SIM 管理切换卡槽，终端禁止改写卡槽寻址': ['Use SIM management to switch cards; changing SIM addressing in the terminal is blocked', 'Kart değiştirmek için SIM yönetimini kullanın; terminalde SIM adresleme değişikliği engellendi'],
+	'SIM 卡槽数量': ['Number of SIM slots', 'SIM yuvası sayısı'],
+	'单卡': ['Single SIM', 'Tek SIM'],
+	'双卡': ['Dual SIM', 'Çift SIM'],
+	'仅在硬件与 AT 适配器支持独立双卡寻址时开启双卡；查看卡槽不会切换上网卡。': ['Enable dual SIM only when the hardware and AT adapter support independent SIM addressing. Viewing a slot does not switch mobile data.', 'Çift SIM yalnızca donanım ve AT bağdaştırıcısı bağımsız SIM adreslemeyi destekliyorsa etkinleştirilmelidir. Bir yuvayı görüntülemek mobil veriyi değiştirmez.'],
+	'调速器': ['Governor', 'Frekans yöneticisi'],
+	'最低频率（kHz）': ['Minimum frequency (kHz)', 'En düşük frekans (kHz)'],
+	'最高频率（kHz）': ['Maximum frequency (kHz)', 'En yüksek frekans (kHz)'],
+	'应用设置': ['Apply settings', 'Ayarları uygula'],
+	'仅调整驱动支持的调速器与频率范围，不修改电压或温控。': ['Only changes driver-supported governors and frequency limits, not voltage or thermal controls.', 'Yalnızca sürücünün desteklediği yöneticileri ve frekans sınırlarını değiştirir; voltaj veya sıcaklık denetimini değiştirmez.'],
+	'CPU 调频驱动尚未就绪': ['CPU frequency driver is not ready', 'CPU frekans sürücüsü hazır değil'],
+	'未勾选时仅本次运行生效，并取消之前保存的开机应用设置。': ['When unchecked, applies only until reboot and removes any previously saved boot settings.', 'İşaretlenmezse yalnızca yeniden başlatmaya kadar geçerlidir ve önceden kaydedilen açılış ayarlarını kaldırır.'],
+	'应用 CPU 设置？': ['Apply CPU settings?', 'CPU ayarları uygulansın mı?'],
+	'降低频率可能降低吞吐量；提高最低频率可能增加功耗和温度。': ['Lower frequencies may reduce throughput; raising the minimum may increase power use and temperature.', 'Düşük frekanslar aktarım hızını azaltabilir; alt sınırı yükseltmek güç tüketimini ve sıcaklığı artırabilir.'],
+	'正在应用 CPU 设置…': ['Applying CPU settings…', 'CPU ayarları uygulanıyor…'],
+	'CPU 设置已应用': ['CPU settings applied', 'CPU ayarları uygulandı'],
+	'CPU 设置失败且回滚不完整，请检查实际状态': ['CPU settings failed and rollback was incomplete; check actual state', 'CPU ayarları başarısız ve geri alma eksik; gerçek durumu kontrol edin'],
+	'CPU 配置无效': ['Invalid CPU settings', 'Geçersiz CPU ayarları'],
+	'CPU 设置正忙，请稍后重试': ['CPU settings are busy; try again later', 'CPU ayarları meşgul; daha sonra tekrar deneyin'],
+	'CPU 配置回读不一致': ['CPU settings did not match readback', 'CPU ayarları geri okumayla eşleşmedi'],
+	'无法保存 CPU 设置': ['Could not save CPU settings', 'CPU ayarları kaydedilemedi'],
+	'测试消息': ['Test message', 'Test mesajı'],
+	'仅保留本次开机最近 30 次投递结果，不记录号码、地址或短信内容。': ['Keeps the last 30 delivery results since boot; no numbers, addresses or message content are recorded.', 'Açılıştan bu yana son 30 teslimat sonucu tutulur; numara, adres veya mesaj içeriği kaydedilmez.'],
 	'最近电源通知：': ['Last power notice: ', 'Son güç bildirimi: '],
 	'暂无投递': ['No delivery yet', 'Henüz teslimat yok'],
 	'发送成功': ['Sent successfully', 'Başarıyla gönderildi'],
@@ -1204,8 +1302,10 @@ function notify(title, message, opts) {
 var smsWatch = null;
 function watchSms() {
 	if (smsWatch) return;
-	smsWatch = { seen: null };
+	smsWatch = { seen: [null,null], inflight: false };
 	window.setInterval(function() {
+		if(document.hidden || smsWatch.inflight)return;
+		var slot=Number(selectedSlot()); smsWatch.inflight=true;
 		Promise.resolve(callSmsList(1)).catch(function() { return {}; }).then(function(r) {
 			r = r || {};
 			var msgs = r.msgs || [], max = 0;
@@ -1214,16 +1314,16 @@ function watchSms() {
 				if (id > max) max = id;
 			});
 			if (!max) return;
-			if (smsWatch.seen == null || max < smsWatch.seen) { smsWatch.seen = max; return; }
-			if (max > smsWatch.seen) {
+			if (smsWatch.seen[slot] == null || max < smsWatch.seen[slot]) { smsWatch.seen[slot] = max; return; }
+			if (max > smsWatch.seen[slot]) {
 				msgs.forEach(function(m) {
 					var id = parseInt(m.id, 10) || 0;
-					if (id > smsWatch.seen && m.dir === 'mt')
-						notify('新短信 · ' + (m.peer || '未知号码'), m.preview || '', { type: 'success' });
+					if (id > smsWatch.seen[slot] && m.dir === 'mt')
+						notify('SIM '+(slot+1)+' · 新短信 · ' + (m.peer || '未知号码'), m.preview || '', { type: 'success' });
 				});
-				smsWatch.seen = max;
+				smsWatch.seen[slot] = max;
 			}
-		});
+		}).finally(function(){smsWatch.inflight=false;});
 	}, 5000);
 }
 
@@ -1289,6 +1389,7 @@ return baseclass.extend({
 	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	callForwardGet: callForwardGet, callForwardStatus: callForwardStatus,
+	callSimGet: callSimGet, simSelector: simSelector, selectedSlot: selectedSlot, selectViewedSlot: selectViewedSlot,
 	callForwardSet: callForwardSet, callForwardTest: callForwardTest,
 	callTrafficGet: callTrafficGet, callTrafficSet: callTrafficSet,
 	callTrafficClear: callTrafficClear,

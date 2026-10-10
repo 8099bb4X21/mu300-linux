@@ -1,0 +1,7 @@
+#!/bin/sh /etc/rc.common
+# No daemon/polling; restoring is opt-in and independent of modem startup.
+START=99
+start() {
+    [ -f /etc/unisoc-modem/cpu.json ] || return 0
+    /usr/libexec/unisoc-modem/cpu boot | logger -t unisoc-cpu
+}

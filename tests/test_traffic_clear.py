@@ -12,6 +12,7 @@ class TrafficClear(ShellTest):
         self.stub('uci', 'exit 1')
         self.stub('jsonfilter', '''
 input=$(cat)
+[ "$2" = '@.slot' ] && exit 0
 case "$input" in *'"confirm":true'*) printf 'true\\n' ;; *) printf 'false\\n' ;; esac
 ''')
         self.stub('ubus', '''
@@ -23,12 +24,12 @@ printf '{"ok":0,"error":"confirmation_required"}\\n'
         for shell in self.each_shell():
             methods = self.script(shell, RPC, 'list', stdin='')
             self.assertEqual(methods.returncode, 0, methods.stderr)
-            self.assertEqual(json.loads(methods.stdout)['traffic_clear'], {'confirm': False})
+            self.assertEqual(json.loads(methods.stdout)['traffic_clear'], {'confirm': False, 'slot': 'String'})
             for payload in ('{}', '{"confirm":false}', '{"confirm":true}',
                             '{"confirm":true,"ubus_rpc_session":"test-session"}'):
                 result = self.script(shell, RPC, 'call', 'traffic_clear', stdin=payload)
                 self.assertEqual(json.loads(result.stdout)['error'], 'confirmation_required')
-                expected = '{"confirm":true}' if '"confirm":true' in payload else '{"confirm":false}'
+                expected = '{"confirm":true,"slot":0}' if '"confirm":true' in payload else '{"confirm":false,"slot":0}'
                 self.assertEqual((self.tmp/'args').read_text().splitlines(),
                                  ['-t', '5', 'call', 'unisoc.traffic', 'clear', expected])
 

@@ -40,7 +40,7 @@ validate_apply() {
 # allow a fresh readback to prove it, but never accept an explicit modem ERROR.
 write_setting() {
     local reply
-    reply=$("$AT" -t "${2:-6}" "$1" 2>/dev/null) || true
+    reply=$(lock_at "$1" "${2:-6}") || true
     if printf '%s\n' "$reply" | tr -d '\r' | grep -Eq '^(ERROR|\+CME ERROR|\+CMS ERROR)(:|$)'; then
         fail_apply '模组拒绝了设置'; return 1
     fi
@@ -105,6 +105,7 @@ do_apply() {
     apply_lock || return 1
     trap 'rm -f "$APPLY_DIR/pid"; rmdir "$APPLY_DIR" 2>/dev/null' EXIT
     trap 'exit 1' INT TERM
+    [ ! -d /run/unisoc-data-sim-switch ] || { fail_apply '另一项网络设置仍在执行，请稍后重试'; return 1; }
     case "$kind" in
         mode)
             set -- $(mode_pair "$val"); m0=$1; gran=$2

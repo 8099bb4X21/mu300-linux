@@ -49,7 +49,7 @@ MODE=${1:-full}
 DIR=${MU300_DASH_DIR:-/tmp/unisoc-modem}
 CELL=$DIR/cell.json
 SIGF=$DIR/sig.json
-STATE_DIR=$(uci -q get unisoc_modem.main.state_dir 2>/dev/null)
+STATE_DIR=${MU300_STATE_DIR:-$(uci -q get unisoc_modem.main.state_dir 2>/dev/null)}
 IDENT_DIR=${MU300_DASH_IDENT_DIR:-${STATE_DIR%/lock-state.d}}
 [ -n "$IDENT_DIR" ] || IDENT_DIR=/etc/unisoc-modem
 IDENT=$IDENT_DIR/sim.json
@@ -66,6 +66,10 @@ mkdir -p "$DIR" "$IDENT_DIR" 2>/dev/null
 ATC=${MU300_DASH_AT_DIR:-}
 at() {
     local cmd=$1 timeout=${2:-5} d out seen=
+    if [ "${MU300_SIM_SLOT:-0}" = 1 ]; then
+        out=$(MU300_AT_LOCK_WAIT=0 "$AT" -t "$timeout" "$cmd" 2>/dev/null) || return 1
+        printf '%s\n' "$out" | tr -d '\r'; return 0
+    fi
     # The assigned regular channel is first. A silent channel fails in about
     # timeout+1 seconds; only then touch the two unpolled disaster channels.
     for d in "$ATC" /run/mu300-at6 /run/mu300-at7 /run/mu300-at; do
@@ -141,7 +145,9 @@ take_lock "$LOCK"
 POOL=${MU300_DASH_POOL_DIR:-/run/unisoc-modem-at-pool}
 mkdir -p "$POOL" 2>/dev/null
 SLOT=
-for n in 6 7; do
+channels='6 7'
+[ "${MU300_SIM_SLOT:-0}" != 1 ] || channels=4
+for n in $channels; do
     s=$POOL/nr$n
     if mkdir "$s" 2>/dev/null; then
         SLOT=$s; ATC=/run/mu300-at$n; break

@@ -28,7 +28,7 @@ class Refresh(unittest.TestCase):
     def test_rpc_packaging_and_safety_boundaries(self):
         rpc = (PKG / 'root/usr/libexec/rpcd/mu300dash').read_text()
         self.assertIn('"rates": { }', rpc)
-        self.assertIn('"cells": { }', rpc)
+        self.assertIn('"cells": { "slot": "String" }', rpc)
         self.assertIn('"$cage" -ge "$TTL"', rpc)
         self.assertIn('"$sage" -ge "$TTL_FAST"', rpc)
         rates = (LIB / 'dashboard-rates').read_text()

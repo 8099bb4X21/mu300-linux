@@ -42,7 +42,7 @@ reads={'AT+SPTESTMODE?':('SPTESTMODE','tm'), 'AT+SP5GRAN?':('SP5GRAN','gran'),
  'AT+SPLBAND=3':('SPLBAND','nr'), 'AT+CFUN?':('CFUN','cfun')}
 if cmd in reads:
  if s.get('silent'): sys.exit(1)
- label,key=reads[cmd]; value=s[key]
+ label,key=reads[cmd]; value=s.get('read_override',{}).get(key,s[key])
  if key=='endc' and value=='2': value=s.get('endc_off_reply','0')
  print('+'+label+': '+value); print('OK'); sys.exit(0)
 if cmd=='AT+SP5GCMDS="get nr support_band"':
@@ -55,6 +55,7 @@ if s.get('reject_restart') and cmd.startswith('AT+SFUN='): print('ERROR'); sys.e
 for prefix,key in [('AT+SPTESTMODE=','tm'),('AT+SP5GRAN=','gran'),('AT+SPENDC=','endc'),
  ('AT+SPLBAND=1,','lte'),('AT+SPLBAND=2,','nr')]:
  if cmd.startswith(prefix) and not s.get('ignore'): s[key]=cmd[len(prefix):]
+if cmd.startswith('AT+SPTESTMODE=') and s.get('corrupt_mode_fields'): s['tm']=s['tm'].split(',')[0]+',134,0'
 if cmd.startswith('AT+SPFORCEFRQ='):
  args=cmd.split('=')[1].split(','); key='cells'+args[0]
  if args[1]=='4': s[key]=[]
@@ -99,6 +100,18 @@ print('OK')
             self.assertEqual(json.loads((self.run / 'lock.json').read_text())['endc'], '0')
             self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
 
+    def test_slot1_mode_preserves_slot0_and_does_not_redial_slot0(self):
+        for shell in self.each_shell():
+            self.reset()
+            r = self.script(shell, self.lock, 'apply', 'mode', 'nsa',
+                            MU300_SIM_SLOT='1', **self.extra)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            commands = (self.tmp / 'commands').read_text()
+            self.assertIn('AT+SPTESTMODE=134,131,1\n', commands)
+            self.assertNotIn('ifup\n', commands)
+            cache = json.loads((self.run / 'lock.json').read_text())
+            self.assertEqual(cache['mode']['work'], '131')
+
     def test_endc_write_two_accepts_only_off_query_values(self):
         for shell in self.each_shell():
             for reply in ('0', '2'):
@@ -137,6 +150,102 @@ print('OK')
             self.assertIn('AT+SPENDC=2\n', commands)
             self.assertIn('AT+SPENDC?\n', commands)
             self.assertNotIn('SFUN', commands)
+
+    def replay(self, shell, phase):
+        (self.tmp / 'marker').unlink(missing_ok=True)
+        return self.script(shell, self.lock, 'replay', phase, **self.extra)
+
+    def test_late_replay_requires_readback_and_successful_activation(self):
+        (self.state / 'lte').write_text('1')
+        for shell in self.each_shell():
+            for failure in ('reject', 'ignore', 'silent', 'reject_restart', 'drift'):
+                self.reset(**{failure: True})
+                r = self.replay(shell, 'late')
+                self.assertNotEqual(r.returncode, 0, failure)
+                self.assertFalse((self.tmp / 'marker').exists(), failure)
+                if failure in ('reject', 'ignore', 'silent'):
+                    self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
+
+    def test_replay_preserves_mode_fields_and_refuses_missing_source(self):
+        (self.state / 'mode').write_text('nsa')
+        for shell in self.each_shell():
+            self.reset()
+            r = self.replay(shell, 'early')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('AT+SPTESTMODE=131,128,1\n', (self.tmp / 'commands').read_text())
+            self.reset(silent=True)
+            r = self.replay(shell, 'early')
+            self.assertNotEqual(r.returncode, 0)
+            commands = (self.tmp / 'commands').read_text()
+            self.assertNotIn('AT+SPTESTMODE=', commands)
+            self.assertNotIn('AT+SP5GRAN=', commands)
+
+    def test_early_success_suppresses_all_late_replay_traffic(self):
+        (self.state / 'lte').write_text('1')
+        for shell in self.each_shell():
+            self.reset()
+            self.assertEqual(self.replay(shell, 'early').returncode, 0)
+            before = (self.tmp / 'commands').read_text()
+            r = self.script(shell, self.lock, 'replay', 'late', **self.extra)
+            self.assertEqual(r.returncode, 0)
+            self.assertEqual((self.tmp / 'commands').read_text(), before)
+            self.assertNotIn('SFUN', before)
+
+    def test_replay_empty_unlock_and_final_cell_without_newline(self):
+        for shell in self.each_shell():
+            for value in ('', 'nr:627264,393'):
+                self.reset()
+                (self.state / 'cell').write_text(value)
+                r = self.replay(shell, 'early')
+                self.assertEqual(r.returncode, 0, r.stderr)
+                modem = json.loads(self.modem.read_text())
+                self.assertEqual(modem['cells12'], [])
+                self.assertEqual(modem['cells16'], ['627264,393'] if value else [])
+
+    def test_invalid_saved_replay_never_sends_partial_settings(self):
+        (self.state / 'mode').write_text('4g')
+        for shell in self.each_shell():
+            for kind, value in [('endc', 'bad'), ('nr', '6'), ('lte', '79'), ('cell', 'bad:1,2')]:
+                self.reset()
+                (self.state / kind).write_text(value)
+                r = self.replay(shell, 'early')
+                self.assertNotEqual(r.returncode, 0, (kind, value))
+                self.assertEqual((self.tmp / 'commands').read_text(), '')
+                (self.state / kind).unlink()
+
+    def test_replay_duplicate_bands_are_canonicalized(self):
+        (self.state / 'lte').write_text('3,1,3')
+        (self.state / 'nr').write_text('78,41,78')
+        for shell in self.each_shell():
+            self.reset()
+            r = self.replay(shell, 'early')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            modem = json.loads(self.modem.read_text())
+            self.assertEqual(modem['lte'], '0,0,0,5,0')
+            self.assertEqual(modem['nr'], '0,0,272,0')
+
+    def test_replay_rejects_corrupt_mode_fields_and_malformed_empty_readback(self):
+        for shell in self.each_shell():
+            (self.state / 'mode').write_text('nsa')
+            self.reset(corrupt_mode_fields=True)
+            self.assertNotEqual(self.replay(shell, 'early').returncode, 0)
+            self.assertFalse((self.tmp / 'marker').exists())
+            (self.state / 'mode').unlink()
+            for kind, raw in [('lte','ERROR'), ('lte','0,0'), ('nr','0,0'), ('nr','bad')]:
+                (self.state / kind).write_text('')
+                self.reset(read_override={kind:raw})
+                self.assertNotEqual(self.replay(shell, 'early').returncode, 0, (kind,raw))
+                self.assertFalse((self.tmp / 'marker').exists())
+                (self.state / kind).unlink()
+
+    def test_replay_silent_setter_requires_fresh_proof_but_error_always_fails(self):
+        (self.state / 'endc').write_text('on')
+        for shell in self.each_shell():
+            self.reset(omit_ok=True)
+            self.assertEqual(self.replay(shell, 'early').returncode, 0)
+            self.reset(reject=True) # readback was already on, but ERROR is not success
+            self.assertNotEqual(self.replay(shell, 'early').returncode, 0)
+            self.assertFalse((self.tmp / 'marker').exists())
 
     def test_rejected_ignored_and_silent_writes_do_not_save_or_restart(self):
         for shell in self.each_shell():

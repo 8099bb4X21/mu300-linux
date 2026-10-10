@@ -80,14 +80,19 @@ echo "==> OpenWrt root filesystem (generic)"
 MU300_INPUTS="$IN" MU300_LUCI_PLUGIN_SRC="$TOP/openwrt/luci-app-mu300" MU300_VERSION="$TAG" \
     sh "$TOP/openwrt/build-rootfs.sh" mu300-openwrt-release.tar.gz >/dev/null
 mv "$TOP/openwrt/mu300-openwrt-release.tar.gz" "$D/mu300-openwrt-rootfs.tar.gz"
-for f in ./usr/share/luci/menu.d/luci-app-mu300.json ./www/luci-static/resources/view/mu300/home.js \
+for f in ./opt/mu300/bin/mu300-at ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/mu300-data-sim ./opt/mu300/bin/mu300-dual-radio ./usr/share/luci/menu.d/luci-app-mu300.json ./www/luci-static/resources/view/mu300/home.js \
+    ./opt/mu300/bin/mu300-smsd ./opt/mu300/bin/mu300-sms ./etc/init.d/mu300-smsd \
     ./www/luci-static/resources/mu300/refresh.js ./www/luci-static/resources/view/mu300/sms.css \
     ./usr/libexec/unisoc-modem/dashboard-rates ./usr/libexec/unisoc-modem/operator.uc \
     ./usr/libexec/unisoc-modem/refresh-config \
+    ./usr/libexec/unisoc-modem/lock ./usr/libexec/unisoc-modem/boot-replay ./usr/libexec/unisoc-modem/sim-scope.sh \
     ./usr/libexec/unisoc-modem/lock-apply.sh ./usr/libexec/unisoc-modem/lock-jobs.sh \
     ./usr/libexec/unisoc-modem/traffic ./usr/libexec/unisoc-modem/traffic-core.uc \
     ./usr/libexec/unisoc-modem/hotspot ./usr/libexec/unisoc-modem/hotspot.uc \
     ./www/luci-static/resources/view/mu300/traffic.js ./etc/init.d/unisoc-traffic \
+    ./www/luci-static/resources/view/mu300/cpu.js ./etc/init.d/unisoc-cpu \
+    ./usr/libexec/unisoc-modem/cpu ./usr/libexec/unisoc-modem/cpu.uc \
+    ./usr/libexec/unisoc-modem/data-sim ./www/luci-static/resources/view/mu300/sim.js \
     ./www/luci-static/resources/view/mu300/device.js ./usr/libexec/unisoc-modem/device-usb \
     ./etc/hotplug.d/net/90-unisoc-usb-host ./etc/hotplug.d/iface/90-unisoc-usb-host \
     ./etc/init.d/unisoc-modem-ui ./usr/lib/lua/luci/i18n/mu300.en.lmo ./usr/lib/lua/luci/i18n/mu300.tr.lmo; do

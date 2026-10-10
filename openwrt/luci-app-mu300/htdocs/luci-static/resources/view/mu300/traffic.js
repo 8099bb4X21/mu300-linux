@@ -74,6 +74,7 @@ return view.extend({
 		M.localize(root); this.root = root; this.data = data || {};
 		this.fill(this.data.config || {}); this.paint(); this.wire();
 		var self = this; this._poll = function() { return self.refresh(); }; poll.add(this._poll, 10);
+		M.simSelector(root);
 		return root;
 	},
 	unload: function() {
@@ -109,6 +110,7 @@ return view.extend({
 			if (!s.available) warnings.push('统计网卡暂不可用');
 			if (!s.clock_ok) warnings.push('系统时间尚未同步');
 			if (s.storage_error) warnings.push('统计数据保存失败');
+			if (s.mapping_error) warnings.push('两张 SIM 映射到同一网卡，已暂停第二卡统计以避免重复计费');
 			if (s.over_limit) warnings.push('已达到套餐额度');
 			if (s.daily_over_limit) warnings.push('已达到每日参考额度');
 		}

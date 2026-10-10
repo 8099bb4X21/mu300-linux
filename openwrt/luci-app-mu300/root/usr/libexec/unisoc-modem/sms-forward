@@ -12,6 +12,7 @@ POOL=${POOL:-/etc/unisoc-modem/sms}
 CONFIG=$BASE/config.json
 STATE=$BASE/state
 RESULT=${MU300_FORWARD_RESULT:-/run/unisoc-modem-forward-result}
+HISTORY=${MU300_FORWARD_HISTORY:-$RESULT.history}
 SMS=${MU300_SMS_BIN:-$(uci -q get unisoc_modem.main.sms_command 2>/dev/null)}
 [ -n "$SMS" ] || SMS=$(command -v mu300-sms 2>/dev/null || true)
 case "$SMS" in */*) ;; *) SMS=$(command -v "$SMS" 2>/dev/null || true) ;; esac
@@ -172,6 +173,37 @@ save_config() {
     mv -f "$CONFIG.tmp.$$" "$CONFIG"
 }
 write_result() { printf '%s|%s\n' "$1" "$2" > "$RESULT.tmp.$$" && mv -f "$RESULT.tmp.$$" "$RESULT"; }
+record_delivery() { # kind only; never store destination, source or message content
+    case "$1" in sms|power|test) ;; *) return 1 ;; esac
+    case "$method" in webhook|dingtalk|smtp|sms) ;; *) return 1 ;; esac
+    case "$DELIVER_RESULT" in sent|disabled|self_forward_blocked|message_too_long|storage_failed|source_unavailable|power_unavailable|invalid_config|invalid_forward_config|invalid_destination|delivery_failed|smtp_auth_failed) ;; *) return 1 ;; esac
+    # Writers already hold state.lock. Keep 30 small records in RAM, newest first.
+    {
+        printf '%s|%s|%s|%s\n' "$(date +%s)" "$1" "$method" "$DELIVER_RESULT"
+        [ ! -r "$HISTORY" ] || head -n 29 "$HISTORY"
+    } > "$HISTORY.tmp.$$" && mv -f "$HISTORY.tmp.$$" "$HISTORY"
+}
+add_history() {
+    json_add_array history
+    if [ -r "$HISTORY" ]; then
+        _history_n=0
+        while IFS='|' read -r _when _kind _method _result _extra; do
+            _history_n=$((_history_n + 1)); [ "$_history_n" -le 30 ] || break
+            number "$_when" && [ ${#_when} -le 11 ] || continue
+            case "$_kind" in sms|power|test) ;; *) continue ;; esac
+            case "$_method" in webhook|dingtalk|smtp|sms) ;; *) continue ;; esac
+            case "$_result" in sent|disabled|self_forward_blocked|message_too_long|storage_failed|source_unavailable|power_unavailable|invalid_config|invalid_forward_config|invalid_destination|delivery_failed|smtp_auth_failed) ;; *) continue ;; esac
+            [ -z "$_extra" ] || continue
+            json_add_object ''
+            json_add_int time "$_when"
+            json_add_string kind "$_kind"
+            json_add_string method "$_method"
+            json_add_string result "$_result"
+            json_close_object
+        done < "$HISTORY"
+    fi
+    json_close_array
+}
 read_result() {
     last_result=idle power_last_result=idle
     [ -r "$RESULT" ] && IFS='|' read -r last_result power_last_result < "$RESULT" || :
@@ -194,6 +226,7 @@ add_status() {
     json_add_boolean power_forward_enabled "$power_forward_enabled"
     json_add_string last_result "$last_result"
     json_add_string power_last_result "$power_last_result"
+    add_history
     json_close_object
 }
 get_view() {
@@ -324,6 +357,9 @@ set_config() {
         number "$_max" || { reply_error sms_list_unavailable; return; }
         last_id=$_max
         since=$(date +%s)
+        # A channel/enable change establishes a separate barrier for SIM 2,
+        # before the new configuration becomes visible to the single worker.
+        reset_second_barrier || { reply_error forward_storage_failed; return; }
     fi
     if [ "$power_forward_enabled" = 1 ] && [ "$power_ok" = 1 ]; then
         power_percent=$current_percent; power_status=$current_status
@@ -619,10 +655,39 @@ process_sms() {
         sms_is_new "$_source" "$_scts" "$_received" || continue
         blocked "$_from" "$_body" && continue
         deliver sms "$_from" "$_body" "$_scts" || :
+        record_delivery sms || :
         write_result "$DELIVER_RESULT" "$power_last_result" || :
     done
     [ "$_processed" -gt 0 ] || [ "$last_id" = "$_start_id" ] || save_state
 }
+reset_second_barrier() (
+    [ "$(uci -q get unisoc_modem.main.sim_slots 2>/dev/null)" = 2 ] || exit 0
+    STATE=$BASE/state.sim1
+    POOL=$POOL/sim1
+    last_id=$(cat "$POOL/next_id" 2>/dev/null)
+    # An uninitialized inbox is not an existing history. The first initialized
+    # pass below establishes its baseline before permitting any delivery.
+    if ! number "$last_id"; then rm -f "$STATE"; exit 0; fi
+    since=$(date +%s)
+    save_state
+)
+process_second_sim() (
+    [ "$enabled" = 1 ] || exit 0
+    [ "$(uci -q get unisoc_modem.main.sim_slots 2>/dev/null)" = 2 ] || exit 0
+    STATE=$BASE/state.sim1
+    POOL=$POOL/sim1
+    export MU300_SMS_POOL=$POOL MU300_SIM_SLOT=1 MU300_AT_DIR=/run/mu300-at4
+    export MU300_SMS_OP_LOCK=/tmp/mu300-sms-op-sim1.lock MU300_SMS_DIRECT_FLAG=/run/mu300-sms-direct-sim1
+    if [ ! -s "$STATE" ]; then
+        last_id=$(cat "$POOL/next_id" 2>/dev/null)
+        number "$last_id" || exit 0
+        since=$(date +%s)
+        save_state || exit 1
+        exit 0
+    fi
+    load_state; read_result
+    process_sms
+)
 process_power() {
     power_read
     [ "$power_ok" = 1 ] || return 0
@@ -650,6 +715,7 @@ process_power() {
     [ "$_old_status" != "$current_status" ] || [ -n "$_point" ] || return 0
     _detail=$(power_message "$current_status" "$current_percent" "$_point" "$_old_status")
     deliver power PowerMonitor "$_detail" || :
+    record_delivery power || :
     write_result "$last_result" "$DELIVER_RESULT" || :
 }
 test_send() {
@@ -659,6 +725,7 @@ test_send() {
     load_config || exit 1
     load_state; read_result
     deliver test NMS '' || :
+    record_delivery test || :
     write_result "$DELIVER_RESULT" "$power_last_result" || :
 }
 run_daemon() {
@@ -687,6 +754,7 @@ run_daemon() {
             load_state; read_result
             process_sms || :
             process_power || :
+            process_second_sim || :
         fi
         flock -u 8
         sleep "${MU300_FORWARD_POLL:-5}"

@@ -26,6 +26,17 @@ SMS=${MU300_SMS_BIN:-$(command -v mu300-sms 2>/dev/null || echo /opt/mu300/bin/m
 DIRECT_FLAG=${MU300_SMS_DIRECT_FLAG:-/run/mu300-sms-direct}
 SPOOL=$POOL/incoming
 
+# A channel is not a permanent SIM address. Select and execute atomically,
+# including CNMI setup and CNMA acknowledgements (not only archive/send).
+sms_at() {
+    local cmd=$2
+    case ${MU300_SIM_SLOT:-} in
+        0|1) cmd="AT+SPACTCARD=$MU300_SIM_SLOT;${cmd#AT}" ;;
+        '') ;; *) return 1 ;;
+    esac
+    mu300-at -t "$1" "$cmd"
+}
+
 # one daemon, the house pattern: a second instance (procd respawning, a service started twice)
 # waits for the lock only as long as the holder is alive, then takes over
 LOCK=${MU300_SMS_LOCK:-/run/mu300-smsd.lock}
@@ -52,12 +63,12 @@ done
 # the SIM needs its time after a boot (mobile-data waits 15 s for it); poll for READY, but a
 # modem that never answers still gets its periodic sync attempts in the main loop below
 n=0
-until mu300-at -t 4 'AT+CPIN?' 2>/dev/null | grep -q READY; do
+until sms_at 4 'AT+CPIN?' 2>/dev/null | grep -q READY; do
     n=$((n + 1))
     [ "$n" -gt 60 ] && { echo "mu300-smsd: SIM never became ready, syncing anyway" >&2; break; }
     sleep 10
 done
-at_ok() { mu300-at -t 5 "$1" 2>/dev/null | grep -q '^OK'; }
+at_ok() { sms_at 5 "$1" 2>/dev/null | grep -qx OK; }
 rm -f "$DIRECT_FLAG"
 # Import anything already on SIM before enabling direct delivery. If direct
 # routing is rejected, the old +CMTI/periodic-sync path remains functional.
@@ -85,7 +96,7 @@ process_spool() {
             echo "mu300-smsd: could not import $f" >&2
             return 1
         fi
-        reply=$(mu300-at -t 5 'AT+CNMA=1' 2>/dev/null || true)
+        reply=$(sms_at 5 'AT+CNMA=1' 2>/dev/null || true)
         if ! printf '%s\n' "$reply" | grep -q '^OK'; then
             echo "mu300-smsd: direct SMS confirmation failed" >&2
             return 1

@@ -106,6 +106,22 @@ esac''')
             self.assertFalse((self.tmp / 'at-probed').exists())
             self.assertFalse((self.tmp / 'late-called').exists())
 
+    def test_empty_saved_unlock_still_runs_generic_fallback(self):
+        state = self.tmp / 'state'; state.mkdir()
+        self.stub('uci', f'case "$3" in unisoc_modem.main.state_dir) echo "{state}";; esac')
+        self.stub('fake-at', 'echo OK')
+        self.stub('fake-lock', 'echo "$*" > "$STUBLOG/late-called"')
+        for shell in self.each_shell():
+            for kind in ('lte', 'nr', 'cell'):
+                (state / kind).touch()
+                (self.tmp / 'late-called').unlink(missing_ok=True)
+                result = self.script(shell, REPLAY, UNISOC_AT_BIN=self.stubs / 'fake-at',
+                    UNISOC_LOCK_BIN=self.stubs / 'fake-lock', UNISOC_REPLAY_MARKER=self.tmp / 'marker',
+                    UNISOC_EARLY_PENDING=self.tmp / 'pending')
+                self.assertEqual(result.returncode, 0)
+                self.assertTrue((self.tmp / 'late-called').exists(), kind)
+                (state / kind).unlink()
+
     def test_early_replay_restores_every_saved_lock_without_sfun(self):
         state = self.tmp / 'state'
         state.mkdir()

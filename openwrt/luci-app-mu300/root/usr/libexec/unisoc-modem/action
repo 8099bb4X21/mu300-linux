@@ -22,23 +22,26 @@ export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/libexec/unisoc-mod
 AT=${MU300_AT:-/usr/libexec/unisoc-modem/at}
 DATA_IFACE=$(uci -q get unisoc_modem.main.data_interface 2>/dev/null)
 DATA_IFACE=${DATA_IFACE:-wan}
+ACTIVE_SIM=$(uci -q get unisoc_modem.main.data_sim 2>/dev/null); ACTIVE_SIM=${ACTIVE_SIM:-0}
+selected_data_down() { [ "${MU300_SIM_SLOT:-0}" != "$ACTIVE_SIM" ] || ifdown "$DATA_IFACE"; }
+selected_data_up() { [ "${MU300_SIM_SLOT:-0}" != "$ACTIVE_SIM" ] || ifup "$DATA_IFACE"; }
 ok()   { printf '{"ok":1,"op":"%s"}\n' "$1"; }
 fail() { printf '{"ok":0,"op":"%s","error":%s}\n' "$1" "$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n' | sed 's/.*/"&"/')"; }
 
 radio_on() {
     # data interface first: the mu300cell proto retries AT forever while the radio
     # is off, so bring wan down, raise the radio, then bring wan back
-    ifdown "$DATA_IFACE" 2>/dev/null
+    selected_data_down 2>/dev/null
     "$AT" -t 20 'AT+SFUN=4' >/dev/null 2>&1
-    "$AT" -t 4 'AT+CFUN?' 2>/dev/null | grep -q '+CFUN: 1' && { ifup "$DATA_IFACE"; return 0; }
+    "$AT" -t 4 'AT+CFUN?' 2>/dev/null | grep -q '+CFUN: 1' && { selected_data_up; return 0; }
     "$AT" -t 5 'AT+SFUN=2' >/dev/null 2>&1
     "$AT" -t 30 'AT+SFUN=4' >/dev/null 2>&1
     "$AT" -t 4 'AT+CFUN?' 2>/dev/null | grep -q '+CFUN: 1'
-    ifup "$DATA_IFACE"
+    selected_data_up
 }
 
 radio_off() {
-    ifdown "$DATA_IFACE" 2>/dev/null
+    selected_data_down 2>/dev/null
     "$AT" -t 6 'AT+CFUN=0' >/dev/null 2>&1
 }
 

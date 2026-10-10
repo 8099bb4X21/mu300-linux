@@ -92,6 +92,7 @@ return view.extend({
 </div>`;
 		M.localize(root);
 		this.wire(root);
+		M.simSelector(root);
 		return root;
 	},
 

@@ -56,6 +56,7 @@ return view.extend({
 		this.convs = {};          /* peer -> {msgs:[], unread:n} */
 		this.wire(root);
 		this.reload();
+		M.simSelector(root);
 		return root;
 	},
 

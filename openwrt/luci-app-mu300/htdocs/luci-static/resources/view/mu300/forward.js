@@ -57,6 +57,9 @@ return view.extend({
 .mud-fwd-pair{display:flex;flex-wrap:wrap;align-items:flex-end;gap:0 12px}
 .mud-fwd-pair>.mud-fwd-field{flex:1 1 14rem}
 .mud-fwd-pair>.mud-fwd-field:last-child{flex:1 1 10rem}
+.mud-fwd-history{max-height:20rem;overflow:auto;overscroll-behavior:contain;margin-top:12px}
+.mud-fwd-event{display:grid;grid-template-columns:minmax(8rem,1fr) minmax(6rem,1fr) minmax(0,2fr);gap:8px;padding:10px 0;border-bottom:1px solid var(--hairline,var(--border,#8883));font-size:.82rem;overflow-wrap:anywhere}
+@media(max-width:480px){.mud-fwd-event{grid-template-columns:1fr 1fr}.mud-fwd-event>:last-child{grid-column:1/-1}}
 @media(max-width:760px){.mud-fwd-grid{grid-template-columns:minmax(0,1fr)}.mud-fwd-pair{display:grid;grid-template-columns:minmax(0,1fr)}.mud-fwd-actions .mud-btn{flex:1}}
 </style>
 <div class="mud-fwd-grid">
@@ -112,6 +115,9 @@ return view.extend({
 <section class="mud-card" style="margin-top:14px">
  <div class="mud-fwd-row"><h3>测试与状态</h3></div>
  <div class="mud-note">设备独立执行，关闭页面仍生效；仅转发新短信，失败不自动重发。</div>
+ <h3 style="margin-top:16px">最近投递记录</h3>
+ <div class="mud-note">仅保留本次开机最近 30 次投递结果，不记录号码、地址或短信内容。</div>
+ <div class="mud-fwd-history" id="mud-fwd-history" tabindex="0"></div>
  <div class="mud-fwd-error" id="mud-fwd-error" hidden></div>
  <div class="mud-fwd-actions">
   <button class="mud-btn on" id="mud-fwd-save">保存设置</button>
@@ -133,7 +139,11 @@ return view.extend({
 		this.paintStatus();
 		this.paintMethod();
 		var self = this;
-		poll.add(function() { return self.refreshStatus(); }, 5);
+		this._refresh = function() {
+			if (document.hidden || !root.isConnected) return Promise.resolve();
+			return self.refreshStatus();
+		};
+		poll.add(this._refresh, 5);
 		return root;
 	},
 	q: function(id) { return this.root.querySelector('#mud-fwd-' + id); },
@@ -190,16 +200,30 @@ return view.extend({
 		this.q('state').classList.toggle('on', !!s.enabled);
 		this.q('last').textContent = M.translate('最近转发：') + result(s.last_result);
 		this.q('power-last').textContent = M.translate('最近电源通知：') + result(s.power_last_result);
+		var history = this.q('history');
+		history.replaceChildren();
+		(s.history || []).slice(0, 30).forEach(function(item) {
+			var row = document.createElement('div'); row.className = 'mud-fwd-event';
+			var kind = { sms: '短信', power: '电源通知', test: '测试消息' }[item.kind] || '短信';
+			[new Date(Number(item.time) * 1000).toLocaleString(), M.translate(kind) + ' · ' + M.translate(METHODS[item.method] || '未知'), result(item.result)].forEach(function(value) {
+				var el = document.createElement('span'); el.textContent = value; row.appendChild(el);
+			});
+			history.appendChild(row);
+		});
+		if (!history.childNodes.length) history.textContent = M.translate('暂无投递');
 		this.q('power_forward_enabled').disabled = !s.power_supported && !this.q('power_forward_enabled').checked;
 		this.q('power-note').textContent = M.translate(s.power_supported ?
 			'充电状态变化，或电量跨过 5%、20%、40%、60%、80%、100% 时通知。' : '设备暂未提供有效电池状态');
 	},
 	refreshStatus: function() {
 		var self = this;
-		return L.resolveDefault(M.callForwardStatus(), {}).then(function(r) {
-			if (r.status) { self.status = r.status; self.paintStatus(); }
-		});
+		if (this._inflight) return this._inflight;
+		this._inflight = L.resolveDefault(M.callForwardStatus(), {}).then(function(r) {
+			if (self.root.isConnected && r.status) { self.status = r.status; self.paintStatus(); }
+		}).finally(function() { self._inflight = null; });
+		return this._inflight;
 	},
+	unload: function() { poll.remove(this._refresh); },
 	wire: function() {
 		var self = this;
 		this.q('method').onchange = function() { self.paintMethod(); };

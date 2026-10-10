@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-mu300
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=6
+PKG_RELEASE:=9
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=MU300 Linux contributors
 PKGARCH:=all
@@ -25,6 +25,7 @@ endef
 
 define Package/luci-app-mu300/conffiles
 /etc/config/unisoc_modem
+/etc/unisoc-modem/cpu.json
 endef
 
 define Build/Compile
@@ -34,6 +35,7 @@ define Package/luci-app-mu300/install
 	$(INSTALL_DIR) $(1)/www
 	$(CP) ./htdocs/. $(1)/www/
 	$(CP) ./root/. $(1)/
+	chmod 0755 $(1)/etc/init.d/unisoc-cpu
 	chmod 0755 $(1)/etc/init.d/unisoc-modem-ui $(1)/etc/init.d/unisoc-sms-forward $(1)/etc/init.d/unisoc-traffic $(1)/etc/hotplug.d/net/90-unisoc-usb-host $(1)/etc/hotplug.d/iface/90-unisoc-usb-host $(1)/usr/libexec/rpcd/mu300dash $(1)/usr/libexec/unisoc-modem/*
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n
 	$(CP) ./lmo/. $(1)/usr/lib/lua/luci/i18n/
@@ -60,6 +62,7 @@ define Package/luci-app-mu300/postinst
 	/etc/init.d/unisoc-sms-forward start 2>/dev/null || true
 	/etc/init.d/unisoc-traffic enable 2>/dev/null || true
 	/etc/init.d/unisoc-traffic start 2>/dev/null || true
+	/etc/init.d/unisoc-cpu enable 2>/dev/null || true
 }
 exit 0
 endef
@@ -74,6 +77,7 @@ define Package/luci-app-mu300/postrm
 		/etc/init.d/unisoc-sms-forward disable 2>/dev/null || true
 		/etc/init.d/unisoc-traffic stop 2>/dev/null || true
 		/etc/init.d/unisoc-traffic disable 2>/dev/null || true
+		/etc/init.d/unisoc-cpu disable 2>/dev/null || true
 		rm -f /etc/unisoc-modem/usb-boot.conf
 	fi
 	rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null

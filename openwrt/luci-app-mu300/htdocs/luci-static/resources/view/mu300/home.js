@@ -64,6 +64,7 @@ return view.extend({
 		root.innerHTML = this.html();
 		M.localize(root);
 		this.wire(root);
+		M.simSelector(root);
 		var self = this;
 		var intervalMs = DEFAULT_POLL_S * 1000;
 		L.resolveDefault(uci.load('unisoc_modem')).then(function() {

@@ -29,11 +29,26 @@ proto_mu300cell_init_config() {
 
 proto_mu300cell_setup() {
 	local config="$1"
-	local apn pdptype peerdns out ifname ip prefix dns1 dns2 iid zone
+	local apn pdptype peerdns out ifname ip prefix dns1 dns2 iid zone slot rc
 	json_get_vars apn pdptype peerdns
+	. /opt/mu300/bin/mu300-sim-env
+	mu300_sim_env || { proto_notify_error "$config" INVALID_SIM; return 1; }
+	slot=$MU300_SIM_SLOT
+	# Teardown must address the old bearer even if a switch has already saved
+	# the next SIM. Keep this runtime ownership separate from persistent intent.
+	printf '%s\n%s\n' "$slot" "$MU300_SIM_DEVICE" > "/run/mu300cell-$config.sim"
 
 	out=$(MU300_NETIFD=1 MU300_PDP_TYPE="${pdptype:-IP}" /opt/mu300/bin/mobile-data up $apn 2>/tmp/mu300cell.err)
-	if [ $? = 3 ]; then
+	rc=$?
+	if [ "$rc" = 4 ]; then
+		logger -t mu300cell "$(cat /tmp/mu300cell.err)"
+		proto_notify_error "$config" DUAL_RADIO_REBOOT_REQUIRED
+		# Repeating SFUN against a mixed boot state cannot fix it. Keep LAN
+		# available and stop the retry loop until an explicit restart/reboot.
+		proto_block_restart "$config"
+		return 1
+	fi
+	if [ "$rc" = 3 ]; then
 		logger -t mu300cell "$(cat /tmp/mu300cell.err)"
 		proto_notify_error "$config" NO_MODEM
 		proto_block_restart "$config"
@@ -100,7 +115,7 @@ proto_mu300cell_setup() {
 	# netlink changes and CGEV-triggered IPv4/DNS changes without holding setup.
 	[ "${pdptype:-IP}" != IP ] && proto_run_command "$config" \
 		/lib/netifd/proto/mu300cell-v6.sh "$config" "$ifname" "$ip" \
-		"${prefix:-32}" "$dns1" "$dns2" "${peerdns:-1}"
+		"${prefix:-32}" "$dns1" "$dns2" "${peerdns:-1}" "" "$slot"
 	[ "${pdptype:-IP}" = IP ] && [ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
 		echo 1 > "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6"
 	logger -t mu300cell "connected: $ip/${prefix:-32} on $ifname"
@@ -114,18 +129,24 @@ proto_mu300cell_renew() {
 }
 
 proto_mu300cell_teardown() {
-	local config="$1"
+	local config="$1" slot ifname
 	proto_kill_command "$config"
-	/opt/mu300/bin/mobile-data down >/dev/null 2>&1
+	slot=$(sed -n '1p' "/run/mu300cell-$config.sim" 2>/dev/null)
+	ifname=$(sed -n '2p' "/run/mu300cell-$config.sim" 2>/dev/null)
+	. /opt/mu300/bin/mu300-sim-env
+	mu300_sim_env "$slot" || return 1
+	[ -n "$ifname" ] || ifname=$MU300_SIM_DEVICE
+	case "$ifname" in *[!a-zA-Z0-9_.:-]*) return 1 ;; esac
+	MU300_SIM_SLOT=$MU300_SIM_SLOT /opt/mu300/bin/mobile-data down >/dev/null 2>&1
 	# External state is not removed by netifd on ifdown, so clean the bearer
 	# ourselves - both families. v6 must go too: this carrier's RAs carry
 	# INFINITE lifetimes, so an unflushed SLAAC address (and the default route
 	# an earlier report installed) would survive every redial and stack up.
-	# sipa_eth0 is the one bearer this hardware has (mobile-data assumes it too).
-	ip -4 addr flush dev sipa_eth0 scope global 2>/dev/null
-	ip -4 route del default dev sipa_eth0 2>/dev/null
-	ip -6 addr flush dev sipa_eth0 scope global 2>/dev/null
-	ip -6 route flush dev sipa_eth0 2>/dev/null
+	ip -4 addr flush dev "$ifname" scope global 2>/dev/null
+	ip -4 route del default dev "$ifname" 2>/dev/null
+	ip -6 addr flush dev "$ifname" scope global 2>/dev/null
+	ip -6 route flush dev "$ifname" 2>/dev/null
+	rm -f "/run/mu300cell-$config.sim"
 }
 
 [ -n "$INCLUDE_ONLY" ] || add_protocol mu300cell

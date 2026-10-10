@@ -35,6 +35,9 @@ dns1=$5
 dns2=$6
 peerdns=$7
 urclog=${MU300_URC_LOG:-/run/mu300-at/urc/stty_nr0.log}
+sim_slot=${9:-${MU300_SIM_SLOT:-0}}
+case "$sim_slot" in 0|1) ;; *) exit 1 ;; esac
+[ "$sim_slot" != 1 ] || urclog=${MU300_URC_LOG:-/run/mu300-at4/urc/stty_nr3.log}
 logtag=mu300cell-renew
 
 mask2prefix() {
@@ -124,9 +127,11 @@ report() {
 
 read_bearer() {
 	local d out line addrmask mask new_ip4 new_prefix new_dns1 new_dns2
-	for d in /run/mu300-at6 /run/mu300-at7 /run/mu300-at; do
+	local channels='/run/mu300-at6 /run/mu300-at7 /run/mu300-at'
+	[ "$sim_slot" != 1 ] || channels=/run/mu300-at4
+	for d in $channels; do
 		[ -p "$d/cmd" ] || continue
-		out=$(MU300_AT_LOCK_WAIT=0 MU300_AT_DIR="$d" mu300-at -t 3 'AT+CGCONTRDP=1' 2>/dev/null) || continue
+		out=$(MU300_AT_LOCK_WAIT=0 MU300_AT_DIR="$d" mu300-at -t 3 "AT+SPACTCARD=$sim_slot;+CGCONTRDP=1" 2>/dev/null) || continue
 		line=$(printf '%s\n' "$out" | awk -F, '/^\+CGCONTRDP:/ {
 			a=$4; gsub(/"/, "", a); n=split(a, x, ".")
 			if (n==8 && x[1]+0>0) { print; exit }
