@@ -17,9 +17,9 @@ chmod 0755 /opt/mu300/bin/mu300-cmt-spool /opt/mu300/bin/mu300-sms /opt/mu300/bi
 # --- 块2：部署验证过的两脚本（P1；上游 mu300-sms 无分组显示/暂存凑齐） ---
 # 上游修好标志：上游 mu300-sms 自带分组显示 + pending/sweep。届时删本块及 custom/sms/。
 # 载荷一致性（线上验证版 md5，见 mu300-sms-fix/README.md 文件清单）：
-md5sum /in/custom/sms/mu300-sms | grep -q '^0cfc1d04f4486d7678e8e90a34932772 ' \
+md5sum /in/custom/sms/mu300-sms | grep -q '^304efa5bb060acd1bffb8a3c4c68d7dc ' \
     || { echo "sms-hotfix: payload mu300-sms mismatch" >&2; exit 1; }
-md5sum /in/custom/sms/mu300-smsd | grep -q '^0015fa3a826aba723c80be16cc11589e ' \
+md5sum /in/custom/sms/mu300-smsd | grep -q '^6783fd2a13b177c91323a42782fa8fa2 ' \
     || { echo "sms-hotfix: payload mu300-smsd mismatch" >&2; exit 1; }
 cp /in/custom/sms/mu300-sms /opt/mu300/bin/mu300-sms
 cp /in/custom/sms/mu300-smsd /opt/mu300/bin/mu300-smsd
