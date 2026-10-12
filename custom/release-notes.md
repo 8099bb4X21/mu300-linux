@@ -1,4 +1,4 @@
-和上游 Kano 的区别：
+和上游 Kano 的区别（上游基线：kanoqwq/mu300-linux clean-tf-7.2 @ 23361ce，2026-10-11；custom/ 内 hotfix 均对应该基线验证）：
 
 - 不含任何 VPN 模块（上游自带约百兆的 VPN 引擎，本包已精简）
 - 内核内置 ksmbd 模块、预装 wsdd2，开箱即可用 SMB 共享文件
