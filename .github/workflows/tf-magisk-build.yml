@@ -140,6 +140,15 @@ jobs:
           ref: ${{ needs.resolve.outputs.head_sha }}
           fetch-depth: 1
 
+      # own: the block-mount SDK build (openwrt/build-rootfs.sh ->
+      # openwrt/build-block-mount.sh) forces --platform linux/amd64 because the
+      # OpenWrt SDK is x86_64-only, and these jobs run on ubuntu-24.04-arm: the
+      # amd64 /bin/sh needs QEMU/binfmt registered here or it dies with
+      # "exec /bin/sh: exec format error".
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: amd64
+
       - name: Fetch device inputs (private)
         env:
           INPUTS_SSH_KEY: ${{ secrets.INPUTS_SSH_KEY }}
