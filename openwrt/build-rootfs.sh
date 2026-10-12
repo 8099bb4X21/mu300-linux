@@ -134,14 +134,22 @@ docker run --rm --platform linux/arm64 \
   -v "$TOP/work/luci-i18n-aurora-config-tr-26.262.58276.362887a.apk":/in/aurora-config-tr.apk:ro \
   -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER /bin/sh -eu -c '
 mkdir -p /var/lock /var/run /tmp
-apk update >/dev/null
+apk_retry() {
+    apk_attempt=1
+    while ! apk "$@"; do
+        [ "$apk_attempt" -lt 3 ] || return 1
+        apk_attempt=$((apk_attempt + 1))
+        echo "Retrying apk download (attempt $apk_attempt/3)" >&2
+    done
+}
+apk_retry update >/dev/null
 # openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure;
 # i2c-tools, gpiod-tools: mu300-usb (the charger of the U30 Air) and mu300-nfc (its NFC tag)
-apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
+apk_retry add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
     i2c-tools gpiod-tools >/dev/null
-apk add --allow-untrusted /in/block-mount-mu300.apk >/dev/null
-apk add --allow-untrusted /in/luci-theme-aurora.apk >/dev/null
-apk add --allow-untrusted /in/luci-app-aurora-config.apk /in/aurora-config-zh-cn.apk /in/aurora-config-tr.apk >/dev/null
+apk_retry add --allow-untrusted /in/block-mount-mu300.apk >/dev/null
+apk_retry add --allow-untrusted /in/luci-theme-aurora.apk >/dev/null
+apk_retry add --allow-untrusted /in/luci-app-aurora-config.apk /in/aurora-config-zh-cn.apk /in/aurora-config-tr.apk >/dev/null
 # ujail drops CAP_PERFMON (38), which this 5.4 kernel does not know: jailed services (dnsmasq, ntpd) crash-loop
 apk del procd-ujail procd-seccomp >/dev/null 2>&1 || true
 # online firmware upgrades flash whole-disk armsr images: that would overwrite the eMMC, so remove them
@@ -183,7 +191,7 @@ grep -q "mediaurlbase .*/luci-static/aurora" $R/etc/config/luci || {
 # mu300cell reports sipa_eth0 as l3_device only. fw4 otherwise omits it from
 # its software flowtable, leaving cellular downlink on the slow forwarding path.
 # Fail the build if a changed fw4 version no longer matches this targeted patch.
-apk add patch >/dev/null
+apk_retry add patch >/dev/null
 patch --batch --fuzz=0 -d $R -p1 -i /in/fw4-sipa-offload.patch
 patch --batch --fuzz=0 -d $R -p1 -i /in/wifi-scripts-no-dfs.patch
 grep -q "device_no_dfs(config);" $R/usr/share/ucode/wifi/hostapd.uc || { echo "wifi-scripts DFS patch not applied" >&2; exit 1; }
