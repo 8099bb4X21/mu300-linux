@@ -122,8 +122,33 @@ jobs:
           path: vendor54-modules.tar.gz
           retention-days: 1
 
+  blockmount:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'yes'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          fetch-depth: 1
+
+      # own: the patched block-mount APK is built from the x86_64-only OpenWrt
+      # SDK, so build it once here on a native x86 runner. The arm build jobs
+      # download it and build-block-mount.sh's verified-cache check then skips
+      # the docker SDK build (emulating that under QEMU took ~85 min per leg).
+      - name: Build block-mount APK (native x86)
+        run: sh openwrt/build-block-mount.sh "$PWD/work/block-mount-mu300.apk"
+
+      - name: Upload block-mount APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: blockmount-apk
+          path: work/block-mount-mu300.apk*
+          if-no-files-found: error
+          retention-days: 1
+
   build:
-    needs: [resolve, vendor54]
+    needs: [resolve, vendor54, blockmount]
     if: needs.resolve.outputs.skip != 'yes'
     runs-on: ubuntu-24.04-arm
     strategy:
@@ -140,14 +165,14 @@ jobs:
           ref: ${{ needs.resolve.outputs.head_sha }}
           fetch-depth: 1
 
-      # own: the block-mount SDK build (openwrt/build-rootfs.sh ->
-      # openwrt/build-block-mount.sh) forces --platform linux/amd64 because the
-      # OpenWrt SDK is x86_64-only, and these jobs run on ubuntu-24.04-arm: the
-      # amd64 /bin/sh needs QEMU/binfmt registered here or it dies with
-      # "exec /bin/sh: exec format error".
-      - uses: docker/setup-qemu-action@v3
+      # own: take the block-mount APK from the native x86 job; build-rootfs.sh
+      # -> build-block-mount.sh finds the verified cache and skips docker, so
+      # no amd64 emulation is needed on this arm runner.
+      - name: Fetch block-mount APK (native x86 build)
+        uses: actions/download-artifact@v4
         with:
-          platforms: amd64
+          name: blockmount-apk
+          path: work/
 
       - name: Fetch device inputs (private)
         env:
