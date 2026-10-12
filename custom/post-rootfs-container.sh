@@ -43,6 +43,12 @@ for s in ksmbd wsdd2 sysntpd; do
     n=$(sed -n "s/^START=//p" /etc/init.d/$s)
     ln -sf ../init.d/$s /etc/rc.d/S$n$s
 done
+# own: SMS hotfix 独立文件（custom/sms-hotfix.sh）：上游修好后删那文件、
+# custom/sms/ 目录及下面这一行。
+/bin/sh -eu /in/custom/sms-hotfix.sh
+# own: IPv6 安卓对齐 hotfix 独立文件（custom/net-v6-hotfix.sh）：上游修好后删那文件、
+# custom/net-v6/ 目录及下面这一行。
+/bin/sh -eu /in/custom/net-v6-hotfix.sh
 apk list --installed | sort > /etc/mu300/packages.txt
 R=/build/root; mkdir -p $R
 for e in /*; do
