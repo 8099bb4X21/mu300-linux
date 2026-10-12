@@ -60,7 +60,11 @@ FMTOSW
     sh -n "$SMS.new" || { echo "sms-hotfix: patched mu300-sms broken" >&2; rm -f "$SMS.new"; exit 1; }
     [ "$(grep -c '^fmt_time() {' "$SMS.new" 2>/dev/null)" = 1 ] || { echo "sms-hotfix: fmt_time not inserted once" >&2; rm -f "$SMS.new"; exit 1; }
     [ "$(grep -c 'fmt_time "' "$SMS.new" 2>/dev/null)" = 2 ] || { echo "sms-hotfix: fmt_time call sites != 2" >&2; rm -f "$SMS.new"; exit 1; }
+    # The patched file is a fresh shell redirection (mode 0644 on Linux); keep
+    # it executable or /usr/bin/mu300-sms (a symlink to it) is Permission denied.
+    chmod 0755 "$SMS.new" || { echo "sms-hotfix: chmod failed" >&2; rm -f "$SMS.new"; exit 1; }
     mv "$SMS.new" "$SMS"
+    [ -x "$SMS" ] || { echo "sms-hotfix: mu300-sms not executable after patch" >&2; exit 1; }
 fi
 
 # --- 块3：UI 默认池指向 kano 池（上游仍 /etc/unisoc-modem/sms） ---
