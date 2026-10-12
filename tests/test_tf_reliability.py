@@ -119,6 +119,8 @@ class PayloadManifest(unittest.TestCase):
             with self.subTest(unsafe=unsafe), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / 'boot-linux.img').write_bytes(b'boot')
+                (root / 'android-bootchain.sh').write_bytes(b'checker')
+                (root / 'bootchain.sh').write_bytes(b'checker')
                 with tarfile.open(root / 'mu300-openwrt.tar.gz', 'w:gz') as archive:
                     for name in ('./bin/busybox', './sbin/procd', './sbin/init', './etc/uci-defaults/90-mu300', './etc/init.d/mu300-vendor'):
                         m = tarfile.TarInfo(name); m.size = 4
@@ -143,6 +145,8 @@ class PayloadManifest(unittest.TestCase):
             stage = Path(tmp)
             (stage / 'mu300-openwrt.tar.gz').symlink_to(rootfs)
             (stage / 'boot-linux.img').write_bytes(b'test-boot')
+            shutil.copy(TOOLS / 'android-bootchain.sh', stage / 'android-bootchain.sh')
+            shutil.copy(TOOLS.parent / 'android/magisk/mu300-linux-switch/bootchain.sh', stage / 'bootchain.sh')
             r = subprocess.run(['python3', str(TOOLS / 'tf-payload-manifest.py'), tmp],
                                capture_output=True, text=True, timeout=30)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

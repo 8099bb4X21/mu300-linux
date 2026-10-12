@@ -32,6 +32,10 @@ case ${1:-} in
         boot_bytes=$(stat -c %s boot-linux.img)
         [ "$boot_bytes" -gt 0 ] && [ $(( (boot_bytes + 4095) / 4096 * 8 )) -le "$boot_sectors" ] || tf_die 'boot image/aligned readback exceeds partition'
         [ -b /dev/block/by-name/misc ] && [ "$(blockdev --getsz /dev/block/by-name/misc)" -ge 8 ] || tf_die 'invalid misc partition'
+        # Verify OTA slot compatibility before formatting or writing anything.
+        if [ "${SYNC_BOOTCHAIN:-0}" = 1 ]; then
+            "$BB" sh "$P/android-bootchain.sh" check || tf_die 'boot chain preflight refused'
+        fi
         # Staging vendor files avoids discovering absent firmware AFTER format.
         free_kib=$(df -Pk "$T" | awk 'END {print $4}')
         [ "$free_kib" -ge 131072 ] || tf_die 'need 128 MiB free Android staging space'

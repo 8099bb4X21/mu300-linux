@@ -149,6 +149,12 @@ if [ -p "$DIR/cmd" ]; then
     exit 0
 fi
 
+# Optional background clients must never fall back to taking ownership of a
+# tty while its daemon is starting/restarting (especially on another SIM).
+[ "${MU300_AT_DAEMON_ONLY:-0}" != 1 ] || {
+    echo 'mu300-at: daemon unavailable (direct tty fallback disabled)' >&2; exit 1;
+}
+
 # No command fifo is not the same as no daemon: remove $DIR under a running mu300-atd and its descriptor is still
 # the one the modem talks to. Opening the device here would make a second reader on a channel that hands each
 # line to exactly one of them, so refuse instead - and the direct path below is a one-shot in any case, because

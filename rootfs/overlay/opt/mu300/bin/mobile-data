@@ -329,6 +329,66 @@ radio_on_locked() {
     at 'AT+CFUN?' 4 | grep -q '+CFUN: 1'
 }
 
+# Best-effort data-centric preferences; never a precondition for dialing.
+# Keep this in the platform path, not the optional LuCI lock replay: clearing
+# locks or disabling replay must not disable the boot policy. No persistent
+# "done" flag: a CP restart or data-SIM change must apply it again.
+data_priority() {
+    local cmd reply attempt accepted failed=0 owner lock=/run/mu300-data-priority-$MU300_SIM_SLOT.lock
+    # Warm-up and dial may schedule us together. Coalesce concurrent workers
+    # without waiting; the runtime lock disappears at reboot and is not a
+    # persistent "configured" flag.
+    if ! mkdir "$lock" 2>/dev/null; then
+        owner=$(cat "$lock/pid" 2>/dev/null || true)
+        [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null || return 0
+        rm -f "$lock/pid"
+        rmdir "$lock" 2>/dev/null && mkdir "$lock" 2>/dev/null || return 0
+    fi
+    echo $$ > "$lock/pid"
+    trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true' EXIT
+    trap 'exit 0' INT TERM
+    for cmd in 'AT+CEUS=1' 'AT+CEMODE=2'; do
+        accepted=0
+        # Initial attempt plus at most THREE retries, separately per command.
+        # This worker is detached: even exhausting both budgets never gates PDP.
+        for attempt in 1 2 3 4; do
+            # nr1/nr4 are shared lanes, NOT the nr2/nr5 dial lanes.
+            # Never open a tty directly if its daemon is absent or restarting.
+            if reply=$(MU300_AT_LOCK_WAIT=1 MU300_AT_DAEMON_ONLY=1 MU300_AT_DIR=$MU300_SIM_SHARED \
+                /opt/mu300/bin/mu300-at -t 3 "AT+SPACTCARD=$MU300_SIM_SLOT;${cmd#AT}" 2>&1) &&
+               printf '%s\n' "$reply" | awk '
+                   { sub(/\r$/, "") }
+                   /^(ERROR|\+CME ERROR|\+CMS ERROR)(:|$)/ { bad=1 }
+                   NF { last=$0 }
+                   END { exit (bad || last != "OK") }
+               '; then
+                accepted=1
+                radio_say "SIM $MU300_SIM_SLOT data priority confirmed: $cmd (attempt $attempt/4)"
+                break
+            fi
+            radio_say "SIM $MU300_SIM_SLOT data priority unconfirmed: $cmd (attempt $attempt/4); dial unaffected"
+        done
+        if [ "$accepted" != 1 ]; then
+            radio_say "SIM $MU300_SIM_SLOT data priority exhausted: $cmd (3 retries); dial unaffected"
+            failed=$((failed + 1))
+        fi
+    done
+    if [ "$failed" = 0 ]; then radio_say "SIM $MU300_SIM_SLOT data priority accepted: CEUS=1 CEMODE=2"; fi
+    # Release while 'lock' is still in scope; don't leave an EXIT trap using a
+    # function-local variable after this function has returned under set -u.
+    rm -f "$lock/pid"
+    rmdir "$lock" 2>/dev/null || true
+    trap - EXIT INT TERM
+    return 0
+}
+
+queue_data_priority() {
+    # A separate session with all standard descriptors detached: neither
+    # netifd's $(mobile-data up) nor an already-connected bearer waits for AT.
+    setsid "$0" data-priority </dev/null >/dev/null 2>&1 &
+    return 0
+}
+
 # The early radio warm-up and netifd may meet at the boundary. Serialize that
 # small window so they never run two CFUN/SFUN state machines in parallel.
 # The collision wait is capped at eight seconds; netifd can retry later.
@@ -346,8 +406,11 @@ radio_on() {
         /opt/mu300/bin/busybox sleep 0.1 2>/dev/null || sleep 1
     done
     echo $$ > "$lock/pid"
-    radio_on_locked
-    rc=$?
+    # Explicit status handling also releases our mutex under bash -e when
+    # radio initialization fails; netifd can retry without a stale owner.
+    rc=0
+    radio_on_locked || rc=$?
+    if [ "$rc" = 0 ]; then queue_data_priority || true; fi
     [ "$(cat "$lock/pid" 2>/dev/null)" = $$ ] && rm -rf "$lock"
     # Keep the generic worker away from nr1 until the handshake/radio sequence
     # has actually completed. A failed round is retried by netifd/watch.
@@ -471,7 +534,7 @@ up_locked() {
     modem_stack || { echo "no modem stack in this kernel ($(uname -r))" >&2; exit 3; }
     rm -f /run/mu300-mobile-data-down
     tty_setup
-    radio_on
+    radio_on || return $?
     if [ "$(uci -q get unisoc_modem.main.sim_slots 2>/dev/null || true)" = 2 ]; then
         # Select the data card once, before activation; never use SMMSWAP to
         # implement viewing or data selection. Confirm even an omitted OK.
@@ -762,11 +825,12 @@ status() {
 
 case "${1:-status}" in
     up) up "${2:-}" ;;
+    data-priority) data_priority ;;
     radio-on)
         modem_stack || exit 3
         tty_setup
         mark radio-warmup-enter
-        radio_on
+        radio_on || exit $?
         at 'AT+CAVIMS=1' 5 >/dev/null || true
         mark radio-warmup-done
         ;;

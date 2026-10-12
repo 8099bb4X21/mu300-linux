@@ -122,6 +122,16 @@ case "$model" in
        DEVICE=f50 ;;
 esac
 [ "$(su_do 'getprop ro.boot.slot_suffix')" = _a ] || die "$(t 'Android must be running from slot a')"
+# Existing desktop installer targets b; TF Magisk supports either Android slot.
+SYNC_BOOTCHAIN=${MU300_SYNC_BOOTCHAIN:-1}
+BC_LINE=$(t 'boot chain:     not synced (MU300_SYNC_BOOTCHAIN=0)')
+if [ "$SYNC_BOOTCHAIN" = 1 ]; then
+    adb push "$TOP/tools/android-bootchain.sh" $T/android-bootchain.sh >/dev/null
+    BC_LINE=$(su_do "sh $T/android-bootchain.sh check")
+    printf '%s\n' "$BC_LINE" | grep -q '^BOOTCHAIN-PLAN a b' ||
+        die "Boot chain check refused; nothing installed: $BC_LINE"
+fi
+echo "$BC_LINE"
 
 
 # ---------------------------------------------------------------- making room on a small eMMC (EXPERIMENTAL)
@@ -551,11 +561,12 @@ echo "  $(t 'filesystem:     {1}' "$([ $FORMAT = 1 ] && t 'CREATE new ext4 (eras
 [ $UPDATE = 1 ] && echo "  $(t 'update:         settings and user data of the chosen systems are kept, everything else is replaced')"
 [ $UPDATE = 0 ] && [ $FORMAT = 0 ] && echo "  $(t 'note:           the chosen systems are installed fresh; their previous files and settings are replaced')"
 echo "  $(t 'writes:         Linux region at offset {1}, boot_b, 32 bytes of misc (boot_a, GPT and userdata are not touched)' "$OFF")"
+echo "  $BC_LINE"
 ask confirm "$(t 'Type INSTALL to continue')" no
 [ "$confirm" = INSTALL ] || die "$(t 'cancelled')"
 
 say "$(t 'Copying to the device')"
-adb push "$TOP/tools/android-mount-mu300root.sh" "$TOP/tools/android-install.sh" "$TOP/tools/tf-storage.sh" $T/ >/dev/null
+adb push "$TOP/tools/android-mount-mu300root.sh" "$TOP/tools/android-install.sh" "$TOP/tools/android-bootchain.sh" "$TOP/tools/tf-storage.sh" $T/ >/dev/null
 for os in $OSES; do
     if [ $MODE = prebuilt ]; then
         adb push "$REL/$(rootfs_file $os)" $T/mu300-$os.tar.gz >/dev/null
@@ -567,10 +578,17 @@ done
 env=$(mktemp)
 printf 'OFF=%s\nSIZE=%s\nOFF_S=%s\nSIZE_S=%s\nFORMAT=%s\nOSES="%s"\nWIPE_LEGACY=%s\nUPDATE=%s\nBOOT_OS=%s\nDEFAULT_LINUX=%s\nBOOT_ATTEMPTS=%s\nIMPORT_HOTSPOT=%s\nKERNEL=%s\nPWHASH='"'"'%s'"'"'\n' \
   "$OFF" "$SIZE" "$((OFF / 512))" "$((SIZE / 512))" "$FORMAT" "$OSES" "$WIPE_LEGACY" "$UPDATE" "$BOOT_OS" "$DEFAULT_LINUX" "$BOOT_ATTEMPTS" "$IMPORT_HOTSPOT" "$KERNEL" "$PWHASH" > "$env"
+printf 'SYNC_BOOTCHAIN=%s\n' "$SYNC_BOOTCHAIN" >> "$env"
 adb push "$env" $T/mu300-install.env >/dev/null; rm -f "$env"
 su_do "sh $T/android-install.sh" | tee "$WORK/device-install.log"
 grep -q MU300-INSTALL-OK "$WORK/device-install.log" || die "$(t 'installation on the device failed; boot_b and misc were not changed')"
 
+# Keep an additional Android backup on device even if copying to the host fails.
+if [ "$SYNC_BOOTCHAIN" = 1 ] && [ "$(su_do "[ -d $T/mu300-bootchain-backup ] && echo y")" = y ]; then
+    mkdir -p "$WORK/bootchain"
+    adb pull $T/mu300-bootchain-backup "$WORK/bootchain/$(date +%Y%m%d-%H%M%S)" ||
+        echo "Boot chain backup stays on the TF/Linux filesystem and Android staging directory" >&2
+fi
 say "$(t 'Writing boot_b and arming slot b')"
 EXP=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['sha256'])" "$WORK/boot-linux-slotb.json")
 adb push "$WORK/boot-linux-slotb.img" $T/mu300-boot.img >/dev/null

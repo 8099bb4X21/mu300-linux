@@ -114,6 +114,7 @@ done
 docker run --rm --platform linux/arm64 \
   -v "$TOP/rootfs/overlay/opt/mu300":/in/opt-mu300:ro -v "$TOP/rootfs/overlay/etc/mu300/vpn.conf.example":/in/vpn.conf.example:ro -v "$TOP/openwrt/overlay":/in/overlay:ro \
   -v "$TOP/openwrt/patches/fw4-sipa-offload.patch":/in/fw4-sipa-offload.patch:ro \
+  -v "$TOP/openwrt/patches/wifi-scripts-no-dfs.patch":/in/wifi-scripts-no-dfs.patch:ro \
   -v "$TOP/boot/module-order.txt":/in/module-order.txt:ro -v "$IN/out/modules":/in/modules:ro \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
   $(opt firmware firmware) $(opt android-subset android-subset) $(opt android-gpu-subset android-gpu-subset) \
@@ -155,6 +156,7 @@ cp -a /in/opt-mu300 $R/opt/mu300
 cp -a /in/overlay/. $R/
 chmod 0755 $R/opt/mu300/bin/cpu-voltage-platform $R/etc/init.d/mu300-cpu-driver
 chmod 0755 $R/opt/mu300/bin/ra-deprecate $R/opt/mu300/bin/wcn-reopen
+chmod 0755 $R/opt/mu300/bin/mu300-user-packages $R/etc/init.d/mu300-user-packages
 [ -s $R/www/luci-static/aurora/main.css ] || { echo "Aurora theme assets missing" >&2; exit 1; }
 for f in www/luci-static/resources/view/aurora/studio.js \
     www/luci-static/resources/view/aurora/marketplace.js \
@@ -170,6 +172,8 @@ grep -q "mediaurlbase .*/luci-static/aurora" $R/etc/config/luci || {
 # Fail the build if a changed fw4 version no longer matches this targeted patch.
 apk add patch >/dev/null
 patch --batch --fuzz=0 -d $R -p1 -i /in/fw4-sipa-offload.patch
+patch --batch --fuzz=0 -d $R -p1 -i /in/wifi-scripts-no-dfs.patch
+grep -q "device_no_dfs(config);" $R/usr/share/ucode/wifi/hostapd.uc || { echo "wifi-scripts DFS patch not applied" >&2; exit 1; }
 if [ -d /in/luci-plugin ]; then
     cp -a /in/luci-plugin/root/. $R/
     cp -a /in/luci-plugin/htdocs/. $R/www/
@@ -215,10 +219,13 @@ mkdir -p $R/etc/mu300
 # the VPN is configured the same way on both systems, and mu300-toolkit copies this to start a vpn.conf
 cp /in/vpn.conf.example $R/etc/mu300/vpn.conf.example
 printf "%s\n" "${MU300_VERSION:-dev}" > $R/etc/mu300/image-version
+# Record image packages so upgrades can restore only user additions.
+(MU300_LIB=1; . $R/opt/mu300/bin/mu300-update; upk_manual $R openwrt) > $R/etc/mu300/image-packages
+[ -s $R/etc/mu300/image-packages ] || { echo "missing image-packages" >&2; exit 1; }
 # enable the services (rc.common "enable" needs ubus, which is not running in the build container)
 # accounts still those of the image until an installer or mu300-update puts the device ones in place
 : > $R/etc/.mu300-accounts-from-image
-for s in mu300-accounts mu300-cpu-driver mu300-vendor mu300-hw mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-buttons mu300-ndp mu300-smsd; do
+for s in mu300-accounts mu300-cpu-driver mu300-vendor mu300-hw mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-buttons mu300-ndp mu300-smsd mu300-user-packages; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
@@ -234,7 +241,9 @@ if [ -d /in/luci-plugin ]; then
     ln -sf ../init.d/unisoc-cpu $R/etc/rc.d/K89unisoc-cpu
 fi
 # busybox PATH is /usr/sbin:/usr/bin:/sbin:/bin, so the commands go into /usr/bin
-for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-sms led-status mu300-vpn wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc; do ln -sf /opt/mu300/bin/$c $R/usr/bin/$c; done
+for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-sms led-status mu300-vpn wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc mu300-user-packages; do ln -sf /opt/mu300/bin/$c $R/usr/bin/$c; done
+# Config remnants of packages deliberately removed from our images must not return on upgrade.
+rm -f $R/etc/config/attendedsysupgrade $R/etc/config/*.apk-new
 # no kernel of its own: OpenWrt kmods (6.12) and grub are unused on this device
 rm -rf $R/lib/modules/6.* $R/boot
 # In-tree and vendor modules for the selected mainline kernel (upstream/).

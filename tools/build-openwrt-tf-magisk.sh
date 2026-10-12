@@ -65,7 +65,9 @@ MU300_GPU=0 MU300_INPUTS="$IN" MU300_MAINLINE_OUT="$UO" MU300_LUCI_PLUGIN_SRC="$
   MU300_VERSION="$VERSION-tf-$KERNEL" \
   sh "$TOP/openwrt/build-rootfs.sh" "$(basename "$ROOTFS")"
 for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
-    ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd ./opt/mu300/bin/mu300-at \
+    ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd ./opt/mu300/bin/mu300-at ./opt/mu300/bin/mobile-data \
+    ./opt/mu300/bin/mu300-user-packages ./etc/init.d/mu300-user-packages ./etc/mu300/image-packages \
+    ./opt/mu300/lib/wifi-channels.sh ./usr/share/ucode/wifi/hostapd.uc \
     ./opt/mu300/bin/mu300-usb ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/mu300-data-sim ./opt/mu300/bin/mu300-dual-radio ./etc/init.d/mu300-post ./etc/init.d/mu300-atd \
     ./etc/init.d/mu300-smsd ./opt/mu300/bin/mu300-smsd ./opt/mu300/bin/mu300-sms ./etc/sysctl.d/99-mu300-console.conf \
     ./usr/share/luci/menu.d/luci-app-mu300.json \
@@ -128,8 +130,9 @@ cp "$TOP/android/magisk/mu300-openwrt-tf/module.prop" \
    "$TOP/android/magisk/mu300-openwrt-tf/customize.sh" \
    "$TOP/android/magisk/mu300-openwrt-tf/locale.sh" \
    "$TOP/android/magisk/mu300-linux-switch/switch.sh" \
-   "$TOP/tools/android-install.sh" "$TOP/tools/mu300-vendor-from-device.sh" \
+   "$TOP/tools/android-install.sh" "$TOP/tools/android-bootchain.sh" "$TOP/tools/mu300-vendor-from-device.sh" \
    "$TOP/tools/tf-storage.sh" "$TOP/tools/tf-stage.sh" "$TOP/tools/tf-install-worker.sh" "$STAGE/"
+cp "$TOP/android/magisk/mu300-linux-switch/bootchain.sh" "$STAGE/bootchain.sh"
 sed -i "s/Linux 7\.2/Linux $KERNEL/g; s/KERNEL=7\.2/KERNEL=$KERNEL/g" "$STAGE/customize.sh"
 sed -i "s/7\.2/$KERNEL/g" "$STAGE/module.prop"
 cp "$IN/busybox" "$STAGE/busybox"
