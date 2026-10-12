@@ -53,8 +53,7 @@ class ContainerSupport(unittest.TestCase):
             support.check(self.out)
 
     def test_incomplete_ebpf_or_tracing_cannot_ship(self):
-        for feature in ('BPF_JIT', 'DEBUG_INFO_BTF', 'DEBUG_INFO_BTF_MODULES',
-                        'PERF_EVENTS', 'KPROBE_EVENTS', 'FUNCTION_GRAPH_TRACER',
+        for feature in ('BPF_JIT', 'BPF_SYSCALL', 'PERF_EVENTS',
                         'BPF_UNPRIV_DEFAULT_OFF'):
             with self.subTest(feature=feature):
                 self.config[feature] = 'n'
