@@ -389,6 +389,8 @@ do_list() {
 	"traffic_clear": { "confirm": false, "slot": "String" },
 	"usb_get": { },
 	"usb_set": { "kind": "String", "value": "String", "scope": "String", "auto": "String" },
+	"apn_get": { },
+	"apn_set": { "action": "String", "payload": "String" },
 	"usb_net_list": { },
 	"usb_net_add": { "iface": "String" }
 }
@@ -420,6 +422,12 @@ call)
             card=$(uci -q get unisoc_modem.main.data_sim); [ "$card" = 1 ] || card=0
             printf '{"ok":1,"slots":%s,"saved_sim":%s}\n' "$slots" "$card"
             ;;
+        apn_get) "$DASH/apn" get ;;
+        apn_set)
+            case $(inp '@.action') in
+                save|delete|apply|auto) inp '@.payload' | "$DASH/apn" "$(inp '@.action')" ;;
+                *) printf '{"ok":0,"error":"apn_invalid"}\n' ;;
+            esac ;;
         data_sim_get) "$DASH/data-sim" get ;;
         data_sim_set) "$DASH/data-sim" start "$(inp '@.target')" ;;
         data_sim_status) "$DASH/data-sim" status "$(inp '@.id')" ;;

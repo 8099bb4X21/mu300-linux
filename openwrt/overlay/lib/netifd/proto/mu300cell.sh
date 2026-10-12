@@ -23,14 +23,19 @@ proto_mu300cell_init_config() {
 	renew_handler=1
 	proto_config_add_string "apn"
 	proto_config_add_string "pdptype"
+	proto_config_add_string "auth"
+	proto_config_add_string "username"
+	proto_config_add_string "password"
+	proto_config_add_string "roaming"
+	proto_config_add_boolean "attach"
 	proto_config_add_boolean "peerdns"
 	proto_config_add_array "dns:list(ipaddr)"
 }
 
 proto_mu300cell_setup() {
 	local config="$1"
-	local apn pdptype peerdns out ifname ip prefix dns1 dns2 iid zone slot rc
-	json_get_vars apn pdptype peerdns
+	local apn pdptype peerdns out ifname ip prefix dns1 dns2 iid zone slot rc auth username password roaming attach
+	json_get_vars apn pdptype peerdns auth username password roaming attach
 	. /opt/mu300/bin/mu300-sim-env
 	mu300_sim_env || { proto_notify_error "$config" INVALID_SIM; return 1; }
 	slot=$MU300_SIM_SLOT
@@ -38,8 +43,10 @@ proto_mu300cell_setup() {
 	# the next SIM. Keep this runtime ownership separate from persistent intent.
 	printf '%s\n%s\n' "$slot" "$MU300_SIM_DEVICE" > "/run/mu300cell-$config.sim"
 
-	out=$(MU300_NETIFD=1 MU300_PDP_TYPE="${pdptype:-IP}" /opt/mu300/bin/mobile-data up $apn 2>/tmp/mu300cell.err)
+	printf '{"phase":"connecting"}\n' > "/run/unisoc-apn-dial-$slot.json"
+	out=$(MU300_NETIFD=1 MU300_PDP_TYPE="${pdptype:-IP}" MU300_AUTH="${auth:-none}" MU300_USERNAME="$username" MU300_PASSWORD="$password" MU300_ROAMING_PDP_TYPE="${roaming:-${pdptype:-IP}}" MU300_INITIAL_ATTACH="${attach:-0}" /opt/mu300/bin/mobile-data up "$apn" 2>/tmp/mu300cell.err)
 	rc=$?
+	[ "$rc" = 0 ] || printf '{"phase":"failed"}\n' > "/run/unisoc-apn-dial-$slot.json"
 	if [ "$rc" = 4 ]; then
 		logger -t mu300cell "$(cat /tmp/mu300cell.err)"
 		proto_notify_error "$config" DUAL_RADIO_REBOOT_REQUIRED
@@ -56,12 +63,17 @@ proto_mu300cell_setup() {
 	fi
 	ip=$(echo "$out" | sed -n 's/^IP=//p')
 	if [ -z "$ip" ]; then
+		printf '{"phase":"failed"}\n' > "/run/unisoc-apn-dial-$slot.json"
 		logger -t mu300cell "attach failed: $(cat /tmp/mu300cell.err)"
 		proto_notify_error "$config" ATTACH_FAILED
 		proto_setup_failed "$config"
 		return 1
 	fi
 	ifname=$(echo "$out" | sed -n 's/^IFACE=//p')
+	# Per-SIM profiles can override the global protocol passed by netifd.
+	local effective_type
+	effective_type=$(echo "$out" | sed -n 's/^PDP_TYPE=//p')
+	case "$effective_type" in IP|IPV4V6) pdptype=$effective_type ;; esac
 	prefix=$(echo "$out" | sed -n 's/^PREFIX=//p')
 	dns1=$(echo "$out" | sed -n 's/^DNS1=//p')
 	dns2=$(echo "$out" | sed -n 's/^DNS2=//p')
@@ -111,6 +123,7 @@ proto_mu300cell_setup() {
 		[ -n "$dns2" ] && proto_add_dns_server "$dns2"
 	fi
 	proto_send_update "$config"
+	printf '{"phase":"connected"}\n' > "/run/unisoc-apn-dial-$slot.json"
 	# The event-driven child is the protocol task netifd owns. It reports IPv6
 	# netlink changes and CGEV-triggered IPv4/DNS changes without holding setup.
 	[ "${pdptype:-IP}" != IP ] && proto_run_command "$config" \

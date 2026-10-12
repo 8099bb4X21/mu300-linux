@@ -530,6 +530,89 @@ up() {
     return $rc
 }
 
+configure_pdp_context() {
+    # An explicitly empty netifd APN means SIM default, not "keep the old APN".
+    # Unmanaged/systemd callers without an argument retain their old behavior.
+    local apn="${1-${MU300_APN:-}}" pdptype="${MU300_PDP_TYPE:-IP}" result
+    [ -n "$apn" ] || [ "${MU300_NETIFD:-0}" = 1 ] || return 0
+    case "$pdptype" in IP|IPV4V6) ;; *) echo 'Invalid PDP type' >&2; return 1;; esac
+    if [ "${#apn}" -gt 100 ] || { [ -n "$apn" ] && ! [[ "$apn" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$ ]]; }; then
+        echo 'Invalid APN' >&2; return 1
+    fi
+    result=$(at "AT+CGDCONT=$CID,\"$pdptype\",\"$apn\"" 5) || return 1
+    printf '%s\n' "$result" | tr -d '\r' | grep -qx OK || {
+        echo 'PDP configuration rejected or unverified' >&2; return 1;
+    }
+    if [ "${MU300_NETIFD:-0}" = 1 ] || [ -n "${MU300_AUTH:-}${MU300_USERNAME:-}${MU300_PASSWORD:-}" ]; then
+        apn_credentials_valid || return 1
+        # B09 RIL's ordinary M-ETHER bearer uses CGPCO, including auth=0
+        # to clear a previous account. No credentials are printed to stderr.
+        result=$(at "AT+CGPCO=0,\"${MU300_USERNAME:-}\",\"${MU300_PASSWORD:-}\",$CID,$APN_AUTH_NUMBER" 5 2>/dev/null) || {
+            echo 'APN authentication configuration failed' >&2; return 1;
+        }
+        printf '%s\n' "$result" | tr -d '\r' | grep -qx OK || {
+            echo 'APN authentication rejected or unverified' >&2; return 1;
+        }
+    fi
+}
+
+apn_credentials_valid() {
+    local user="${MU300_USERNAME:-}" password="${MU300_PASSWORD:-}" text="${MU300_USERNAME:-}${MU300_PASSWORD:-}"
+    case "${MU300_AUTH:-none}" in none) APN_AUTH_NUMBER=0;; pap) APN_AUTH_NUMBER=1;; chap) APN_AUTH_NUMBER=2;; papchap) APN_AUTH_NUMBER=3;; *) echo 'Invalid APN authentication' >&2; return 1;; esac
+    [ "${#user}" -le 64 ] && [ "${#password}" -le 64 ] || return 1
+    [[ "$text" != *\"* && "$text" != *\\* && "$text" != *[!\ -\~]* ]] || { echo 'Invalid APN credentials' >&2; return 1; }
+}
+
+resolve_apn_selection() {
+    local helper=/usr/libexec/unisoc-modem/apn identity iccid imsi= data needed
+    [ -x "$helper" ] || return 0
+    needed=$("$helper" needs-identity 2>/dev/null) || { echo 'APN profile configuration unavailable' >&2; return 1; }
+    case "$needed" in 0|1) ;; *) echo 'Invalid APN profile configuration' >&2; return 1 ;; esac
+    identity='{}'
+    if [ "$needed" = 1 ]; then
+        identity=$(at 'AT+CCID' 3 2>/dev/null) || { echo 'SIM identity unavailable for APN selection' >&2; return 1; }
+        iccid=$(printf '%s\n' "$identity" | tr -d '\r' | sed -n 's/^+CCID:[[:space:]]*"\{0,1\}\([0-9]*\)"\{0,1\}[[:space:]]*$/\1/p' | head -n1)
+        [[ "$iccid" =~ ^[0-9]{18,22}$ ]] || { echo 'SIM identity unavailable for APN selection' >&2; return 1; }
+        identity=$(printf '{"iccid":"%s"}' "$iccid")
+    fi
+    # Query IMSI only when this card actually has automatic selection enabled.
+    # Resolve global settings too: an already-running netifd may still have
+    # the old protocol schema after a no-restart hot deployment.
+    data=$(printf '%s' "$identity" | "$helper" resolve) || return 1
+    if [ "$(printf '%s' "$data" | jsonfilter -e '@.source')" = default ]; then
+        imsi=$(at 'AT+CIMI' 3 2>/dev/null | tr -d '\r' | grep -E '^[0-9]{14,16}$' | head -n1) || true
+        [[ "$imsi" =~ ^[0-9]{14,16}$ ]] || { imsi=; echo 'SIM operator unavailable; using SIM default APN' >&2; }
+        data=$(printf '{"iccid":"%s","imsi":"%s"}' "$iccid" "$imsi" | "$helper" resolve) || return 1
+    fi
+    [ "$(printf '%s' "$data" | jsonfilter -e '@.ok')" = 1 ] || { echo 'Remembered APN profile unavailable' >&2; return 1; }
+    if [ "$needed" = 1 ]; then
+        umask 077
+        printf '{"iccid":"%s","imsi":"%s"}\n' "$iccid" "$imsi" > "/run/unisoc-apn-sim$MU300_SIM_SLOT.json.new.$$"
+        mv "/run/unisoc-apn-sim$MU300_SIM_SLOT.json.new.$$" "/run/unisoc-apn-sim$MU300_SIM_SLOT.json"
+    fi
+    RESOLVED_APN=$(printf '%s' "$data" | jsonfilter -e '@.settings.apn')
+    MU300_PDP_TYPE=$(printf '%s' "$data" | jsonfilter -e '@.settings.pdptype')
+    MU300_AUTH=$(printf '%s' "$data" | jsonfilter -e '@.settings.auth')
+    MU300_USERNAME=$(printf '%s' "$data" | jsonfilter -e '@.settings.username')
+    MU300_PASSWORD=$(printf '%s' "$data" | jsonfilter -e '@.settings.password')
+    MU300_ROAMING_PDP_TYPE=$(printf '%s' "$data" | jsonfilter -e '@.settings.roaming')
+    MU300_INITIAL_ATTACH=$(printf '%s' "$data" | jsonfilter -e '@.settings.attach')
+    APN_RESOLVED=1
+}
+
+configure_initial_apn() {
+    [ "${MU300_INITIAL_ATTACH:-0}" = 1 ] || return 0
+    local apn="${1:-}" protocol="${MU300_PDP_TYPE:-IP}" roaming="${MU300_ROAMING_PDP_TYPE:-${MU300_PDP_TYPE:-IP}}" result command
+    case "$protocol:$roaming" in IP:IP|IP:IPV4V6|IPV4V6:IP|IPV4V6:IPV4V6) ;; *) return 1;; esac
+    [[ "$apn" =~ ^[A-Za-z0-9.-]*$ ]] || return 1
+    apn_credentials_valid || return 1
+    command="AT+SPCGAPNCFG=1,\"$apn\",\"$protocol\",\"$roaming\",0,\"${MU300_USERNAME:-}\",\"${MU300_PASSWORD:-}\",$APN_AUTH_NUMBER"
+    [ -n "$apn" ] || command='AT+SPCGAPNCFG=1,""'
+    [ "${#command}" -le 240 ] || return 1
+    result=$(at "$command" 5 2>/dev/null) || { echo 'Initial APN configuration failed' >&2; return 1; }
+    printf '%s\n' "$result" | tr -d '\r' | grep -qx OK || { echo 'Initial APN configuration rejected' >&2; return 1; }
+}
+
 up_locked() {
     modem_stack || { echo "no modem stack in this kernel ($(uname -r))" >&2; exit 3; }
     rm -f /run/mu300-mobile-data-down
@@ -546,6 +629,11 @@ up_locked() {
         fi
     fi
     mark dial-radio-on-done
+    if [ "${MU300_NETIFD:-0}" = 1 ]; then
+        resolve_apn_selection || return 1
+        [ "${APN_RESOLVED:-0}" != 1 ] || set -- "$RESOLVED_APN"
+        configure_initial_apn "${1-${MU300_APN:-}}" || return 1
+    fi
     # Android's RIL enables the IMS bearer used by SMS. This is idempotent;
     # keep it on the normal radio bring-up path and do not wait for IMS here.
     at 'AT+CAVIMS=1' 5 >/dev/null || true
@@ -569,18 +657,7 @@ up_locked() {
             exit 1
         }
     fi
-    # systemd has no way to pass an argument from a config file, so the APN can come from the environment too:
-    # /etc/mu300/mobile-data.conf is an EnvironmentFile for the service. The argument still wins, which is what
-    # the OpenWrt protocol handler uses.
-    set -- "${1:-${MU300_APN:-}}"
-    if [ -n "${1:-}" ]; then
-        # "IP", not "IPV4V6", because that is what Android's RIL asks this modem for. Measured on the same
-        # device with data working, its sipa_eth0 carries one IPv4 address and has IPv6 switched off outright
-        # (/proc/sys/net/ipv6/conf/sipa_eth0/disable_ipv6 = 1). A dual-stack context is the one part of our
-        # bring-up the working system never performs, and downlink is what we are missing (FINDINGS 13f).
-        # MU300_PDP_TYPE=IPV4V6 asks for both again, for a carrier that needs it.
-        at "AT+CGDCONT=$CID,\"${MU300_PDP_TYPE:-IP}\",\"$1\"" >/dev/null
-    fi
+    configure_pdp_context "$@" || return 1
     # 不再先问一次 AT+CGACT?：开机时上下文一定是关的，问那一趟是一条整 AT 往返（实测约 2 s），
     # 而 CGACT=1 对已经激活的上下文是幂等的（重拨、watch 重连就是这种情况），所以问不问结果一样。
     local activated
@@ -642,7 +719,7 @@ up_locked() {
     esac
     if [ "${MU300_NETIFD:-0}" = 1 ]; then
         # OpenWrt: netifd (proto mu300cell) configures the address, routes, DNS and firewall itself
-        printf 'IFACE=%s\nIP=%s\nPREFIX=%s\nDNS1=%s\nDNS2=%s\nIID6=%s\n' "$IFACE" "$ip4" "$prefix" "$dns1" "$dns2" "$iid"
+        printf 'IFACE=%s\nIP=%s\nPREFIX=%s\nDNS1=%s\nDNS2=%s\nIID6=%s\nPDP_TYPE=%s\n' "$IFACE" "$ip4" "$prefix" "$dns1" "$dns2" "$iid" "${MU300_PDP_TYPE:-IP}"
         return 0
     fi
     ip link set "$IFACE" up

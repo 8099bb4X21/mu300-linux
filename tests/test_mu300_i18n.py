@@ -179,7 +179,7 @@ if (M.translate('删除这条短信') !== '删除这条短信') throw Error('Chi
 
     def test_visible_chinese_literals_have_translations(self):
         literals = []
-        for name in ('home', 'at', 'locks', 'sms', 'forward', 'traffic', 'settings'):
+        for name in ('home', 'at', 'locks', 'sms', 'forward', 'traffic', 'settings', 'apn'):
             source = (PACKAGE / f'htdocs/luci-static/resources/view/mu300/{name}.js').read_text(encoding='utf-8')
             for line in source.splitlines():
                 stripped = line.lstrip()

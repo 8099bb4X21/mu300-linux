@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-mu300
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=11
+PKG_RELEASE:=13
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=MU300 Linux contributors
 PKGARCH:=all
@@ -25,6 +25,7 @@ endef
 
 define Package/luci-app-mu300/conffiles
 /etc/config/unisoc_modem
+/etc/config/unisoc_apn
 /etc/unisoc-modem/cpu.json
 /etc/unisoc-modem/cpu-voltage.json
 endef
@@ -36,6 +37,7 @@ define Package/luci-app-mu300/install
 	$(INSTALL_DIR) $(1)/www
 	$(CP) ./htdocs/. $(1)/www/
 	$(CP) ./root/. $(1)/
+	chmod 0600 $(1)/etc/config/unisoc_apn
 	chmod 0755 $(1)/etc/init.d/unisoc-cpu
 	chmod 0755 $(1)/etc/init.d/unisoc-modem-ui $(1)/etc/init.d/unisoc-sms-forward $(1)/etc/init.d/unisoc-traffic $(1)/etc/hotplug.d/net/90-unisoc-usb-host $(1)/etc/hotplug.d/iface/90-unisoc-usb-host $(1)/usr/libexec/rpcd/mu300dash $(1)/usr/libexec/unisoc-modem/*
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n
@@ -46,6 +48,7 @@ define Package/luci-app-mu300/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
 	/usr/libexec/unisoc-modem/refresh-config
+	chmod 0600 /etc/config/unisoc_apn
 	state=$$(uci -q get unisoc_modem.main.state_dir 2>/dev/null)
 	state=$${state:-/etc/unisoc-modem/lock-state.d}
 	old=/etc/mu300/dash/lock-state.d
