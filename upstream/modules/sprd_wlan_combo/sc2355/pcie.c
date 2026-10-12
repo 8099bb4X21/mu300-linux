@@ -12,6 +12,8 @@
 #include <linux/io.h>
 #include <linux/regmap.h>
 #include <linux/of_device.h>
+#include <linux/atomic.h>
+#include <linux/moduleparam.h>
 
 #include <misc/marlin_platform.h>
 
@@ -27,6 +29,36 @@
 
 #define SPRD_NORMAL_MEM	0
 #define SPRD_DEFRAG_MEM	1
+
+/* Count pressure without printk on every TX scheduling pass. These are
+ * checks/failed submissions, not unique packets or packet-drop counters.
+ * Static storage survives a WCN power cycle; reads never touch the device.
+ */
+static atomic64_t tx_credit_limited = ATOMIC64_INIT(0);
+static atomic64_t tx_zero_credit = ATOMIC64_INIT(0);
+static atomic64_t tx_push_failures = ATOMIC64_INIT(0);
+
+static int mu300_tx_fc_stats_get(char *buffer, const struct kernel_param *kp)
+{
+	return scnprintf(buffer, PAGE_SIZE,
+		"credit_limited_checks=%lld zero_credit_checks=%lld push_failures=%lld\n",
+		(long long)atomic64_read(&tx_credit_limited),
+		(long long)atomic64_read(&tx_zero_credit),
+		(long long)atomic64_read(&tx_push_failures));
+}
+
+static const struct kernel_param_ops mu300_tx_fc_stats_ops = {
+	.get = mu300_tx_fc_stats_get,
+};
+module_param_cb(mu300_tx_fc_stats, &mu300_tx_fc_stats_ops, NULL, 0444);
+MODULE_PARM_DESC(mu300_tx_fc_stats, "TX credit checks and failed submissions (not packet drops)");
+
+static void sc2355_pcie_note_credit_limit(int remaining)
+{
+	atomic64_inc(&tx_credit_limited);
+	if (remaining <= 0)
+		atomic64_inc(&tx_zero_credit);
+}
 
 #define INIT_INTF_SC2355(num, type, out, interval, bsize, psize, max, \
 		threshold, time, in_irq, pending, pop, push, complete, suspend) \
@@ -111,8 +143,9 @@ static int pcie_tx_one(struct sprd_hif *hif, unsigned char *data,
 	ret = sprdwcn_bus_list_alloc(chn, &head, &tail, &num);
 	//ret = 0;
 	if (ret || !head || !tail) {
-		pr_err("%s:%d sprdwcn_bus_list_alloc fail\n",
-		       __func__, __LINE__);
+		/* MU300: rate-limited, it fails on every command while the WCN is in dump status (issue #94) */
+		pr_err_ratelimited("%s:%d sprdwcn_bus_list_alloc fail\n",
+				   __func__, __LINE__);
 		return -1;
 	}
 
@@ -365,8 +398,9 @@ static int pcie_rx_common_push(int chn, struct mbuf_t **head,
 
 	ret = sprdwcn_bus_list_alloc(chn, head, tail, num);
 	if (ret || head == NULL || tail == NULL || *head == NULL || *tail == NULL) {
-		pr_err("%s:%d sprdwcn_bus_list_alloc fail\n", __func__,
-		       __LINE__);
+		/* MU300: rate-limited, as in pcie_tx_one */
+		pr_err_ratelimited("%s:%d sprdwcn_bus_list_alloc fail\n", __func__,
+				   __LINE__);
 		ret = -ENOMEM;
 	} else {
 		ret = pcie_rx_fill_mbuf(*head, *tail, *num, len);
@@ -386,13 +420,27 @@ static int pcie_rx_handle(int chn, struct mbuf_t *head,
 			  struct mbuf_t *tail, int num)
 {
 	struct sprd_hif *hif = sc2355_pcie_get_hif();
-	struct rx_mgmt *rx_mgmt = (struct rx_mgmt *)hif->rx_mgmt;
+	struct rx_mgmt *rx_mgmt;
 	struct sprd_msg *msg = NULL;
 	int buf_num = 0, len = 0, ret = 0;
 	struct mbuf_t *pos = head;
 
 	pr_debug("%s: channel:%d head:%p tail:%p num:%d\n",
 	       __func__, chn, head, tail, num);
+
+	/*
+	 * MU300: an RX interrupt outside the channels' lifetime (post_init publishes hif before it registers
+	 * them, post_deinit clears it after it unregistered them, sprd_iface_set_power serialises the two).
+	 * Without hif there is no device to unmap the buffers from and no queue to hand them to, and the
+	 * channel's mbuf pool is already freed (no sprdwcn_bus_list_free): the data buffers of this one list
+	 * leak, and it is said once.  A NULL here was a panic in hard IRQ (FINDINGS 31n).
+	 */
+	rx_mgmt = hif ? (struct rx_mgmt *)READ_ONCE(hif->rx_mgmt) : NULL;
+	if (unlikely(!rx_mgmt)) {
+		pr_err_once("%s: RX on channel %d with no Wi-Fi context, %d buffer(s) dropped\n",
+			    __func__, chn, num);
+		return 0;
+	}
 
 	for (buf_num = num; buf_num > 0; buf_num--, pos = pos->next) {
 		if (unlikely(!pos)) {
@@ -660,7 +708,7 @@ out:
 
 struct sprd_hif *sc2355_pcie_get_hif(void)
 {
-	return (struct sprd_hif *)sc2355_hif.hif;
+	return (struct sprd_hif *)smp_load_acquire(&sc2355_hif.hif);
 }
 
 #define INTF_IS_PCIE \
@@ -690,8 +738,12 @@ inline int sc2355_tx_addr_trans_pcie(struct sprd_hif *hif,
 		ret = sprdwcn_bus_list_alloc(hif->tx_data_port,
 					     &head, &tail, &num);
 		if (ret || !head || !tail) {
-			pr_err("%s:%d sprdwcn_bus_list_alloc fail, chn: %d\n",
-			       __func__, __LINE__, hif->tx_data_port);
+			/*
+			 * MU300: rate-limited. The RX refill retries this, and in issue #94 (the WCN in dump status for
+			 * minutes) it and its siblings flooded the console until a CPU soft-locked in printk.
+			 */
+			pr_err_ratelimited("%s:%d sprdwcn_bus_list_alloc fail, chn: %d\n",
+					   __func__, __LINE__, hif->tx_data_port);
 		} else {
 			mbuf = head;
 			mbuf->buf = data;
@@ -1558,7 +1610,8 @@ int sc2355_pcie_push_link(struct sprd_hif *hif, int chn,
 	time = jiffies - time;
 
 	if (ret) {
-		pr_err("%s: push link fail: %d, chn: %d!\n", __func__, ret,
+		atomic64_inc(&tx_push_failures);
+		pr_err_ratelimited("%s: push link fail: %d, chn: %d!\n", __func__, ret,
 		       chn);
 	}
 	return ret;
@@ -1923,7 +1976,8 @@ int sc2355_pcie_fc_get_send_num(struct sprd_hif *hif,
 	free_num = atomic_read(&tx_mgmt->xmit_msg_list.free_num);
 
 	if ((free_num + data_num) >= tx_buf_max) {
-		pr_debug("%s, free_num=%d, data_num=%d\n", __func__,
+		sc2355_pcie_note_credit_limit(tx_buf_max - free_num);
+		pr_debug_ratelimited("%s, free_num=%d, data_num=%d\n", __func__,
 				   free_num, data_num);
 		return (tx_buf_max - free_num);
 	} else {
@@ -1949,7 +2003,9 @@ int sc2355_pcie_fc_test_send_num(struct sprd_hif *hif,
 	free_num = atomic_read(&tx_mgmt->xmit_msg_list.free_num);
 
 	if ((free_num + data_num) >= tx_buf_max) {
-		pr_err("%s,%d free_num=%d, data_num=%d\n",
+		/* Credit exhaustion is normal backpressure, not a firmware error. */
+		sc2355_pcie_note_credit_limit(tx_buf_max - free_num);
+		pr_debug_ratelimited("%s,%d free_num=%d, data_num=%d\n",
 				   __func__, __LINE__, free_num, data_num);
 		return (tx_buf_max - free_num);
 	} else {
@@ -2019,9 +2075,10 @@ int pcie_post_init(struct sprd_hif *hif)
 {
 	int ret = -EINVAL, chn = 0;
 
-	sc2355_hif.hif = (void *)hif;
+	/* MU300: published before any channel can interrupt (the RX/TX callbacks read it in hard IRQ) */
+	smp_store_release(&sc2355_hif.hif, (void *)hif);
 	/*
-	 * A failed/aborted earlier power cycle clears this pointer in the
+	 * MU300 (from kanoqwq/mu300-linux): a failed/aborted earlier power cycle clears this pointer in the
 	 * error path below.  The vendor driver only restores it in pcie_init(),
 	 * but a later WCN power-on may call post_init directly.  Passing
 	 * &NULL[0] to mchn_init then makes Wi-Fi permanently fail until reboot.
@@ -2049,7 +2106,9 @@ int pcie_post_init(struct sprd_hif *hif)
 err:
 	pr_err("%s: unregister %d ops\n", __func__, sc2355_hif.max_num);
 
-	for (; chn > 0; chn--)
+	/* MU300: undo the channels that were set up and the one that failed, chn .. 0 (the vendor loop stopped at
+	 * 1; a failed channel can be registered with half its EDMA state, and deinit skips one never registered) */
+	for (; chn >= 0; chn--)
 		sprdwcn_bus_chn_deinit(&sc2355_hif.mchn_ops[chn]);
 	sc2355_hif.mchn_ops = NULL;
 	sc2355_hif.max_num = 0;
@@ -2063,7 +2122,8 @@ void pcie_post_deinit(struct sprd_hif *hif)
 
 	for (chn = 0; chn < sc2355_hif.max_num; chn++)
 		sprdwcn_bus_chn_deinit(&sc2355_hif.mchn_ops[chn]);
-	sc2355_hif.hif = NULL;
+	/* MU300: cleared only after every channel is unregistered (the callbacks check for NULL) */
+	WRITE_ONCE(sc2355_hif.hif, NULL);
 	sc2355_hif.max_num = 0;
 
 }

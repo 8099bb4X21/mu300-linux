@@ -8,7 +8,7 @@ K=/src/linux-$KV
 O=/src/out-$KV
 OUT=/work/${OUTDIR:-out}   # as in build.sh
 # every out-of-tree module, in dependency order (wlan/bt use wcn_bsp, the PMIC watchdog and Mali the modem's headers)
-mods=${*:-wcn_bsp sprd_wlan_combo sprdbt_tty sprd_modem sprd_pmic_wdt mali}
+mods=${*:-wcn_bsp sprd_wlan_combo sprdbt_tty sprd_modem sprd_pmic_wdt mali mu300_thermal}
 mkdir -p $OUT/modules
 # a full build starts clean, so no module of another kernel release ends up next to the new ones
 [ $# -gt 0 ] || rm -f $OUT/modules/*.ko $OUT/modules/*.log
@@ -55,9 +55,22 @@ for m in $mods; do
         name=$(basename "$ko" | tr - _)
         ! grep -Fqx "$name" "$O/modules.in-tree.names" || { echo "vendor/in-tree module collision: $name" >&2; exit 1; }
         cp "$ko" "$OUT/modules/"
+        # Keep compact .BTF/.BTF.ext but do not ship multi-megabyte DWARF
+        # from vendor modules now that DEBUG_INFO_BTF_MODULES is enabled.
+        "${CROSS_COMPILE:-}strip" --strip-debug "$OUT/modules/$(basename "$ko")"
     done < <(find /src/mod-build/$m -name '*.ko')
 done
 # Evidence covers every module (including vendor dependencies), not just a shortlist.
+if grep -qx 'CONFIG_DEBUG_INFO_BTF_MODULES=y' "$OUT/kernel.config"; then
+    # A missing vmlinux can silently skip external-module BTF generation.
+    # Verify the actual stripped payload rather than trusting Kconfig alone.
+    for ko in "$OUT"/modules/*.ko; do
+        # Consume all output: grep -q can SIGPIPE readelf under pipefail.
+        "${CROSS_COMPILE:-}readelf" -SW "$ko" | grep -E '\.BTF[[:space:]]+PROGBITS' >/dev/null || {
+            echo "BTF missing from built module: $ko" >&2; exit 1;
+        }
+    done
+fi
 (cd "$OUT" && sha256sum Image kernel.config modules/*.ko > modules.sha256)
 python3 /work/check-container-support.py "$OUT"
 ls -la $OUT/modules/*.ko

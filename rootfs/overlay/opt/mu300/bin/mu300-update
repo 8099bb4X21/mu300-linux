@@ -151,7 +151,7 @@ check() {
 keep_list() {
     case $1 in
         ubuntu) echo "etc/mu300 etc/ssh etc/hostname etc/localtime etc/timezone etc/fstab home root srv usr/local var/lib/bluetooth" ;;
-        openwrt) echo "etc/config etc/mu300 etc/dropbear etc/rc.local root" ;;
+        openwrt) echo "etc/config etc/mu300 etc/unisoc-modem etc/dropbear etc/rc.local root" ;;
     esac
 }
 # vendor files that the published images deliberately do not contain
@@ -162,6 +162,27 @@ vendor_list() {
         # another kernel (the experimental 6.18 port) would be thrown away by an update without this
         openwrt) echo "opt/mu300/android lib/firmware lib/modules" ;;
     esac
+}
+
+# Backport upstream f7df326: BusyBox cp -an skips existing directories instead
+# of merging their contents. The image already has firmware/ and android/,
+# so that used to silently lose the device's firmware/runtime on update.
+# Preserve all image entries, including symlinks; never copy through a target
+# link. find visits each directory before its contents, allowing subtree skips.
+copy_missing() {
+    [ -d "$1" ] && [ -d "$2" ] && [ ! -L "$2" ] || return 1
+    ( cd "$1" && find . ! -name . ) | {
+        skip=
+        while IFS= read -r p; do
+            case $p in "$skip"/*) continue ;; esac
+            if [ -e "$2/$p" ] || [ -L "$2/$p" ]; then
+                { [ -d "$2/$p" ] && [ ! -L "$2/$p" ]; } || skip=$p
+                continue
+            fi
+            cp -a "$1/$p" "$2/$p" || exit 1
+            skip=$p
+        done
+    }
 }
 
 # Accounts are settings too, and /etc/shadow is not in keep_list: an update used to leave the image's own password
@@ -253,8 +274,10 @@ apply_one() {  # apply_one OS TAG
     # firmware and the Android userspace come from this device, never from the release
     for v in $(vendor_list "$os"); do
         [ -d "$old/$v" ] || continue
-        mkdir -p "$new/$v"
-        cp -an "$old/$v/." "$new/$v/" 2>/dev/null || true
+        mkdir -p "$new/$v" && copy_missing "$old/$v" "$new/$v" || {
+            rm -rf "$new"
+            die "$os: copying the vendor files failed, nothing was changed"
+        }
     done
     # services enabled by hand (the links point into the system, so test with -L)
     if [ "$os" = ubuntu ]; then
@@ -391,6 +414,11 @@ boot_update() {  # boot_update TAG   (MU300_KERNEL_BUNDLE=FILE uses a local mu30
         for os in $(installed_systems); do
             case $os in ubuntu) d=$DISK/$os/lib/modules/$krel/extra ;; *) d=$DISK/$os/lib/modules/$krel ;; esac
             mkdir -p "$d" && cp "$tmp"/modules/*.ko "$d/" || { echo "boot: installing the modules into $os failed" >&2; return 1; }
+            # Built-in -> module transitions (cpufreq voltage profiles) need
+            # fresh indexes on OpenWrt too, not only on Ubuntu.
+            for f in modules.builtin modules.builtin.modinfo; do
+                [ ! -f "$tmp/$f" ] || cp "$tmp/$f" "$DISK/$os/lib/modules/$krel/" || return 1
+            done
             if [ "$os" = ubuntu ]; then
                 # what the kernel has built in (bundles from v2026.09.29 on): modprobe of a built-in driver then
                 # succeeds, and depmod stops warning

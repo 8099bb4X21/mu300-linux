@@ -14,7 +14,7 @@
 #
 # Commands per round (about 10, roughly one second on this modem):
 #   AT+CFUN?            radio on/off - the honest state for the toggle
-#   AT+COPS?            operator name + access technology
+#   AT+CSCS?;+COPS?            operator name + access technology
 #   AT+CEREG?           LTE registration, TAC, cell ID
 #   AT+C5GREG?          NR registration - CEREG alone still reports LTE-style AcT on n78
 #   AT+CESQ             RSRP/RSRQ indexes - the fallback when the engineering mode below says nothing
@@ -38,7 +38,7 @@
 #   mu300-dash-cell          full: everything below, ~11 commands, neighbours included
 #   mu300-dash-cell fast     serving-cell tier: CFUN/CEREG/C5GREG/CESQ + the two
 #                            SPENGMD serving reads (~6 commands, well under a second),
-#                            written to sig.json only - the page polls this at 1.5 s
+#                            written to sig.json only - the page polls this at 2 s
 #                            and the slow tier (neighbours, operator, QoS, identity)
 #                            rides the 5 s full cache. A fast round yields to a full
 #                            round in flight (the full round writes sig.json too).
@@ -49,7 +49,7 @@ MODE=${1:-full}
 DIR=${MU300_DASH_DIR:-/tmp/unisoc-modem}
 CELL=$DIR/cell.json
 SIGF=$DIR/sig.json
-STATE_DIR=$(uci -q get unisoc_modem.main.state_dir 2>/dev/null)
+STATE_DIR=${MU300_STATE_DIR:-$(uci -q get unisoc_modem.main.state_dir 2>/dev/null)}
 IDENT_DIR=${MU300_DASH_IDENT_DIR:-${STATE_DIR%/lock-state.d}}
 [ -n "$IDENT_DIR" ] || IDENT_DIR=/etc/unisoc-modem
 IDENT=$IDENT_DIR/sim.json
@@ -66,6 +66,10 @@ mkdir -p "$DIR" "$IDENT_DIR" 2>/dev/null
 ATC=${MU300_DASH_AT_DIR:-}
 at() {
     local cmd=$1 timeout=${2:-5} d out seen=
+    if [ "${MU300_SIM_SLOT:-0}" = 1 ]; then
+        out=$(MU300_AT_LOCK_WAIT=0 "$AT" -t "$timeout" "$cmd" 2>/dev/null) || return 1
+        printf '%s\n' "$out" | tr -d '\r'; return 0
+    fi
     # The assigned regular channel is first. A silent channel fails in about
     # timeout+1 seconds; only then touch the two unpolled disaster channels.
     for d in "$ATC" /run/mu300-at6 /run/mu300-at7 /run/mu300-at; do
@@ -141,7 +145,9 @@ take_lock "$LOCK"
 POOL=${MU300_DASH_POOL_DIR:-/run/unisoc-modem-at-pool}
 mkdir -p "$POOL" 2>/dev/null
 SLOT=
-for n in 6 7; do
+channels='6 7'
+[ "${MU300_SIM_SLOT:-0}" != 1 ] || channels=4
+for n in $channels; do
     s=$POOL/nr$n
     if mkdir "$s" 2>/dev/null; then
         SLOT=$s; ATC=/run/mu300-at$n; break
@@ -330,13 +336,8 @@ reg_fragment() {  # reg_fragment LINE
               (($2=="")?"null":$2), (($3=="")?"null":"\""$3"\""), (($4=="")?"null":"\""$4"\""), act }'
 }
 
-cops_fragment() {  # COPS LINE -> name/plmn/act
-    [ -n "$1" ] || { echo null; return; }
-    printf '%s\n' "$1" | awk -F'"' '{ name = $2; n = split($0, f, ","); act = f[n]; gsub(/[^0-9]/, "", act)
-        plmn = (name ~ /^[0-9]+$/) ? name : ""
-        if (plmn != "") name = ""
-        printf "{\"name\":%s,\"plmn\":%s,\"act\":%s}",
-            (name==""?"null":"\""name"\""), (plmn==""?"null":"\""plmn"\""), (act==""?"null":act) }'
+cops_fragment() {
+    ucode "$(dirname "$0")/operator.uc" "$1" 2>/dev/null || echo null
 }
 
 cesq_fragment() {  # "+CESQ: 24,99,55,255,36,98"
@@ -380,8 +381,47 @@ if [ "$REGISTERED" = 1 ]; then
     SP_LTEPHY=$(at 'AT+SPENGMD=0,0,6' 2 | grep -v '^AT' | grep -- '-' | head -n1)
     SP_NR=$(at 'AT+SPENGMD=0,14,1' 2 | grep -v '^AT' | grep -- '-' | head -n1)
 fi
+
+# "no answer at all" is a modem/daemon problem, not "no signal".
+if [ -z "$CFUN$CEREG$CESQ$SP_LTE$SP_NR$COPS" ]; then
+    ERR="AT backend did not answer (radio off, modem restarting, or adapter unavailable)"
+    printf '{"ts":%d,"error":%s}\n' "$(now)" "$(qs "$ERR")" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
+    [ "$MODE" = full ] && cp "$SIGF" "$CELL"
+    exit 0
+fi
+
+LTE=$(sp_fragment lte "$SP_LTE" "$SP_LTEPHY")
+NR=$(sp_fragment nr "$SP_NR")
+REG=$(reg_fragment "$CEREG")
+REG5=$(reg_fragment "$C5GREG")
+CESQJ=$(cesq_fragment "$CESQ")
+CFUNN=$(n_or_null "$CFUN")
+
+# preferred signal source: NR (NSA/SA), then LTE, then the CESQ fallback
+if [ "$NR" != null ]; then SIG="$NR"; SRC=nr
+elif [ "$LTE" != null ]; then SIG="$LTE"; SRC=lte
+else SIG="$CESQJ"; SRC=cesq; fi
+
+# the fast tier: serving cell + registration only (both modes write it; the page
+# polls this at 2 s and overlays it on the slower full cache)
+printf '{"ts":%d,"cfun":%s,"reg":%s,"reg5g":%s,"sig_src":"%s","sig":%s,"lte":%s,"nr":%s}\n' \
+    "$(now)" "$CFUNN" "$REG" "$REG5" "$SRC" "$SIG" "$LTE" "$NR" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
+
+[ "$MODE" = fast ] && exit 0
+
+# Each atomic publication has an explicit completion state. Frontends retain
+# old QoS/identity/neighbours only while that particular stage is pending.
+publish_cell() {
+    printf '{"ts":%d,"partial":%s,"neigh_pending":%s,"cfun":%s,"reg":%s,"reg5g":%s,"operator":%s,"sig_src":"%s","sig":%s,"lte":%s,"nr":%s,"qos":%s,"neigh":%s,"ident":%s}\n' \
+        "$(now)" "$1" "$2" "$CFUNN" "$REG" "$REG5" "$COPSJ" "$SRC" "$SIG" "$LTE" "$NR" "$QOSJ" "$NEIGH" "$IDENT_JSON" > "$CELL.part" && mv "$CELL.part" "$CELL"
+}
+
 if [ "$MODE" = full ]; then
-    COPS=$(at 'AT+COPS?' 2 | grep '^+COPS:' | head -n1)
+    # One serialized transaction: do not let an SMS charset change interleave.
+    COPS=$(at 'AT+CSCS?;+COPS?' 2)
+    COPSJ=$(cops_fragment "$COPS")
+    NEIGH=null; QOSJ=null
+    publish_cell 1 1
     if [ "$REGISTERED" = 1 ]; then
         SP_LN=$(at 'AT+SPENGMD=0,6,6' 2 | grep -v '^AT' | grep -- '-' | head -n1)
         SP_NRNB=$(at 'AT+SPENGMD=0,14,2' 2 | grep -v '^AT' | grep -- '-' | head -n1)
@@ -390,8 +430,20 @@ if [ "$MODE" = full ]; then
             SP_NRNB=$(at 'AT+SPQ5GNCELLEX' 2 | sed -n 's/^+SPQ5GNCELLEX: *//p' | head -n1)
             SP_NRNB_SOURCE=spq
         fi
+    fi
+    LN=$(sp_fragment ltenb "$SP_LN")
+    NN=$(nr_neighbours "$SP_NRNB" "$SP_NRNB_SOURCE")
+    # one neighbour list, NR first (the page shows NR cells at the top)
+    if [ -n "$NN" ] && [ -n "$LN" ]; then NEIGH="[$NN,$LN]"
+    elif [ -n "$NN" ]; then NEIGH="[$NN]"
+    elif [ -n "$LN" ]; then NEIGH="[$LN]"
+    else NEIGH=null; fi
+
+    publish_cell 1 0
+    if [ "$REGISTERED" = 1 ]; then
         QOS=$(at 'AT+CGEQOSRDP=1' 2 | sed -n 's/^+CGEQOSRDP: *//p' | head -n1)
     fi
+    QOSJ=$(qos_fragment "$QOS")
     IDENT_AGE=999999
     [ -s "$IDENT" ] && IDENT_AGE=$(( $(now) - $(date -r "$IDENT" +%s 2>/dev/null || echo 0) ))
     if [ "$IDENT_AGE" -ge 0 ] && [ "$IDENT_AGE" -le "$IDENT_MAXAGE" ] &&
@@ -432,44 +484,4 @@ if [ "$MODE" = full ]; then
         "$IDENT_JSON" "$(qs "$i_msisdn")" "$(qs "$i_msisdn_source")")
 fi
 
-# "no answer at all" is a modem/daemon problem, not "no signal".
-if [ -z "$CFUN$CEREG$CESQ$SP_LTE$SP_NR$COPS" ]; then
-    ERR="AT backend did not answer (radio off, modem restarting, or adapter unavailable)"
-    printf '{"ts":%d,"error":%s}\n' "$(now)" "$(qs "$ERR")" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
-    [ "$MODE" = full ] && cp "$SIGF" "$CELL"
-    exit 0
-fi
-
-LTE=$(sp_fragment lte "$SP_LTE" "$SP_LTEPHY")
-NR=$(sp_fragment nr "$SP_NR")
-REG=$(reg_fragment "$CEREG")
-REG5=$(reg_fragment "$C5GREG")
-CESQJ=$(cesq_fragment "$CESQ")
-CFUNN=$(n_or_null "$CFUN")
-
-# preferred signal source: NR (NSA/SA), then LTE, then the CESQ fallback
-if [ "$NR" != null ]; then SIG="$NR"; SRC=nr
-elif [ "$LTE" != null ]; then SIG="$LTE"; SRC=lte
-else SIG="$CESQJ"; SRC=cesq; fi
-
-# the fast tier: serving cell + registration only (both modes write it; the page
-# polls this at 1.5 s and overlays it on the slower full cache)
-printf '{"ts":%d,"cfun":%s,"reg":%s,"reg5g":%s,"sig_src":"%s","sig":%s,"lte":%s,"nr":%s}\n' \
-    "$(now)" "$CFUNN" "$REG" "$REG5" "$SRC" "$SIG" "$LTE" "$NR" > "$SIGF.part" && mv "$SIGF.part" "$SIGF"
-
-[ "$MODE" = fast ] && exit 0
-
-# the full tier: everything else the page needs only every few seconds
-LN=$(sp_fragment ltenb "$SP_LN")
-NN=$(nr_neighbours "$SP_NRNB" "$SP_NRNB_SOURCE")
-# one neighbour list, NR first (the page shows NR cells at the top)
-if [ -n "$NN" ] && [ -n "$LN" ]; then NEIGH="[$NN,$LN]"
-elif [ -n "$NN" ]; then NEIGH="[$NN]"
-elif [ -n "$LN" ]; then NEIGH="[$LN]"
-else NEIGH=null; fi
-
-COPSJ=$(cops_fragment "$COPS")
-QOSJ=$(qos_fragment "$QOS")
-
-printf '{"ts":%d,"cfun":%s,"reg":%s,"reg5g":%s,"operator":%s,"sig_src":"%s","sig":%s,"lte":%s,"nr":%s,"qos":%s,"neigh":%s,"ident":%s}\n' \
-    "$(now)" "$CFUNN" "$REG" "$REG5" "$COPSJ" "$SRC" "$SIG" "$LTE" "$NR" "$QOSJ" "$NEIGH" "$IDENT_JSON" > "$CELL.part" && mv "$CELL.part" "$CELL"
+publish_cell 0 0

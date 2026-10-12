@@ -24,7 +24,12 @@ OPLOCK=${MU300_SMS_OP_LOCK:-/tmp/mu300-sms-op.lock}
 die() { echo "mu300-sms: $*" >&2; exit 1; }
 
 at() {  # at CMD [timeout] -> reply lines
-    mu300-at -t "${2:-6}" "$1"
+    local cmd=$1
+    case ${MU300_SIM_SLOT:-} in
+        0|1) case "$cmd" in AT*) cmd="AT+SPACTCARD=$MU300_SIM_SLOT;${cmd#AT}" ;; esac ;;
+        '') ;; *) return 1 ;;
+    esac
+    mu300-at -t "${2:-6}" "$cmd"
 }
 
 # ------------------------------------------------------------------ the pool

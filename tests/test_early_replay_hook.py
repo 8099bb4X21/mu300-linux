@@ -9,6 +9,12 @@ ATD = TOP / 'openwrt/overlay/etc/init.d/mu300-atd'
 
 
 class EarlyReplayHook(unittest.TestCase):
+    def test_replay_files_are_required_in_both_build_inventories(self):
+        for name in ('tools/build-openwrt-tf-magisk.sh', 'tools/make-release.sh'):
+            source = (TOP / name).read_text()
+            for file in ('lock', 'boot-replay'):
+                self.assertIn(f'./usr/libexec/unisoc-modem/{file} ', source)
+
     def test_hook_is_after_handshake_and_radio_off_check(self):
         radio = RADIO.read_text(encoding='utf-8')
         start = radio.index('radio_on_locked()')

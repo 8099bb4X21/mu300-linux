@@ -36,9 +36,20 @@ case $backend in
 		legacy=$(find_mu300_at)
 		[ -n "$legacy" ] || { echo "unisoc-at: mu300-at not found" >&2; exit 127; }
 		[ "$available" = 0 ] || exit 0
+		case ${MU300_SIM_SLOT:-} in
+			0|1)
+				case "$cmd" in AT*|at*) cmd="AT+SPACTCARD=$MU300_SIM_SLOT;${cmd#??}" ;; *) exit 2 ;; esac
+				# Slot 1 must never fail over into the slot-0 dialer or NR0 URC.
+				if [ "$MU300_SIM_SLOT" = 1 ]; then
+					export MU300_AT_DIR=/run/mu300-at4
+					[ -p "$MU300_AT_DIR/cmd" ] || { echo 'unisoc-at: SIM 2 channel unavailable' >&2; exit 1; }
+				fi
+				;;
+		esac
 		exec "$legacy" -t "$timeout" "$cmd"
 		;;
 	atinout)
+		[ "${MU300_SIM_SLOT:-0}" = 0 ] || { echo 'unisoc-at: backend has no SIM addressing' >&2; exit 1; }
 		[ -c "$port" ] || { echo "unisoc-at: AT port $port is unavailable" >&2; exit 1; }
 		[ "$available" = 0 ] || exit 0
 		lock=/var/lock/unisoc-modem-at.lock

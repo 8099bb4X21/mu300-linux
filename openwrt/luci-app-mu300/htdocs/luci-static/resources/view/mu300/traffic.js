@@ -5,12 +5,13 @@
 
 function formatUsage(n) { return M.fmtTrafficBytes(n); }
 var ERRORS = { invalid_config: '配置无效', traffic_unavailable: '流量统计服务暂不可用',
-	storage_failed: '统计数据保存失败', clock_unsynced: '系统时间尚未同步' };
+	storage_failed: '统计数据保存失败', clock_unsynced: '系统时间尚未同步', confirmation_required: '请先确认清空操作' };
 
 return view.extend({
 	load: function() { return L.resolveDefault(M.callTrafficGet(), {}); },
 	render: function(data) {
 		M.injectCss(); M.localizeMenu();
+		this._disposed = false; this._epoch = 0; this._mutating = false; this._confirming = false;
 		var root = document.createElement('div'); root.className = 'mud';
 		root.innerHTML = `
 <style>
@@ -67,11 +68,19 @@ return view.extend({
  <div class="mud-tr-scroll"><table class="mud-tr-table"><thead><tr><th>月份</th><th>下行</th><th>上行</th><th>合计</th></tr></thead><tbody id="mud-tr-months"></tbody></table></div>
  <div class="mud-note" style="margin-top:12px">从启用统计时开始记录；统计约每 10 秒更新、每 60 秒保存。突然断电可能损失最近未保存的记录。</div>
  <div class="mud-note">本地网卡统计供参考，计费以运营商为准。额度用于显示和提醒，不会自动断网。</div>
+ <div class="mud-tr-actions"><button class="mud-btn warn" id="mud-tr-clear">清空流量记录</button></div>
+ <div class="mud-note">仅清除本地统计，不会重置运营商账单，也不会断开网络。</div>
 </section>`;
 		M.localize(root); this.root = root; this.data = data || {};
 		this.fill(this.data.config || {}); this.paint(); this.wire();
-		var self = this; poll.add(function() { return self.refresh(); }, 10);
+		var self = this; this._poll = function() { return self.refresh(); }; poll.add(this._poll, 10);
+		M.simSelector(root);
 		return root;
+	},
+	unload: function() {
+		this._disposed = true; this._epoch++;
+		if (this._poll) poll.remove(this._poll);
+		if (this._toast) this._toast.close();
 	},
 	q: function(k) { return this.root.querySelector('#mud-tr-' + k); },
 	fill: function(c) {
@@ -101,6 +110,7 @@ return view.extend({
 			if (!s.available) warnings.push('统计网卡暂不可用');
 			if (!s.clock_ok) warnings.push('系统时间尚未同步');
 			if (s.storage_error) warnings.push('统计数据保存失败');
+			if (s.mapping_error) warnings.push('两张 SIM 映射到同一网卡，已暂停第二卡统计以避免重复计费');
 			if (s.over_limit) warnings.push('已达到套餐额度');
 			if (s.daily_over_limit) warnings.push('已达到每日参考额度');
 		}
@@ -112,13 +122,57 @@ return view.extend({
 		});
 	},
 	refresh: function() {
+		if (this._disposed || this._mutating) return Promise.resolve();
+		var self = this, epoch = this._epoch;
+		if (this._refresh && this._refresh.epoch === epoch) return this._refresh.promise;
+		var request = { epoch: epoch }; this._refresh = request;
+		request.promise = L.resolveDefault(M.callTrafficGet(), {}).then(function(d) {
+			if (self._disposed || self._epoch !== epoch) return;
+			self.data = d; self.paint();
+		}).finally(function() { if (self._refresh === request) self._refresh = null; });
+		return request.promise;
+	},
+	mutate: function(button, invoke, clearing) {
+		if (this._disposed || this._mutating) return Promise.resolve();
 		var self = this;
-		return L.resolveDefault(M.callTrafficGet(), {}).then(function(d) { self.data = d; self.paint(); });
+		this._mutating = true; this._epoch++;
+		this.q('save').disabled = this.q('clear').disabled = true;
+		M.busy(button, true);
+		if (this._toast) this._toast.close();
+		var toast = this._toast = M.toast(clearing ? '正在清空流量记录…' : '正在保存流量池设置…', {type:'busy', timeout:0});
+		return Promise.resolve().then(invoke).then(function(r) {
+			if (self._disposed) return;
+			if (!r || !r.ok) toast.update(ERRORS[r && r.error] || (clearing ? '清空失败' : '保存失败'), 'error');
+			else {
+				self.q('used_gb').value = '';
+				if (r.data) { self.data = r.data; self.paint(); }
+				toast.update(clearing ? '流量记录已清空' : '已保存', 'success');
+			}
+		}, function() {
+			if (!self._disposed) toast.update(clearing ? '清空失败' : '保存失败', 'error');
+		}).finally(function() {
+			self._mutating = false; M.busy(button, false);
+			if (!self._disposed) {
+				self.q('save').disabled = self.q('clear').disabled = false;
+				self.refresh();
+				setTimeout(function() { toast.close(); }, 3000);
+			}
+		});
 	},
 	wire: function() {
 		var self = this;
 		this.q('refresh').onclick = function() { self.refresh(); };
+		this.q('clear').onclick = function() {
+			if (self._mutating || self._confirming) return;
+			self._confirming = true;
+			M.confirmBox('清空所有流量记录？',
+				'将清空今日、每月历史和套餐周期校准，并从当前网卡计数重新开始。已保存的套餐额度、结算日、计量方式和统计网卡保持不变。此操作不可撤销。',
+				{danger:true, okText:'清空'}).then(function(yes) {
+				if (yes && !self._disposed) return self.mutate(self.q('clear'), function() { return M.callTrafficClear(true); }, true);
+			}).finally(function() { self._confirming = false; });
+		};
 		this.q('save').onclick = function() {
+			if (self._mutating || self._confirming) return;
 			var p = { plan_name:self.q('plan_name').value.trim(), device:self.q('device').value.trim(), count_mode:self.q('count_mode').value,
 				monthly_gb:Number(self.q('monthly_gb').value), daily_gb:Number(self.q('daily_gb').value), reset_day:Number(self.q('reset_day').value) };
 			if (self.q('used_gb').value.trim() !== '') p.used_gb = Number(self.q('used_gb').value);
@@ -126,18 +180,12 @@ return view.extend({
 				['monthly_gb','daily_gb','used_gb'].some(function(k) { return p[k] != null && (!Number.isFinite(p[k]) || p[k] < 0 || p[k] > 100000); })) {
 				M.toast('配置无效', {type:'error'}); return;
 			}
+			self._confirming = true;
 			var confirmed = p.used_gb == null ? Promise.resolve(true) :
 				M.confirmBox('校准本周期已用流量？', '这会将当前套餐周期已用值调整为输入值，每日和自然月记录不变。', {okText:'保存'});
 			confirmed.then(function(yes) {
-				if (!yes) return;
-				M.busy(self.q('save'), true); var toast = M.toast('正在保存流量池设置…', {type:'busy', timeout:0});
-				L.resolveDefault(M.callTrafficSet(JSON.stringify(p)), {}).then(function(r) {
-					M.busy(self.q('save'), false);
-					if (!r.ok) toast.update(ERRORS[r.error] || '保存失败', 'error');
-					else { self.q('used_gb').value = ''; toast.update('已保存', 'success'); self.refresh(); }
-					setTimeout(function() { toast.close(); }, 3000);
-				});
-			});
+				if (yes && !self._disposed) return self.mutate(self.q('save'), function() { return M.callTrafficSet(JSON.stringify(p)); }, false);
+			}).finally(function() { self._confirming = false; });
 		};
 	}
 });

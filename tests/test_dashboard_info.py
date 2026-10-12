@@ -1,6 +1,8 @@
 """Hot-path shell helpers must preserve the dashboard's JSON wire values."""
 import json
 import shlex
+import shutil
+import unittest
 
 from helpers import ShellTest, TOP
 
@@ -9,6 +11,21 @@ INFO = TOP / 'openwrt' / 'luci-app-mu300' / 'root' / 'usr' / 'libexec' / 'unisoc
 
 
 class DashboardInfo(ShellTest):
+    def test_dns_reuses_both_status_snapshots(self):
+        script = INFO.read_text()
+        self.assertIn('wan_dns=$(wan_dns_servers "$WANJSON" "$WAN6JSON")', script)
+        helper = script[script.index('wan_dns_servers() {'):script.index('\nwan_up=')]
+        self.assertIn('jsonfilter -s "$snapshot"', helper)
+        self.assertNotIn('ubus call', helper)
+        self.assertNotIn('jarr_dns', script)
+
+    @unittest.skipUnless(shutil.which('jsonfilter'), 'also run fixture in OpenWrt container/device')
+    def test_dns_with_real_jsonfilter(self):
+        for shell in self.each_shell():
+            result = self.script(shell, TOP/'tests/dashboard_dns_fixture.sh', INFO)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PASS dashboard DNS', result.stdout)
+
     def station_code(self):
         script = INFO.read_text()
         helpers = script[script.index('n_or_null() {'):script.index('# ------------------------------------------------------------- temperature')]

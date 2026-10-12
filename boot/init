@@ -531,6 +531,17 @@ if [ "$root_mounted" = 1 ] && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
     echo "$DEVICE" > /run/mu300/device
     init=/sbin/init
     [ -x /newroot/lib/systemd/systemd ] && init=/lib/systemd/systemd
+    # Mainline cpufreq is now modular so an updated rootfs can read a saved
+    # voltage profile before loading it. Old roots still boot at factory voltage.
+    # Do not load it here when the rootfs adapter exists (one-shot firmware ABI).
+    if [ ! -x /newroot/opt/mu300/bin/cpu-voltage-platform ]; then
+        for cpu_ko in /newroot/lib/modules/$(uname -r)/sprd-cpufreq-v2-driver.ko \
+                      /newroot/lib/modules/$(uname -r)/extra/sprd-cpufreq-v2-driver.ko; do
+            [ -f "$cpu_ko" ] || continue
+            insmod "$cpu_ko" voltage_offset_uv=0,0,0 2>/run/cpufreq.err || log 'stage=cpufreq-default-failed'
+            break
+        done
+    fi
     log "stage=switch-root root=$rootdir init=$init os=$(sed -n 's/^PRETTY_NAME=//p' /newroot/etc/os-release)"
     persist
     kill $(jobs -p) 2>/dev/null

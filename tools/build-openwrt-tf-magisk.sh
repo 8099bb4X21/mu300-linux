@@ -49,13 +49,16 @@ for m in "$UO"/modules/*.ko; do
     [ "$v" = "$rel" ] || { echo "$m is built for '$v', Image is '$rel'" >&2; exit 1; }
 done
 # The TF path packages modules directly rather than going through make-bundle.sh.
-# Check the shared WLAN source here too, or an old module can silently undo the
-# IPv6 RX checksum fix even when its vermagic matches the newly built Image.
-wlan_module=$UO/modules/sprd_wlan_combo.ko
-if [ -n "$(find "$TOP/upstream/modules/sprd_wlan_combo" -type f -newer "$wlan_module" -print -quit)" ]; then
-    echo "WLAN source is newer than $wlan_module; rebuild sprd_wlan_combo for $rel" >&2
-    exit 1
-fi
+# Check both shared wireless modules: matching vermagic does not prove that
+# the IPv6 checksum or TX-pressure logging fixes reached the built binaries.
+for wireless_driver in sprd_wlan_combo wcn_bsp mu300_thermal; do
+    wireless_module=$UO/modules/$wireless_driver.ko
+    [ -s "$wireless_module" ] || { echo "missing $wireless_module" >&2; exit 1; }
+    if [ -n "$(find "$TOP/upstream/modules/$wireless_driver" -type f -newer "$wireless_module" -print -quit)" ]; then
+        echo "$wireless_driver source is newer than $wireless_module; rebuild it for $rel" >&2
+        exit 1
+    fi
+done
 
 echo "==> OpenWrt rootfs ($rel modules included)"
 MU300_GPU=0 MU300_INPUTS="$IN" MU300_MAINLINE_OUT="$UO" MU300_LUCI_PLUGIN_SRC="$PLUGIN" \
@@ -64,11 +67,29 @@ MU300_GPU=0 MU300_INPUTS="$IN" MU300_MAINLINE_OUT="$UO" MU300_LUCI_PLUGIN_SRC="$
 # own: post-process the built rootfs (extra packages, defaults) when asked
 [ -z "${MU300_POST_ROOTFS:-}" ] || sh "$MU300_POST_ROOTFS" "$ROOTFS"
 for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
-    ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd \
-    ./opt/mu300/bin/mu300-usb ./etc/init.d/mu300-post ./etc/init.d/mu300-atd \
-    ./etc/init.d/mu300-smsd ./etc/sysctl.d/99-mu300-console.conf \
+    ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd ./opt/mu300/bin/mu300-at \
+    ./opt/mu300/bin/mu300-usb ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/mu300-data-sim ./opt/mu300/bin/mu300-dual-radio ./etc/init.d/mu300-post ./etc/init.d/mu300-atd \
+    ./etc/init.d/mu300-smsd ./opt/mu300/bin/mu300-smsd ./opt/mu300/bin/mu300-sms ./etc/sysctl.d/99-mu300-console.conf \
     ./usr/share/luci/menu.d/luci-app-mu300.json \
     ./www/luci-static/resources/view/mu300/home.js \
+    ./www/luci-static/resources/mu300/refresh.js \
+    ./www/luci-static/resources/view/mu300/sms.css \
+    ./usr/libexec/unisoc-modem/dashboard-rates \
+    ./usr/libexec/unisoc-modem/lock ./usr/libexec/unisoc-modem/boot-replay ./usr/libexec/unisoc-modem/sim-scope.sh \
+    ./usr/libexec/unisoc-modem/lock-apply.sh ./usr/libexec/unisoc-modem/lock-jobs.sh \
+    ./usr/libexec/unisoc-modem/traffic ./usr/libexec/unisoc-modem/traffic-core.uc \
+    ./usr/libexec/unisoc-modem/hotspot ./usr/libexec/unisoc-modem/hotspot.uc \
+    ./www/luci-static/resources/view/mu300/traffic.js ./etc/init.d/unisoc-traffic \
+    ./www/luci-static/resources/view/mu300/cpu.js ./etc/init.d/unisoc-cpu \
+    ./usr/libexec/unisoc-modem/cpu ./usr/libexec/unisoc-modem/cpu.uc \
+    ./usr/libexec/unisoc-modem/cpu-thermal.uc \
+    ./usr/libexec/unisoc-modem/cpu-voltage ./usr/libexec/unisoc-modem/cpu-voltage.uc \
+    ./opt/mu300/bin/cpu-voltage-platform ./etc/init.d/mu300-cpu-driver \
+    ./etc/rc.d/S08mu300-cpu-driver ./etc/rc.d/K89unisoc-cpu \
+    ./usr/libexec/unisoc-modem/sms-forward ./usr/libexec/unisoc-modem/forward-template.uc \
+    ./www/luci-static/resources/view/mu300/forward.js ./etc/init.d/unisoc-sms-forward \
+    ./usr/libexec/unisoc-modem/data-sim ./www/luci-static/resources/view/mu300/sim.js \
+    ./usr/libexec/unisoc-modem/operator.uc ./usr/libexec/unisoc-modem/refresh-config \
     ./www/luci-static/resources/view/mu300/device.js \
     ./usr/libexec/unisoc-modem/device-usb \
     ./etc/hotplug.d/net/90-unisoc-usb-host \

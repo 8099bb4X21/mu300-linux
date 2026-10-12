@@ -44,7 +44,7 @@ start_service() {
 	# second instance on nr2 (mobile-data's dedicated channel)
 	procd_open_instance atd2
 	procd_set_param command /bin/sh -c "$(wait_and_exec /dev/stty_nr2 /opt/mu300/bin/mu300-atd)"
-	procd_set_param env MU300_AT_DEV=/dev/stty_nr2 MU300_AT_DIR=/run/mu300-at2 MU300_AT_URC_CHANNELS=
+	procd_set_param env MU300_AT_DEV=/dev/stty_nr2 MU300_AT_DIR=/run/mu300-at2 MU300_AT_URC_CHANNELS= MU300_AT_ALIVE_LOG=/run/mu300-at/urc/stty_nr0.log
 	procd_set_param respawn 3600 10 0
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -53,10 +53,23 @@ start_service() {
 	# Keep slot 1's nr3/nr4/nr5 open like the vendor RIL does. The optional
 	# nr6/nr7 channels are the bounded slot-0 dashboard pool; all descriptors
 	# remain open for the life of the boot so failover never requires a reopen.
+	local n urc pool alive_log
 	for n in 3 4 5 6 7; do
+		# NR3 is the slot-1 URC stream, not an extra command reader. Ownership
+		# changes only at boot: never restart atd to enable this on a live CP.
+		[ "$n" != 3 ] || [ "$(uci -q get unisoc_modem.main.sim_slots)" != 2 ] || continue
 		procd_open_instance atd$n
 		procd_set_param command /bin/sh -c "$(wait_and_exec /dev/stty_nr$n /opt/mu300/bin/mu300-atd)"
-		procd_set_param env MU300_AT_DEV=/dev/stty_nr$n MU300_AT_DIR=/run/mu300-at$n MU300_AT_URC_CHANNELS=
+		urc= pool=/etc/mu300/sms alive_log=/run/mu300-at/urc/stty_nr0.log
+		case "$n" in 3|4|5)
+			pool=/etc/mu300/sms/sim1
+			if [ "$n" = 4 ] && [ "$(uci -q get unisoc_modem.main.sim_slots)" = 2 ]; then
+				urc=3 alive_log=/run/mu300-at4/urc/stty_nr3.log
+			fi ;;
+		esac
+		# Set the env table ONCE. Adding another table with the same JSON key
+		# can leave procd with only MU300_AT_DEV and the wrong owner directory.
+		procd_set_param env MU300_AT_DEV=/dev/stty_nr$n MU300_AT_DIR=/run/mu300-at$n MU300_AT_URC_CHANNELS=$urc MU300_SMS_POOL=$pool MU300_AT_ALIVE_LOG=$alive_log
 		procd_set_param respawn 3600 10 0
 		procd_set_param stdout 1
 		procd_set_param stderr 1

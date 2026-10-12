@@ -1,6 +1,12 @@
 #!/bin/sh
 # Stop the temporary preinit DHCP server only when the real LAN is up.
 [ "$ACTION" = ifup ] && [ "$INTERFACE" = lan ] || exit 0
+# RNDIS must be a bridge port before removing its inherited preinit address.
+# Installed bridge configurations can predate the user's switch to RNDIS.
+if [ -e /sys/class/net/rndis0 ]; then
+	ip link set rndis0 master br-lan 2>/dev/null
+	ip link set rndis0 up 2>/dev/null
+fi
 pid=$(cat /run/mu300-early-udhcpd.pid 2>/dev/null)
 [ -n "$pid" ] && kill "$pid" 2>/dev/null
 rm -f /run/mu300-early-udhcpd.pid
@@ -17,17 +23,12 @@ bridge_ip=$(ip -4 -o addr show dev br-lan 2>/dev/null | awk 'NR == 1 { print $4 
 if [ -n "$bridge_ip" ]; then
 	for nic in usb0 rndis0; do
 		ip -o link show dev "$nic" 2>/dev/null | grep -q 'master br-lan' || continue
-		ip -4 -o addr show dev "$nic" 2>/dev/null | grep -Fq "inet $bridge_ip " || continue
-		ip addr del "$bridge_ip" dev "$nic" 2>/dev/null || true
+		# Match the address even when preinit and netifd used different prefixes.
+		nic_ip=$(ip -4 -o addr show dev "$nic" 2>/dev/null |
+			awk -v a="${bridge_ip%/*}" '{ split($4, p, "/"); if (p[1] == a) { print $4; exit } }')
+		[ -n "$nic_ip" ] || continue
+		ip addr del "$nic_ip" dev "$nic" 2>/dev/null || true
 	done
-fi
-
-# On an already-installed rootfs, firstboot's bridge UCI section predates a
-# later switch to RNDIS. Reattach its gadget netdev after every LAN ifup, not
-# only the first boot; this also covers a network reload from Device Management.
-if [ -e /sys/class/net/rndis0 ]; then
-	ip link set rndis0 master br-lan 2>/dev/null
-	ip link set rndis0 up 2>/dev/null
 fi
 
 # The final NCM endpoint health check/rebind is a procd one-shot in mu300-post.

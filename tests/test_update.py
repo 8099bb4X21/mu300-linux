@@ -2,6 +2,8 @@
 release it takes, the kernel choice, the byte helpers it edits boot image headers with, and whether a kernel bundle
 may go onto this device."""
 import io
+import os
+import shutil
 import struct
 import tarfile
 import unittest
@@ -29,6 +31,109 @@ class Update(ShellTest):
         for shell in self.each_shell():
             r = self.up(shell, 'echo loaded')
             self.assertEqual((r.returncode, r.stdout), (0, 'loaded\n'), r.stderr)
+
+    @unittest.skipUnless(shutil.which('busybox'), 'requires the real BusyBox cp applet')
+    def test_busybox_existing_directory_regression(self):
+        source, target = self.tmp / 'source', self.tmp / 'target'
+        source.mkdir(); target.mkdir()
+        (source / 'wcnmodem.bin').write_bytes(b'firmware')
+        (target / 'regulatory.db').write_bytes(b'image')
+        for shell in self.each_shell():
+            # Reproduce the old implementation, then test the replacement
+            # against the same applet (not GNU cp behind a mocked shell).
+            (target / 'wcnmodem.bin').unlink(missing_ok=True)
+            r = self.up(shell, f'busybox cp -an "{source}/." "{target}/"')
+            # Older BusyBox builds reject -n outright; the old updater hid
+            # that error with `|| true`, causing the same missing firmware.
+            if r.returncode:
+                self.assertIn('invalid option', r.stderr)
+            self.assertFalse((target / 'wcnmodem.bin').exists())
+            r = self.up(shell, f'cp() {{ busybox cp "$@"; }}; copy_missing "{source}" "{target}"')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual((target / 'wcnmodem.bin').read_bytes(), b'firmware')
+            self.assertEqual((target / 'regulatory.db').read_bytes(), b'image')
+
+    def test_copy_missing_preserves_image_entries_and_links(self):
+        source, target, outside = self.tmp / 'source', self.tmp / 'target', self.tmp / 'outside'
+        (source / 'blocked/subdir').mkdir(parents=True)
+        (source / 'blocked/subdir/no-write').write_text('vendor')
+        (source / 'dangling').mkdir()
+        (source / 'dangling/no-write').write_text('vendor')
+        (source / 'name with space').write_text('vendor')
+        (source / '.hidden').write_text('hidden')
+        (source / 'kept').write_text('old')
+        (source / 'link').symlink_to('name with space')
+        target.mkdir(); outside.mkdir()
+        (target / 'blocked').symlink_to(outside)
+        (target / 'dangling').symlink_to(outside / 'absent')
+        (target / 'kept').write_text('image')
+        for shell in self.each_shell():
+            r = self.up(shell, f'copy_missing "{source}" "{target}"')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertEqual((target / 'kept').read_text(), 'image')
+            self.assertEqual((target / 'name with space').read_text(), 'vendor')
+            self.assertEqual((target / '.hidden').read_text(), 'hidden')
+            self.assertEqual(os.readlink(target / 'link'), 'name with space')
+            for name in ('name with space', '.hidden', 'link'):
+                (target / name).unlink()
+            r = self.up(shell, f'copy_missing "{source}" "{target}/blocked"')
+            self.assertNotEqual(r.returncode, 0)
+
+    def vendor_update_fixture(self):
+        old = self.disk / 'openwrt'
+        files = {'opt/mu300/android/system/bin/cltest': b'old',
+                 'opt/mu300/android/vendor/bin/modem_control': b'vendor',
+                 'opt/mu300/android/dev-properties/property_info': b'properties',
+                 'lib/firmware/wcnmodem.bin': b'firmware',
+                 'lib/firmware/wifi_board_config.ini': b'board',
+                 'lib/firmware/regulatory.db': b'old',
+                 'lib/modules/7.2.8/wcn_bsp.ko': b'module',
+                 'etc/unisoc-modem/cpu-voltage.json': b'{"offsets":[0,0,0]}',
+                 'etc/config/wireless': b'my-settings'}
+        for name, data in files.items():
+            path = old / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        stage = self.disk / '.mu300-update'
+        stage.mkdir(exist_ok=True)
+        with tarfile.open(stage / 'mu300-openwrt-rootfs.tar.gz', 'w:gz') as archive:
+            for name, data in [('sbin/init', b'#!/bin/sh\n'),
+                               ('etc/mu300/image-version', b'test-new\n'),
+                               ('lib/firmware/regulatory.db', b'image'),
+                               ('opt/mu300/android/system/bin/cltest', b'image')]:
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                member.mode = 0o755 if name == 'sbin/init' else 0o644
+                archive.addfile(member, io.BytesIO(data))
+        return old, files
+
+    def test_update_carries_vendor_files_before_switch(self):
+        for shell in self.each_shell():
+            old, files = self.vendor_update_fixture()
+            r = self.up(shell, 'sync() { :; }; is_root() { false; }; apply_one openwrt test-new')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            for name, data in files.items():
+                expected = b'image' if name.endswith(('cltest', 'regulatory.db')) else data
+                self.assertEqual((old / name).read_bytes(), expected, name)
+                self.assertEqual((self.disk / 'openwrt.old' / name).read_bytes(), data)
+            self.assertEqual((old / 'etc/mu300/image-version').read_text(), 'test-new\n')
+            shutil.rmtree(old)
+            shutil.rmtree(self.disk / 'openwrt.old')
+
+    def test_vendor_copy_failure_keeps_old_system(self):
+        for shell in self.each_shell():
+            old, files = self.vendor_update_fixture()
+            r = self.up(shell, '''sync() { :; }; is_root() { false; };
+                cp() { case "$*" in *wcnmodem.bin*) return 1;; esac; command cp "$@"; }
+                apply_one openwrt test-new''')
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('copying the vendor files failed', r.stderr)
+            self.assertFalse((self.disk / 'openwrt.old').exists())
+            self.assertFalse((self.disk / 'openwrt.new').exists())
+            for name, data in files.items():
+                self.assertEqual((old / name).read_bytes(), data)
+            shutil.rmtree(old)
 
     def test_rootfs_asset(self):
         osr = self.disk / 'ubuntu' / 'etc' / 'os-release'

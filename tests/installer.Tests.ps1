@@ -13,7 +13,7 @@ function Check($name, $got, $want) {
 
 # the functions under test, straight from install.ps1
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Top "install.ps1"), [ref]$null, [ref]$null)
-$want = 'LoadLanguage', 'T', 'NormalizeAnswer', 'Gib'
+$want = 'LoadLanguage', 'T', 'NormalizeAnswer', 'Gib', 'RegionOnDisk'
 $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $want -contains $n.Name }, $true)
 foreach ($d in $defs) { . ([scriptblock]::Create($d.Extent.Text)) }
 foreach ($w in 'LoadLanguage', 'T', 'NormalizeAnswer') {
@@ -54,6 +54,19 @@ foreach ($k in $cases.Keys) { Check "NormalizeAnswer $k" (NormalizeAnswer $k) $c
 # ---- Gib (the sizes the free-space check prints) ----------------------------------------------------------------
 if (Get-Command Gib -ErrorAction SilentlyContinue) {
     Check 'Gib' ((Gib 34828075008) -replace ',', '.') '32.4 GiB'
+}
+
+# Only evaluate the extracted guard/loop, never execute an installer or adb.
+$disk = [int64]33554432
+foreach ($case in @(@(-1, $false), @(0, $true), @(17179867136, $true), @(17179867137, $false), @(27762098176, $false))) {
+    Check "RegionOnDisk $($case[0])" (RegionOnDisk $case[0]) $case[1]
+}
+$uninstallText = [IO.File]::ReadAllText((Join-Path $Top 'uninstall.ps1'))
+$guard = ($uninstallText -split "`n" | Where-Object { $_ -match 'if \(\$cand -lt 0 -or' })
+Check 'uninstall bounds guard exists' ([bool]$guard) $true
+if ($guard) {
+    $loop = 'foreach ($cand in @(-1, 0, 17179867136, 17179867137, 27762098176)) { ' + $guard + '; $cand }'
+    Check 'uninstall bounded probes' ((& ([scriptblock]::Create($loop))) -join ',') '0,17179867136'
 }
 
 Write-Host "$script:passed passed, $script:failed failed"

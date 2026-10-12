@@ -19,36 +19,44 @@ return view.extend({
 		M.injectCss();
 		M.watchSms();
 		var root = document.createElement('div');
-		root.className = 'mud';
+		root.className = 'mud mud-sms';
 		root.innerHTML = `
 <div class="mud-sec" style="margin-top:0">
-  <h3>短信 <span id="mud-sms-stat" style="font-weight:400"></span></h3>
+  <div class="mud-sms-heading"><h2>短信</h2><span id="mud-sms-stat"></span></div>
   <div class="mud-note" id="mud-sms-capacity" style="display:none;margin-bottom:10px"></div>
-  <input id="mud-sms-num" placeholder="收件人：号码，如 10086 或 +86..." spellcheck="false"
-    style="width:100%;margin-bottom:8px;padding:7px 11px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222)"/>
-  <div class="mud-ctl" style="max-width:460px;margin-bottom:8px">
+  <div class="mud-sms-toolbar">
     <button class="mud-btn" id="mud-sms-refresh">刷新</button>
     <button class="mud-btn" id="mud-sms-sync">从 SIM 同步</button>
     <button class="mud-btn warn" id="mud-sms-clear">清空本地池</button>
   </div>
   <div class="mud-chat">
-    <div class="mud-convs" id="mud-sms-convs"><div class="mud-note">加载中…</div></div>
+    <div class="mud-sms-sidebar">
+      <div class="mud-sms-pane-title">会话</div>
+      <div class="mud-convs" id="mud-sms-convs"><div class="mud-note">加载中…</div></div>
+    </div>
     <div class="mud-thread">
       <div class="mud-msgs" id="mud-sms-msgs"><div class="mud-note" style="margin:8px 2px">选择左侧会话，或直接在下方输入号码发送。</div></div>
+      <div class="mud-sms-compose">
+        <div class="mud-sms-address"><label><span>收件人</span>
+          <input id="mud-sms-num" placeholder="收件人：号码，如 10086 或 +86..." spellcheck="false" inputmode="tel"/>
+        </label></div>
       <div class="mud-comp">
         <textarea id="mud-sms-text" placeholder="短信内容（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
-        <button class="mud-btn" id="mud-sms-send" style="align-self:flex-end;padding:8px 18px">发送</button>
+        <button class="mud-btn" id="mud-sms-send">发送</button>
+      </div>
       </div>
     </div>
   </div>
   <div class="mud-note" id="mud-sms-note">发送走 AT+CMGS（PDU 模式）；通道忙会提示重试。删除单条：在气泡上右键（手机长按）。</div>
 </div>`;
+		root.prepend(E('link', { rel: 'stylesheet', href: L.resource('view/mu300/sms.css') }));
 		M.localize(root);
 		this.Q = function(id) { return root.querySelector('#mud-' + id); };
 		this.sel = null;          /* 当前会话的 peer */
 		this.convs = {};          /* peer -> {msgs:[], unread:n} */
 		this.wire(root);
 		this.reload();
+		M.simSelector(root);
 		return root;
 	},
 

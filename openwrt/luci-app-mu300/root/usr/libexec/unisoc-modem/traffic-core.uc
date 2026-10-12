@@ -43,6 +43,12 @@ export function fresh(now) {
     return { version: 1, config: config({}), started_at: now, last: null,
         days: {}, months: {}, pending_rx: 0, pending_tx: 0, adjustment: null };
 };
+// Version-1 ledgers without revision remain valid. A committed clear/config
+// change must win over an older RAM snapshot after a failed RAM checkpoint.
+export function restore(ram, disk, now) {
+    if (disk && (!ram || (disk.revision ?? 0) > (ram.revision ?? 0))) return disk;
+    return ram ?? disk ?? fresh(now);
+};
 function add(db, at, rx, tx) {
     let day = day_key(at), month = substr(day, 0, 7);
     for (let pair in [[db.days, day], [db.months, month]]) {
@@ -91,6 +97,15 @@ export function advance(db, sample, now) {
     }
     else add(db, now, rx, tx);
     prune(db.days, 93); prune(db.months, 24);
+};
+export function clear_records(db, sample, now) {
+    let next = fresh(now);
+    next.config = config(db.config);
+    next.revision = (db.revision ?? 0) + 1;
+    // Do not mutate the old ledger: persistence can fail and must leave it intact.
+    // First advance establishes the live baseline, never importing old counters.
+    advance(next, sample, now);
+    return next;
 };
 export function counted(pair, mode) {
     return mode == 'rx' ? pair.rx : mode == 'tx' ? pair.tx : pair.rx + pair.tx;

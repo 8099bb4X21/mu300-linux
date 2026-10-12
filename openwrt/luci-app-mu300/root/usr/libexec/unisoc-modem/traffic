@@ -23,17 +23,32 @@ function atomic(path, value) {
     fs.chmod(tmp, 384);
     return fs.rename(tmp, path);
 }
-let db = read_json(RUN + '/state.json') ?? read_json(BASE + '/state.json') ?? core.fresh(time());
+uloop.init();
+const bus = ubus.connect(null, 2);
+if (!bus) die('Traffic ubus connection failed\n');
+const dual = (getenv('MU300_TRAFFIC_SIM_SLOTS') || uci.cursor().get('unisoc_modem', 'main', 'sim_slots')) == '2';
+let mapping = [];
+try { mapping = json(getenv('MU300_TRAFFIC_DEVICES') || '[]'); } catch(e) {}
+function mapped_device(slot) {
+    return uci.cursor().get('unisoc_modem', 'main', 'sim' + slot + '_device') || mapping[slot] || '';
+}
+let ledgers = [];
+function ledger(slot, BASE, RUN) {
+fs.mkdir(BASE,448); fs.mkdir(RUN,448);
+let db = core.restore(read_json(RUN + '/state.json'), read_json(BASE + '/state.json'), time());
 if (db.version != 1 || type(db.days) != 'object' || type(db.months) != 'object')
     die('Unsupported traffic database\n');
 db.config = core.config(db.config);
 let saved_at = 0, storage_error = false, resolved = '', resolve_at = 0;
-uloop.init();
-const bus = ubus.connect(null, 2);
-if (!bus) die('Traffic ubus connection failed\n');
 
 function resolve_device(now) {
     if (db.config.device) return db.config.device;
+    // In dual mode never follow the active WAN for both cards. Each ledger
+    // follows its own platform-provided mapping (or explicit user override).
+    if (dual) {
+        let name = mapped_device(slot);
+        return name && match(name, /^[a-zA-Z0-9_.:-]{1,15}$/) ? name : '';
+    }
     if (now >= resolve_at && now < resolve_at + 30 && resolved) return resolved;
     resolve_at = now;
     let cfg = uci.cursor();
@@ -47,6 +62,9 @@ function resolve_device(now) {
 function snapshot(now) {
     let name = resolve_device(now);
     if (!name) return null;
+    // A bad duplicate map must not count the same bytes twice. Preserve both
+    // saved ledgers, but pause SIM 2 until its mapping is corrected.
+    if (slot == 1 && name == ledgers[0].device(now)) return null;
     let rx = trim(fs.readfile(NET + '/' + name + '/statistics/rx_bytes') || '');
     let tx = trim(fs.readfile(NET + '/' + name + '/statistics/tx_bytes') || '');
     let idx = trim(fs.readfile(NET + '/' + name + '/ifindex') || '');
@@ -56,13 +74,16 @@ function snapshot(now) {
 function view(now) {
     let s = core.status(db, now);
     s.storage_error = storage_error;
+    s.slot = slot;
+    s.mapping_error = slot == 1 && resolve_device(now) == ledgers[0].device(now);
     return s;
 }
 function checkpoint(force) {
     let now = time();
-    if (!atomic(RUN + '/state.json', db)) storage_error = true;
+    let ram_ok = atomic(RUN + '/state.json', db);
+    if (!ram_ok) storage_error = true;
     if (force || now - saved_at >= 60 || now < saved_at) {
-        if (atomic(BASE + '/state.json', db)) { saved_at = now; storage_error = false; }
+        if (atomic(BASE + '/state.json', db)) { saved_at = now; storage_error = !ram_ok; }
         else storage_error = true;
     }
     atomic(RUN + '/view.json', view(now));
@@ -84,8 +105,24 @@ function get_data() {
     }
     return { config: db.config, status: view(time()), days: days, months: months };
 }
-const obj = bus.publish(BUS, {
+return {
+    device: resolve_device,
+    sample: sample,
     get: { call: function(req) { return get_data(); } },
+    clear: { args: { confirm: false }, call: function(req) {
+        // Cancelled/unconfirmed requests do not sample or write anything.
+        if (req.args?.confirm !== true) return { ok: 0, error: 'confirmation_required' };
+        let now = time(), next = core.clear_records(db, snapshot(now), now);
+        // Single event-loop transaction: publish neither RAM state nor the new
+        // in-memory ledger until the durable replacement succeeds.
+        if (!atomic(BASE + '/state.json', next)) {
+            storage_error = true;
+            return { ok: 0, error: 'storage_failed' };
+        }
+        db = next; saved_at = now; storage_error = false;
+        checkpoint(false);
+        return { ok: 1, data: get_data() };
+    } },
     set: { args: { payload: '' }, call: function(req) {
         let input;
         try {
@@ -95,12 +132,14 @@ const obj = bus.publish(BUS, {
             if (input.used_gb != null && time() < 1704067200) return { ok: 0, error: 'clock_unsynced' };
         } catch (e) { return { ok: 0, error: 'invalid_config' }; }
         sample(false);
-        let previous = db.config, adjustment = db.adjustment, last = db.last;
+        let previous = db.config, adjustment = db.adjustment, last = db.last, revision = db.revision;
         try { core.update_config(db, input, time()); }
         catch (e) { return { ok: 0, error: 'invalid_config' }; }
+        db.revision = (db.revision ?? 0) + 1;
         // Persist the full transaction before acknowledging changed settings.
         if (!atomic(BASE + '/state.json', db)) {
             db.config = previous; db.adjustment = adjustment; db.last = last;
+            db.revision = revision;
             storage_error = true;
             return { ok: 0, error: 'storage_failed' };
         }
@@ -109,15 +148,29 @@ const obj = bus.publish(BUS, {
         return { ok: 1 };
     } },
     flush: { call: function(req) { sample(true); return { ok: !storage_error }; } }
+};
+}
+push(ledgers, ledger(0, BASE, RUN));
+if (dual) push(ledgers, ledger(1, BASE + '/sim1', RUN + '/sim1'));
+function dispatch(method, req) {
+    let slot = req.args?.slot ?? 0;
+    if (slot != 0 && slot != 1 || !ledgers[slot]) return {ok:0,error:'invalid_sim'};
+    return ledgers[slot][method].call(req);
+}
+const obj = bus.publish(BUS, {
+    get: {args:{slot:0}, call:function(req) {return dispatch('get',req);}},
+    set: {args:{slot:0,payload:''}, call:function(req) {return dispatch('set',req);}},
+    clear: {args:{slot:0,confirm:false}, call:function(req) {return dispatch('clear',req);}},
+    flush: {call:function(req) {let ok=true; for(let l in ledgers) if(!l.flush.call(req).ok) ok=false; return {ok:ok};}}
 });
 if (!obj) die('Traffic service already running or publish failed\n');
-sample(true);
+for(let l in ledgers) l.sample(true);
 let ticker;
 ticker = uloop.timer(10000, function() {
-    sample(false);
+    for(let l in ledgers) l.sample(false);
     ticker.set(10000);
 });
-let term = uloop.signal(15, function() { sample(true); uloop.end(); });
-let intr = uloop.signal(2, function() { sample(true); uloop.end(); });
+let term = uloop.signal(15, function() { for(let l in ledgers) l.sample(true); uloop.end(); });
+let intr = uloop.signal(2, function() { for(let l in ledgers) l.sample(true); uloop.end(); });
 uloop.run();
-sample(true);
+for(let l in ledgers) l.sample(true);

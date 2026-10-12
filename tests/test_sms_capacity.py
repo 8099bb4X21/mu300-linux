@@ -67,7 +67,7 @@ mu300-at() {
     [ "$TEST_ACK_FAIL" != 1 ] || { printf 'ERROR\\n'; return 1; }
     printf 'OK\\n'
 }
-''' + process + '\nprocess_spool\n'
+''' + daemon[daemon.index('sms_at() {'):daemon.index('\n# one daemon')]+process + '\nprocess_spool\n'
             result = subprocess.run(['bash', '-c', code], env=env, capture_output=True,
                                     text=True, timeout=15)
             self.assertNotEqual(result.returncode, 0)

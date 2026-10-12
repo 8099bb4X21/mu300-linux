@@ -389,6 +389,34 @@ class ThermalGuard(ShellTest):
             self.device('u30air')
             self.assertEqual(self.round(shell, 110000), ['poweroff', 'mu300-led alarm on'])   # mainline: critical
 
+    def test_mainline_native_cooling_keeps_emergency_and_user_caps(self):
+        for shell in self.each_shell():
+            shutil.rmtree(self.root, ignore_errors=True)
+            self.device('f50')
+            (self.root / 'sys/module/mu300_thermal').mkdir(parents=True)
+            z = self.root / 'sys/class/thermal/thermal_zone0'
+            z.mkdir(parents=True)
+            (z / 'type').write_text('soc-thmzone\n')
+            (z / 'mode').write_text('enabled\n')
+            c = z.parent / 'cooling_device0'
+            c.mkdir()
+            (c / 'type').write_text('cpufreq-cpu0\n')
+            (z / 'cdev0').symlink_to(c)
+            p = self.root / 'sys/devices/system/cpu/cpufreq/policy0'
+            p.mkdir(parents=True)
+            (p / 'scaling_available_frequencies').write_text('400000 800000 1200000\n')
+            (p / 'scaling_max_freq').write_text('800000\n')
+            (p / 'cpuinfo_max_freq').write_text('1200000\n')
+            self.round(shell, 40000, trips=True)
+            self.assertEqual((p / 'scaling_max_freq').read_text().strip(), '800000')
+            self.round(shell, 86000, trips=True)
+            self.assertEqual((p / 'scaling_max_freq').read_text().strip(), '800000')
+            self.assertIn('poweroff', self.round(shell, 106000, trips=True))
+            # A disabled zone or missing CPU binding must restore fallback.
+            (z / 'cdev0').unlink()
+            self.round(shell, 86000, trips=True)
+            self.assertEqual((p / 'scaling_max_freq').read_text().strip(), '400000')
+
 
 class Nfc(ShellTest):
     """mu300-nfc against a fake FM11NT08: 1 KiB behind a stub i2ctransfer, which answers only while a stub gpioset
