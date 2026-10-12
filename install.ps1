@@ -16,7 +16,8 @@
     cannot hold every name the Android subset contains (the property area is a set of files called
     u:object_r:<context>:s0), so the archive from the device is kept beside it as work\android-subset\
     windows-source.tar.gz, and the tools that build the images take the subset from that file.
-    Only the Linux region, boot_b and 32 bytes of misc are written; boot_a, the GPT and userdata stay untouched.
+    Writes the Linux region, boot_b, slot b's boot chain (backed up first) and 32 bytes of misc;
+    Android's slot a, the GPT and userdata stay untouched. -NoBootchainSync skips chain synchronization.
 #>
 [CmdletBinding()]
 param(
@@ -27,7 +28,8 @@ param(
     [string]$Work = '',      # empty: .\work next to this script
     [string]$Lang = '',      # en, tr or zh; empty: ask (English is the default)
     [string]$Answers = '',   # file with one answer per line: run without a console (see Ask; the password too)
-    [switch]$NoSelfUpdate    # do not bring this copy up to date with GitHub first
+    [switch]$NoSelfUpdate,   # do not bring this copy up to date with GitHub first
+    [switch]$NoBootchainSync # leave the other slot's boot chain unchanged
 )
 
 $ErrorActionPreference = 'Stop'
@@ -415,6 +417,16 @@ if ($model -match 'U30Air|U30_Air|U30 Air') {
     if ((Ask (T 'This does not look like a ZTE F50/MU300 or U30 Air. Continue anyway? (yes/no)') 'no') -ne 'yes') { exit 1 }
 }
 if ((SuDo 'getprop ro.boot.slot_suffix') -ne '_a') { Die (T 'Android must be running from slot a') }
+# Existing desktop path targets b. Check the OTA chain before any installation.
+$SYNC_BOOTCHAIN = if ($NoBootchainSync -or $env:MU300_SYNC_BOOTCHAIN -eq '0') { 0 } else { 1 }
+$BC_LINE = 'boot chain: not synced (-NoBootchainSync)'
+if ($SYNC_BOOTCHAIN -eq 1) {
+    New-Item -ItemType Directory -Force -Path $Work | Out-Null
+    if (-not (PushUnix "$Top\tools\android-bootchain.sh" "$T/android-bootchain.sh")) { Die 'Could not send boot chain checker' }
+    $BC_LINE = SuDo "sh $T/android-bootchain.sh check"
+    if ($BC_LINE -notmatch '(?m)^BOOTCHAIN-PLAN a b') { Die "Boot chain check refused; nothing installed: $BC_LINE" }
+}
+Write-Host $BC_LINE
 
 Say (T 'Locating free eMMC space after the last partition')
 $parts = (SuDo 'e=0; for p in /sys/block/mmcblk0/mmcblk0p*; do x=$(( $(cat $p/start) + $(cat $p/size) )); [ $x -gt $e ] && e=$x; done; echo $e $(cat /sys/block/mmcblk0/size)').Split(' ')
@@ -713,10 +725,11 @@ Write-Host ('  ' + (T 'default boot:   {1}' $(if ($DEFAULT_LINUX -eq 1) { T 'Lin
 Write-Host ('  ' + (T 'filesystem:     {1}' $(if ($FORMAT -eq 1) { T 'CREATE new ext4 (erases the Linux region)' } else { T 'keep existing' })))
 if ($UPDATE -eq 1) { Write-Host ('  ' + (T 'update:         settings and user data of the chosen systems are kept, everything else is replaced')) }
 Write-Host ('  ' + (T 'writes:         Linux region at offset {1}, boot_b, 32 bytes of misc (boot_a, GPT and userdata are not touched)' $OFF))
+Write-Host $BC_LINE
 if ((Ask (T 'Type INSTALL to continue') 'no') -ne 'INSTALL') { Die (T 'cancelled') }
 
 Say (T 'Copying to the device')
-foreach ($f in 'android-mount-mu300root.sh', 'android-install.sh', 'tf-storage.sh') { PushUnix "$Top\tools\$f" "$T/$f" | Out-Null }
+foreach ($f in 'android-mount-mu300root.sh', 'android-install.sh', 'android-bootchain.sh', 'tf-storage.sh') { PushUnix "$Top\tools\$f" "$T/$f" | Out-Null }
 foreach ($os in $OSES) {
     & adb push "$REL\$(RootfsFile $os)" "$T/mu300-$os.tar.gz" | Out-Null
     & adb push "$Work\mu300-vendor-$os.tar.gz" "$T/mu300-vendor-$os.tar.gz" | Out-Null
@@ -724,7 +737,7 @@ foreach ($os in $OSES) {
 $envFile = "$Work\mu300-install.env"
 $lines = @("OFF=$OFF", "SIZE=$SIZE", "OFF_S=$($OFF / 512)", "SIZE_S=$($SIZE / 512)", "FORMAT=$FORMAT",
     "OSES=`"$($OSES -join ' ')`"", "WIPE_LEGACY=$WIPE_LEGACY", "UPDATE=$UPDATE", "BOOT_OS=$BOOT_OS", "DEFAULT_LINUX=$DEFAULT_LINUX", "BOOT_ATTEMPTS=$BOOT_ATTEMPTS",
-    "IMPORT_HOTSPOT=$IMPORT_HOTSPOT", "KERNEL=$KERNEL", "PWHASH='$PWHASH'")
+    "IMPORT_HOTSPOT=$IMPORT_HOTSPOT", "KERNEL=$KERNEL", "SYNC_BOOTCHAIN=$SYNC_BOOTCHAIN", "PWHASH='$PWHASH'")
 WriteUnix $envFile (($lines -join "`n") + "`n")
 & adb push $envFile "$T/mu300-install.env" | Out-Null
 Remove-Item $envFile
@@ -732,6 +745,12 @@ $log = SuDo "sh $T/android-install.sh"
 Write-Host $log
 if ($log -notmatch 'MU300-INSTALL-OK') { Die (T 'installation on the device failed; boot_b and misc were not changed') }
 
+if ($SYNC_BOOTCHAIN -eq 1 -and (SuDo "[ -d $T/mu300-bootchain-backup ] && echo y") -eq 'y') {
+    $bcDir = Join-Path $Work ('bootchain\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Force -Path (Split-Path $bcDir) | Out-Null
+    Quiet { adb pull "$T/mu300-bootchain-backup" "$bcDir" } | Out-Null
+    # Keep the device backup too, even if adb pull fails.
+}
 Say (T 'Writing boot_b and arming slot b')
 $EXP = (Get-Content "$Work\boot-linux-slotb.json" | ConvertFrom-Json).sha256
 & adb push "$Work\boot-linux-slotb.img" "$T/mu300-boot.img" | Out-Null
@@ -749,11 +768,11 @@ $MTmp = "$T/mu300-magisk"
 if ((SuDo 'magisk -v')) {
     Quiet { adb shell "rm -rf $MTmp" } | Out-Null
     Quiet { adb shell "mkdir -p $MTmp/system/bin" } | Out-Null
-    foreach ($f in 'module.prop', 'switch.sh', 'action.sh') {
+    foreach ($f in 'module.prop', 'switch.sh', 'action.sh', 'bootchain.sh') {
         Quiet { PushUnix (Join-Path $ModSrc $f) "$MTmp/$f" } | Out-Null
     }
     Quiet { PushUnix (Join-Path $ModSrc 'system\bin\mu300-linux') "$MTmp/system/bin/mu300-linux" } | Out-Null
-    SuDo "rm -rf $Mod && mkdir -p $Mod/system/bin && cp -a $MTmp/module.prop $MTmp/switch.sh $MTmp/action.sh $Mod/ && cp -a $MTmp/system/bin/mu300-linux $Mod/system/bin/ && chown -R 0:0 $Mod && chmod 755 $Mod/switch.sh $Mod/action.sh $Mod/system/bin/mu300-linux && chmod 644 $Mod/module.prop && rm -rf $MTmp && sync" | Out-Null
+    SuDo "rm -rf $Mod && mkdir -p $Mod/system/bin && cp -a $MTmp/module.prop $MTmp/switch.sh $MTmp/action.sh $MTmp/bootchain.sh $Mod/ && cp -a $MTmp/system/bin/mu300-linux $Mod/system/bin/ && chown -R 0:0 $Mod && chmod 755 $Mod/switch.sh $Mod/action.sh $Mod/bootchain.sh $Mod/system/bin/mu300-linux && chmod 644 $Mod/module.prop && rm -rf $MTmp && sync" | Out-Null
     if ((SuDo "[ -x $Mod/switch.sh ] && echo yes") -eq 'yes') {
         Write-Host ('  ' + (T "installed: 'su -c mu300-linux' on the device starts Linux after the next Android boot"))
     } else {

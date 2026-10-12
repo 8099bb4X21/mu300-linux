@@ -82,6 +82,11 @@ done < "$TOP/openwrt/aurora-config-packages.sha256"
 TARBALL=$FLAVOUR-$VER-armsr-armv8-rootfs.tar.gz
 URL=$BASEURL/$VER/targets/armsr/armv8
 
+# Stock block-mount probes /dev/sd* (including Unisoc diagnostic channels).
+# Build/install the patched APK before exposing LuCI's Mount Points page.
+BLOCK_APK=$TOP/work/block-mount-mu300.apk
+sh "$TOP/openwrt/build-block-mount.sh" "$BLOCK_APK"
+
 cd "$TOP"
 if [ ! -f "openwrt/$TARBALL" ]; then
     curl -fL -o "openwrt/$TARBALL" "$URL/$TARBALL"
@@ -114,6 +119,7 @@ done
 docker run --rm --platform linux/arm64 \
   -v "$TOP/rootfs/overlay/opt/mu300":/in/opt-mu300:ro -v "$TOP/rootfs/overlay/etc/mu300/vpn.conf.example":/in/vpn.conf.example:ro -v "$TOP/openwrt/overlay":/in/overlay:ro \
   -v "$TOP/openwrt/patches/fw4-sipa-offload.patch":/in/fw4-sipa-offload.patch:ro \
+  -v "$TOP/openwrt/patches/wifi-scripts-no-dfs.patch":/in/wifi-scripts-no-dfs.patch:ro \
   -v "$TOP/boot/module-order.txt":/in/module-order.txt:ro -v "$IN/out/modules":/in/modules:ro \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
   $(opt firmware firmware) $(opt android-subset android-subset) $(opt android-gpu-subset android-gpu-subset) \
@@ -121,18 +127,29 @@ docker run --rm --platform linux/arm64 \
   $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(mainline_opt modules mainline-modules) $(plugin_opt) -v "$TOP/openwrt":/out -v "$REGDB":/in/regdb:ro \
   $(mainline_opt modules.builtin mainline-modules.builtin) $(mainline_opt modules.builtin.modinfo mainline-modules.builtin.modinfo) \
   -v "$THEME_APK":/in/luci-theme-aurora.apk:ro \
+  -v "$BLOCK_APK":/in/block-mount-mu300.apk:ro \
+  -v "$BLOCK_APK.build-id":/in/block-mount.build-id:ro \
   -v "$TOP/work/luci-app-aurora-config-1.2.5-r20260920.apk":/in/luci-app-aurora-config.apk:ro \
   -v "$TOP/work/luci-i18n-aurora-config-zh-cn-26.262.58276.362887a.apk":/in/aurora-config-zh-cn.apk:ro \
   -v "$TOP/work/luci-i18n-aurora-config-tr-26.262.58276.362887a.apk":/in/aurora-config-tr.apk:ro \
   -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER /bin/sh -eu -c '
 mkdir -p /var/lock /var/run /tmp
-apk update >/dev/null
+apk_retry() {
+    apk_attempt=1
+    while ! apk "$@"; do
+        [ "$apk_attempt" -lt 3 ] || return 1
+        apk_attempt=$((apk_attempt + 1))
+        echo "Retrying apk download (attempt $apk_attempt/3)" >&2
+    done
+}
+apk_retry update >/dev/null
 # openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure;
 # i2c-tools, gpiod-tools: mu300-usb (the charger of the U30 Air) and mu300-nfc (its NFC tag)
-apk add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
+apk_retry add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
     i2c-tools gpiod-tools >/dev/null
-apk add --allow-untrusted /in/luci-theme-aurora.apk >/dev/null
-apk add --allow-untrusted /in/luci-app-aurora-config.apk /in/aurora-config-zh-cn.apk /in/aurora-config-tr.apk >/dev/null
+apk_retry add --allow-untrusted /in/block-mount-mu300.apk >/dev/null
+apk_retry add --allow-untrusted /in/luci-theme-aurora.apk >/dev/null
+apk_retry add --allow-untrusted /in/luci-app-aurora-config.apk /in/aurora-config-zh-cn.apk /in/aurora-config-tr.apk >/dev/null
 # ujail drops CAP_PERFMON (38), which this 5.4 kernel does not know: jailed services (dnsmasq, ntpd) crash-loop
 apk del procd-ujail procd-seccomp >/dev/null 2>&1 || true
 # online firmware upgrades flash whole-disk armsr images: that would overwrite the eMMC, so remove them
@@ -153,8 +170,14 @@ printf "127.0.0.1\tlocalhost\n\n::1\tlocalhost ip6-localhost ip6-loopback\nff02:
 printf "mu300\n" > $R/etc/hostname   # the real one comes from uci (etc/uci-defaults/90-mu300)
 cp -a /in/opt-mu300 $R/opt/mu300
 cp -a /in/overlay/. $R/
+mkdir -p $R/etc/mu300
+cp /in/block-mount.build-id $R/etc/mu300/block-mount.build-id
+for f in sbin/block lib/libblkid-tiny.so etc/init.d/fstab; do
+    [ -s "$R/$f" ] || { echo "patched block-mount required file missing: $f" >&2; exit 1; }
+done
 chmod 0755 $R/opt/mu300/bin/cpu-voltage-platform $R/etc/init.d/mu300-cpu-driver
 chmod 0755 $R/opt/mu300/bin/ra-deprecate $R/opt/mu300/bin/wcn-reopen
+chmod 0755 $R/opt/mu300/bin/mu300-user-packages $R/etc/init.d/mu300-user-packages
 [ -s $R/www/luci-static/aurora/main.css ] || { echo "Aurora theme assets missing" >&2; exit 1; }
 for f in www/luci-static/resources/view/aurora/studio.js \
     www/luci-static/resources/view/aurora/marketplace.js \
@@ -168,12 +191,15 @@ grep -q "mediaurlbase .*/luci-static/aurora" $R/etc/config/luci || {
 # mu300cell reports sipa_eth0 as l3_device only. fw4 otherwise omits it from
 # its software flowtable, leaving cellular downlink on the slow forwarding path.
 # Fail the build if a changed fw4 version no longer matches this targeted patch.
-apk add patch >/dev/null
+apk_retry add patch >/dev/null
 patch --batch --fuzz=0 -d $R -p1 -i /in/fw4-sipa-offload.patch
+patch --batch --fuzz=0 -d $R -p1 -i /in/wifi-scripts-no-dfs.patch
+grep -q "device_no_dfs(config);" $R/usr/share/ucode/wifi/hostapd.uc || { echo "wifi-scripts DFS patch not applied" >&2; exit 1; }
 if [ -d /in/luci-plugin ]; then
     cp -a /in/luci-plugin/root/. $R/
     cp -a /in/luci-plugin/htdocs/. $R/www/
     chmod 0755 $R/etc/init.d/unisoc-cpu
+    chmod 0600 $R/etc/config/unisoc_apn
     chmod 0755 $R/etc/init.d/unisoc-modem-ui $R/etc/init.d/unisoc-sms-forward $R/etc/init.d/unisoc-traffic $R/etc/hotplug.d/net/90-unisoc-usb-host $R/etc/hotplug.d/iface/90-unisoc-usb-host $R/usr/libexec/rpcd/mu300dash $R/usr/libexec/unisoc-modem/*
     mkdir -p $R/usr/lib/lua/luci/i18n
     cp -a /in/luci-plugin/lmo/. $R/usr/lib/lua/luci/i18n/
@@ -215,10 +241,13 @@ mkdir -p $R/etc/mu300
 # the VPN is configured the same way on both systems, and mu300-toolkit copies this to start a vpn.conf
 cp /in/vpn.conf.example $R/etc/mu300/vpn.conf.example
 printf "%s\n" "${MU300_VERSION:-dev}" > $R/etc/mu300/image-version
+# Record image packages so upgrades can restore only user additions.
+(MU300_LIB=1; . $R/opt/mu300/bin/mu300-update; upk_manual $R openwrt) > $R/etc/mu300/image-packages
+[ -s $R/etc/mu300/image-packages ] || { echo "missing image-packages" >&2; exit 1; }
 # enable the services (rc.common "enable" needs ubus, which is not running in the build container)
 # accounts still those of the image until an installer or mu300-update puts the device ones in place
 : > $R/etc/.mu300-accounts-from-image
-for s in mu300-accounts mu300-cpu-driver mu300-vendor mu300-hw mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-buttons mu300-ndp mu300-smsd; do
+for s in mu300-accounts mu300-cpu-driver mu300-vendor mu300-hw mu300-post mu300-toolkit mu300-atd mu300-modem-log mu300-wifi-client mu300-buttons mu300-ndp mu300-smsd mu300-user-packages; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
@@ -234,7 +263,9 @@ if [ -d /in/luci-plugin ]; then
     ln -sf ../init.d/unisoc-cpu $R/etc/rc.d/K89unisoc-cpu
 fi
 # busybox PATH is /usr/sbin:/usr/bin:/sbin:/bin, so the commands go into /usr/bin
-for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-sms led-status mu300-vpn wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc; do ln -sf /opt/mu300/bin/$c $R/usr/bin/$c; done
+for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-sms led-status mu300-vpn wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc mu300-user-packages; do ln -sf /opt/mu300/bin/$c $R/usr/bin/$c; done
+# Config remnants of packages deliberately removed from our images must not return on upgrade.
+rm -f $R/etc/config/attendedsysupgrade $R/etc/config/*.apk-new
 # no kernel of its own: OpenWrt kmods (6.12) and grub are unused on this device
 rm -rf $R/lib/modules/6.* $R/boot
 # In-tree and vendor modules for the selected mainline kernel (upstream/).

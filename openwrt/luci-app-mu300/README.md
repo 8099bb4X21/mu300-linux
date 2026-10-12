@@ -3,6 +3,15 @@
 A self-contained LuCI application for Unisoc cellular devices. It provides the
 dashboard, live radio readings, persistent network/band/cell/EN-DC locks, a
 guarded AT terminal and an SMS UI.
+The Access Points (APN) page stores multiple profiles, with separate save and
+confirmed apply operations. It currently supports the `mu300cell` netifd
+protocol; unsupported platform protocols are explicitly read-only/unavailable.
+Profiles and per-ICCID selections persist in `/etc/config/unisoc_apn`. Supports
+PAP/CHAP credentials, independently maintained public-carrier auto-matching,
+and optional initial attach configuration. Passwords are never returned by the
+public RPC. Unbound SIMs use the existing data interface's global settings.
+Applying does not switch SIM or restart USB/Wi-Fi.
+See [APN and safe block-mount](../../docs/APN-AND-BLOCK-MOUNT.md) for details.
 The Device Management page controls USB role and gadget network policy, and
 lists host-side USB network adapters for optional attachment to the LAN bridge.
 

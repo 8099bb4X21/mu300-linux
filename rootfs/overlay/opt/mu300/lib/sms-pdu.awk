@@ -138,7 +138,7 @@ function ts_decode(h, off,    i, b, d, p, quarters, sign) {
 function esc_field(s) { gsub(/\t/, " ", s); gsub(/\n/, " ", s); gsub(/\r/, "", s); return s }
 
 function decode_pdu(idx, h,    i, smsc, first, oal, toa, oabytes, sender, pid, dcs, ts, udl, udhl, \
-                    ref, total, part, off, skipsept, text, alpha, j, hend, iei, ielen, lang, langx) {
+                    ref, total, part, off, skipsept, text, alpha, j, hend, iei, ielen, lang, langx, width, extra) {
     i = 0
     smsc = byteat(h, i); i += 1 + smsc
     first = byteat(h, i); i += 1
@@ -155,20 +155,25 @@ function decode_pdu(idx, h,    i, smsc, first, oal, toa, oabytes, sender, pid, d
     ts = ts_decode(h, i); i += 7
     udl = byteat(h, i); i += 1
 
-    ref = ""; total = 1; part = 1; udhl = 0; lang = 0; langx = 0
+    ref = ""; total = 1; part = 1; udhl = 0; lang = 0; langx = 0; width = 0
     if (b_and(first, 64)) {                    # UDHI: a header sits in front of the text
         udhl = byteat(h, i)
         # walk every element; the concatenation one is not always first, and the language one never is
         j = i + 1; hend = i + 1 + udhl
+        if (hend > i + udl || hend * 2 > length(h)) return ""
         while (j + 1 < hend) {
             iei = byteat(h, j); ielen = byteat(h, j + 1)
-            if (iei == 0)      { ref = byteat(h, j + 2); total = byteat(h, j + 3); part = byteat(h, j + 4) }
-            else if (iei == 8) { ref = byteat(h, j + 2) * 256 + byteat(h, j + 3); total = byteat(h, j + 4); part = byteat(h, j + 5) }
+            if (j + 2 + ielen > hend) return ""
+            if ((iei == 0 && ielen != 3) || (iei == 8 && ielen != 4)) return ""
+            if (iei == 0 && ielen == 3) { width = 8; ref = byteat(h, j + 2); total = byteat(h, j + 3); part = byteat(h, j + 4) }
+            else if (iei == 8 && ielen == 4) { width = 16; ref = byteat(h, j + 2) * 256 + byteat(h, j + 3); total = byteat(h, j + 4); part = byteat(h, j + 5) }
             else if (iei == 36) langx = byteat(h, j + 2)     # 0x24 national language single shift
             else if (iei == 37) lang  = byteat(h, j + 2)     # 0x25 national language locking shift
             j += 2 + ielen
         }
+        if (j != hend) return ""
     }
+    if (width && (total < 1 || part < 1 || part > total)) return ""
     off = i + (udhl ? udhl + 1 : 0)
     if (b_and(dcs, 12) == 8) {                             # UCS2
         text = ucs2_decode(h, off, udl - (udhl ? udhl + 1 : 0))
@@ -179,7 +184,8 @@ function decode_pdu(idx, h,    i, smsc, first, oal, toa, oabytes, sender, pid, d
         skipsept = udhl ? int(((udhl + 1) * 8 + 6) / 7) : 0
         text = gsm7_decode(h, i, udl, skipsept, lang, langx)
     }
-    return esc_field(idx) "\t" esc_field(sender) "\t" ts "\t" ref "\t" total "\t" part "\t" esc_field(text)
+    extra = metadata ? "\t" width ":" dcs ":" pid ":" lang ":" langx ":" substr(h, 1, (smsc + 1) * 2) : ""
+    return esc_field(idx) "\t" esc_field(sender) "\t" ts "\t" ref "\t" total "\t" part "\t" esc_field(text) extra
 }
 
 # ---- encoding --------------------------------------------------------------

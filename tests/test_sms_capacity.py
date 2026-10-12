@@ -100,14 +100,16 @@ mu300-at() {
                 result = subprocess.run([str(SMS), 'import-pdu', str(raw)], env=env,
                                         capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                headers, body = (pool / 'msg/000001').read_text().split('\n\n', 1)
-                self.assertEqual(body, text + '\n')
                 if multipart:
-                    self.assertIn('multipart_ref: 42\n', headers + '\n')
-                    self.assertIn('multipart_total: 2\n', headers + '\n')
+                    self.assertEqual(list((pool / 'msg').glob('[0-9]*')), [])
+                    record = next((pool / 'multipart').glob('*/1'))
                 else:
+                    record = pool / 'msg/000001'
+                headers, body = record.read_text().split('\n\n', 1)
+                self.assertEqual(body, text + '\n')
+                if not multipart:
                     self.assertNotIn('multipart_ref:', headers)
-                self.assertIn('multipart_part: 1\n', headers + '\n')
+                    self.assertIn('multipart_part: 1\n', headers + '\n')
 
     def test_unsupported_pdu_keeps_recoverable_local_original(self):
         with tempfile.TemporaryDirectory() as tmp:

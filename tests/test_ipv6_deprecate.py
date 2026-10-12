@@ -9,7 +9,7 @@ NDP = TOP / 'openwrt/overlay/opt/mu300/bin/ndp-learn'
 class PrefixWithdrawal(ShellTest):
     def setUp(self):
         super().setUp()
-        self.lib = NDP.read_text().split('\nlast_prefix=\nwhile :;', 1)[0]
+        self.lib = NDP.read_text().split('\ncase ${1:-} in', 1)[0]
         self.stub('logger', ':')
         self.stub('uci', 'printf "%s\\n" "${RA_MODE:-relay}"')
         self.stub('ip', 'printf "%s\\n" "${DEFAULT_ROUTE:-default via fe80::1 dev sipa_eth0 expires 1234sec}"')
@@ -17,9 +17,9 @@ class PrefixWithdrawal(ShellTest):
 
     def run_sequence(self, shell, prefixes, **env):
         (self.tmp / 'ras').unlink(missing_ok=True)
-        code = self.lib + '\nlast_prefix=\n'
+        code = self.lib + '\nlast_prefixes=\n'
         for p in prefixes:
-            code += f"prefix='{p}'; withdraw_old; last_prefix=$prefix\n"
+            code += f"prefixes='{p}'; withdraw_old; last_prefixes=$prefixes\n"
         r = self.sh(shell, code, MU300_RA_DEPRECATE=self.stubs / 'ra-deprecate', **env)
         self.assertEqual(r.returncode, 0, r.stderr)
         return (self.tmp / 'ras').read_text().splitlines() if (self.tmp / 'ras').exists() else []
@@ -40,6 +40,20 @@ class PrefixWithdrawal(ShellTest):
         for shell in self.each_shell():
             got = self.run_sequence(shell, [a, b, a, a, a, a])
             self.assertEqual(got, [f'br-lan 1234 {a}'] + [f'br-lan 1234 {b}'] * 3)
+
+    def test_coexisting_prefixes_only_withdraw_the_one_that_left(self):
+        a, b = '2408:1:2:3::/64', '2408:1:2:4::/64'
+        for shell in self.each_shell():
+            self.assertEqual(self.run_sequence(shell, [a, f'{a}\n{b}', f'{b}\n{a}']), [])
+            got = self.run_sequence(shell, [a, f'{a}\n{b}', b, b, b, b])
+            self.assertEqual(got, [f'br-lan 1234 {a}'] * 3)
+
+    def test_multiple_prefixes_return_after_wan_restart(self):
+        a, b = '2408:1:2:3::/64', '2408:1:2:4::/64'
+        for shell in self.each_shell():
+            self.assertEqual(self.run_sequence(shell, [f'{a}\n{b}', '', '', f'{b}\n{a}']), [])
+            got = self.run_sequence(shell, [f'{a}\n{b}', '', b, b, b, b])
+            self.assertEqual(got, [f'br-lan 1234 {a}'] * 3)
 
     def test_no_ra_in_server_mode_and_failed_sends_are_bounded(self):
         a, b = '2408:1:2:3::/64', '2408:1:2:4::/64'

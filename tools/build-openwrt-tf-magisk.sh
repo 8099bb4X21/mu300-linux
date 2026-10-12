@@ -67,7 +67,10 @@ MU300_GPU=0 MU300_INPUTS="$IN" MU300_MAINLINE_OUT="$UO" MU300_LUCI_PLUGIN_SRC="$
 # own: post-process the built rootfs (extra packages, defaults) when asked
 [ -z "${MU300_POST_ROOTFS:-}" ] || sh "$MU300_POST_ROOTFS" "$ROOTFS"
 for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
-    ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd ./opt/mu300/bin/mu300-at \
+    ./sbin/block ./lib/libblkid-tiny.so ./etc/init.d/fstab ./etc/mu300/block-mount.build-id \
+    ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd ./opt/mu300/bin/mu300-at ./opt/mu300/bin/mobile-data \
+    ./opt/mu300/bin/mu300-user-packages ./etc/init.d/mu300-user-packages ./etc/mu300/image-packages \
+    ./opt/mu300/lib/wifi-channels.sh ./usr/share/ucode/wifi/hostapd.uc \
     ./opt/mu300/bin/mu300-usb ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/mu300-data-sim ./opt/mu300/bin/mu300-dual-radio ./etc/init.d/mu300-post ./etc/init.d/mu300-atd \
     ./etc/init.d/mu300-smsd ./opt/mu300/bin/mu300-smsd ./opt/mu300/bin/mu300-sms ./etc/sysctl.d/99-mu300-console.conf \
     ./usr/share/luci/menu.d/luci-app-mu300.json \
@@ -75,6 +78,8 @@ for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
     ./www/luci-static/resources/mu300/refresh.js \
     ./www/luci-static/resources/view/mu300/sms.css \
     ./usr/libexec/unisoc-modem/dashboard-rates \
+    ./usr/libexec/unisoc-modem/apn ./usr/libexec/unisoc-modem/apn.uc ./usr/libexec/unisoc-modem/apn-identity ./etc/config/unisoc_apn \
+    ./www/luci-static/resources/view/mu300/apn.js \
     ./usr/libexec/unisoc-modem/lock ./usr/libexec/unisoc-modem/boot-replay ./usr/libexec/unisoc-modem/sim-scope.sh \
     ./usr/libexec/unisoc-modem/lock-apply.sh ./usr/libexec/unisoc-modem/lock-jobs.sh \
     ./usr/libexec/unisoc-modem/traffic ./usr/libexec/unisoc-modem/traffic-core.uc \
@@ -130,8 +135,9 @@ cp "$TOP/android/magisk/mu300-openwrt-tf/module.prop" \
    "$TOP/android/magisk/mu300-openwrt-tf/customize.sh" \
    "$TOP/android/magisk/mu300-openwrt-tf/locale.sh" \
    "$TOP/android/magisk/mu300-linux-switch/switch.sh" \
-   "$TOP/tools/android-install.sh" "$TOP/tools/mu300-vendor-from-device.sh" \
+   "$TOP/tools/android-install.sh" "$TOP/tools/android-bootchain.sh" "$TOP/tools/mu300-vendor-from-device.sh" \
    "$TOP/tools/tf-storage.sh" "$TOP/tools/tf-stage.sh" "$TOP/tools/tf-install-worker.sh" "$STAGE/"
+cp "$TOP/android/magisk/mu300-linux-switch/bootchain.sh" "$STAGE/bootchain.sh"
 sed -i "s/Linux 7\.2/Linux $KERNEL/g; s/KERNEL=7\.2/KERNEL=$KERNEL/g" "$STAGE/customize.sh"
 sed -i "s/7\.2/$KERNEL/g" "$STAGE/module.prop"
 cp "$IN/busybox" "$STAGE/busybox"

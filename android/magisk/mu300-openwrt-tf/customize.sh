@@ -13,8 +13,8 @@ ui_fail() { if [ "$MU300_INSTALL_LANG" = zh ]; then abort "$1"; else abort "$2";
 ui_print "********************************"
 ui_msg " MU300 OpenWrt TF 卡部署 + Linux 7.2" " MU300 OpenWrt TF + Linux 7.2"
 ui_print "********************************"
-ui_msg "- 仅写入 TF 卡、Android 当前槽位的另一槽及 misc 中的 32 字节" \
-       "- Writes only the TF card, the slot opposite Android and 32 bytes of misc"
+ui_msg "- 写入 TF 卡、另一槽的 boot 和启动链、misc 的 32 字节；启动链先备份再校验" \
+       "- Writes TF, the other slot's boot and boot chain, and 32 bytes of misc; boot chain is backed up and verified"
 BB=$MODPATH/busybox
 chmod 755 "$BB" "$MODPATH"/*.sh
 [ "$(id -u)" = 0 ] || ui_fail "! 需要 root 权限" "! root is required"
@@ -33,6 +33,7 @@ cat > "$MODPATH/mu300-install.env" <<EOF
 SD_MODE=1
 SD_DEV=$R
 FORMAT=$FORMAT
+SYNC_BOOTCHAIN=${MU300_SYNC_BOOTCHAIN:-1}
 OSES="openwrt"
 WIPE_LEGACY=0
 UPDATE=$UPDATE

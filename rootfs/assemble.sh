@@ -43,6 +43,10 @@ rm -f $R/etc/ssh/ssh_host_* ; : > $R/etc/machine-id; rm -f $R/var/lib/dbus/machi
 echo mu300 > $R/etc/hostname
 # which release this filesystem came from, so mu300-update can tell whether a newer one exists
 mkdir -p $R/etc/mu300 && printf '%s\n' "${MU300_VERSION:-dev}" > $R/etc/mu300/image-version
+# Record the image's own packages so upgrades can restore only user additions.
+(MU300_LIB=1; . $R/opt/mu300/bin/mu300-update; upk_manual $R ubuntu) > $R/etc/mu300/image-packages
+[ -s $R/etc/mu300/image-packages ] || { echo "missing image-packages" >&2; exit 1; }
+chmod 0755 $R/opt/mu300/bin/mu300-user-packages
 ln -sfn ../run/systemd/resolve/stub-resolv.conf $R/etc/resolv.conf
 # vendor firmware for Wi-Fi (wcnmodem.bin, wifi_board_config*.ini) is copied from the device's /odm/firmware
 if [ -d /firmware ]; then mkdir -p $R/usr/lib/firmware && cp /firmware/* $R/usr/lib/firmware/; fi
@@ -62,7 +66,7 @@ if [ -f /xray ]; then install -m755 /xray $R/opt/mu300/bin/xray; fi
 if [ -f /hev-socks5-tunnel ]; then install -m755 /hev-socks5-tunnel $R/opt/mu300/bin/hev-socks5-tunnel; fi
 # accounts still the image's (ubuntu/ubuntu) until an installer or mu300-update puts the device's own in place
 : > $R/etc/.mu300-accounts-from-image
-for u in mu300-accounts.service:sysinit.target mu300-early-recorder.service:sysinit.target mu300-vendor.service:sysinit.target mu300-lan.service:multi-user.target mu300-ssh-hostkeys.service:sysinit.target mu300-telnetd.service:multi-user.target serial-getty@ttyGS0.service:getty.target ssh.socket:sockets.target mu300-wifi.service:multi-user.target mu300-wifi-client.service:multi-user.target mu300-mobile-data.service:multi-user.target mu300-mobile-data-watch.service:multi-user.target mu300-fixups.service:sysinit.target mu300-zram.service:swap.target mu300-boot-ok.service:multi-user.target mu300-cp_diskserver.service:multi-user.target mu300-refnotify.service:multi-user.target mu300-extra-modules.service:multi-user.target mu300-hotspot.service:multi-user.target mu300-bluetooth.service:multi-user.target mu300-thermal-guard.service:multi-user.target mu300-audio.service:multi-user.target mu300-firewall.service:sysinit.target mu300-kmsg.service:sysinit.target mu300-toolkit.service:multi-user.target mu300-atd.service:multi-user.target mu300-modem-log.service:multi-user.target mu300-buttons.service:multi-user.target systemd-networkd.service:multi-user.target; do
+for u in mu300-accounts.service:sysinit.target mu300-early-recorder.service:sysinit.target mu300-vendor.service:sysinit.target mu300-lan.service:multi-user.target mu300-ssh-hostkeys.service:sysinit.target mu300-telnetd.service:multi-user.target serial-getty@ttyGS0.service:getty.target ssh.socket:sockets.target mu300-wifi.service:multi-user.target mu300-wifi-client.service:multi-user.target mu300-mobile-data.service:multi-user.target mu300-mobile-data-watch.service:multi-user.target mu300-fixups.service:sysinit.target mu300-zram.service:swap.target mu300-boot-ok.service:multi-user.target mu300-cp_diskserver.service:multi-user.target mu300-refnotify.service:multi-user.target mu300-extra-modules.service:multi-user.target mu300-hotspot.service:multi-user.target mu300-bluetooth.service:multi-user.target mu300-thermal-guard.service:multi-user.target mu300-audio.service:multi-user.target mu300-firewall.service:sysinit.target mu300-kmsg.service:sysinit.target mu300-toolkit.service:multi-user.target mu300-atd.service:multi-user.target mu300-modem-log.service:multi-user.target mu300-buttons.service:multi-user.target systemd-networkd.service:multi-user.target mu300-user-packages.service:multi-user.target; do
   svc=${u%%:*}; tgt=${u##*:}
   mkdir -p $R/etc/systemd/system/$tgt.wants
   src=/etc/systemd/system/$svc; [ -e $R$src ] || src=/usr/lib/systemd/system/$svc
@@ -71,7 +75,7 @@ for u in mu300-accounts.service:sysinit.target mu300-early-recorder.service:sysi
 done
 # the commands people are told to run must be on PATH, including sudo's secure_path, which does not contain
 # /opt/mu300/bin - without these links every "sudo mu300-os ..." in the README is a "command not found"
-for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-vpn wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc; do ln -sfn /opt/mu300/bin/$c $R/usr/local/bin/$c; done
+for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-vpn wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc mu300-user-packages; do ln -sfn /opt/mu300/bin/$c $R/usr/local/bin/$c; done
 # no graphical/serial login noise on a headless dongle; keep ttyS1 console for debugging
 ln -sfn /dev/null $R/etc/systemd/system/getty@tty1.service
 cd $R && tar --numeric-owner -czf /w/mu300-ubuntu-$UBUNTU-rootfs.tar.gz .

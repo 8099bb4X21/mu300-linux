@@ -9,6 +9,9 @@ msgstr "Dashboard"
 msgid "蜂窝"
 msgstr "Cellular"
 
+msgid "接入点 APN"
+msgstr "Access points (APN)"
+
 msgid "网络锁定"
 msgstr "Network locks"
 

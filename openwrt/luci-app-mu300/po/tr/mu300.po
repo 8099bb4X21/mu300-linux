@@ -9,6 +9,9 @@ msgstr "Durum paneli"
 msgid "蜂窝"
 msgstr "Hücresel"
 
+msgid "接入点 APN"
+msgstr "Erişim noktaları (APN)"
+
 msgid "网络锁定"
 msgstr "Ağ kilitleri"
 
