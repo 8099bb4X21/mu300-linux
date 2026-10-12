@@ -133,6 +133,7 @@ store_msg() {  # store_msg dir status peer scts sim_index coding body [fingerpri
         [ -n "${9:-}" ] && printf 'multipart_ref: %s\n' "$9"
         [ -n "${10:-}" ] && printf 'multipart_total: %s\n' "${10}"
         [ -n "${11:-}" ] && printf 'multipart_part: %s\n' "${11}"
+        [ -n "${13:-}" ] && printf 'multipart_hashes: %s\n' "${13}"
         printf 'length: %s\n' "$(printf '%s' "$text" | wc -c | tr -d ' ')"
         printf '\n'
         printf '%s\n' "$text"
@@ -414,25 +415,9 @@ cmd_sync() {
     local reply tmp new=0 total=0
     tmp=$(mktemp "${TMPDIR:-/tmp}/mu300-sms.XXXXXX") || die mktemp
     sim_list > "$tmp" || { rm -f "$tmp"; die "cannot list the SIM storage"; }
-    # Concatenated SMS arrive as one SIM record per part; text mode hides the UDH,
-    # but every part of one message carries the same sender and the same SCTS.
-    # Fold parts (CMGL lists them in index order) into one record per (oa,scts).
-    # The odd genuinely-separate same-second pair from one sender folds too - the
-    # same tradeoff the fingerprint dedupe below already makes.
-    local merged
-    merged=$(mktemp "${TMPDIR:-/tmp}/mu300-sms.XXXXXX")
-    LC_ALL=C awk -F'\t' '
-        NF >= 5 {
-            key = $3 "|" $4
-            b = $5; for (i = 6; i <= NF; i++) b = b "\t" $i   # keep tabs inside the body
-            # parts join seamlessly: for UCS2 that is plain hex concatenation (a
-            # separator would break the all-hex test downstream), for GSM text
-            # it is the correct continuation of the message
-            if (key in body) { body[key] = body[key] b; next }
-            body[key] = b; stat[key] = $2; idx[key] = $1; order[++n] = key
-        }
-        END { for (i = 1; i <= n; i++) { k = order[i]; split(k, a, "|"); print idx[k] "\t" stat[k] "\t" a[1] "\t" a[2] "\t" body[k] } }
-    ' "$tmp" > "$merged" && mv "$merged" "$tmp"
+    # Text mode has no UDH: never guess concatenation from sender/timestamp
+    # or SIM index ordering. The daemon prefers archive-sim (PDU), which uses
+    # the same reliable multipart importer as live direct delivery.
     pool_lock
     # fingerprints of what the pool already holds, so a sync is idempotent and the SIM index of
     # a still-present message stays current (indexes shift whenever anything deletes from the SIM)
@@ -483,12 +468,88 @@ cmd_sync() {
     sms_op_unlock
 }
 
+# Gregorian UTC seconds from the decoder's SCTS (portable, no date -d or mktime).
+sms_timestamp() {
+    LC_ALL=C awk -v s="$1" 'BEGIN {
+        y=substr(s,1,4)+0; m=substr(s,6,2)+0; d=substr(s,9,2)+0;
+        if(y<1970 || m<1 || m>12 || d<1 || d>31)exit 1;
+        for(a=1970;a<y;a++)days+=365+(a%4==0 && (a%100!=0 || a%400==0));
+        split("31 28 31 30 31 30 31 31 30 31 30 31",months," ");
+        months[2]+=(y%4==0 && (y%100!=0 || y%400==0));
+        for(a=1;a<m;a++)days+=months[a];
+        v=((days+d-1)*24+substr(s,12,2))*3600+substr(s,15,2)*60+substr(s,18,2);
+        zone=substr(s,21,2)*3600+substr(s,24,2)*60;
+        printf "%.0f\n",v+(substr(s,20,1)=="-"?zone:-zone);
+    }'
+}
+
+# Called with the pool lock held, using the importer's decoded variables.
+# Pending parts are durable but NOT visible messages and do not consume IDs;
+# the forwarding cursor therefore never sees half a message. No polling loop.
+import_multipart() {
+    local key epoch group= candidate count=0 delta oldepoch saved= p joined= hashes= finalhash id= finalsource=direct
+    case "$ref:$total:$part" in *[!0-9:]*|:*|*:) return 1 ;; esac
+    [ "$total" -le 255 ] && [ "$part" -ge 1 ] && [ "$part" -le "$total" ] || return 1
+    epoch=$(sms_timestamp "$scts") || return 1
+    key=$(printf '%s|%s|%s|%s' "$peer" "$ref" "$total" "$scheme" | md5sum | cut -d' ' -f1)
+    mkdir -p "$POOL/multipart" || return 1
+    for candidate in "$POOL/multipart/$key".*; do
+        [ -d "$candidate" ] || continue
+        oldepoch=$(cat "$candidate/epoch" 2>/dev/null) || continue
+        case $oldepoch in ''|*[!0-9]*) continue ;; esac
+        delta=$((epoch - oldepoch)); [ "$delta" -lt 0 ] && delta=$((-delta))
+        [ "$delta" -le 600 ] || continue
+        if [ -f "$candidate/$part" ]; then
+            [ "$(hdr "$candidate/$part" fingerprint)" = "$hash" ] || continue
+            group=$candidate; saved=1; break
+        fi
+        count=$((count + 1)); group=$candidate
+    done
+    # Reused references with indistinguishable competing groups cannot be
+    # guessed safely. Keep the original spool/SIM PDU and do not acknowledge it.
+    [ -n "$saved" ] || [ "$count" -le 1 ] || return 1
+    if [ -z "$group" ]; then
+        group=$POOL/multipart/$key.$hash
+        mkdir -p "$group" || return 1
+        printf '%s\n' "$epoch" > "$group/epoch" || return 1
+    fi
+    if [ -z "$saved" ]; then
+        {
+            printf 'fingerprint: %s\nscts: %s\nsource: %s\npdu: %s\n\n%s\n' "$hash" "$scts" "$source" "$pdu" "$body"
+        } > "$group/$part.part" && mv "$group/$part.part" "$group/$part" || return 1
+    fi
+    sync "$group/$part" "$group" "$POOL/multipart" 2>/dev/null || sync
+    p=1
+    while [ "$p" -le "$total" ]; do
+        [ -f "$group/$p" ] || { echo "multipart SMS: saved part $part/$total"; return 0; }
+        hashes="$hashes $(hdr "$group/$p" fingerprint)"
+        joined="$joined$(body_of "$group/$p")"
+        [ "$(hdr "$group/$p" source)" = direct ] || finalsource=sim
+        p=$((p + 1))
+    done
+    finalhash=$(printf '%s' "$hashes" | md5sum | cut -d' ' -f1)
+    for candidate in "$MSGDIR"/[0-9]*; do
+        [ -f "$candidate" ] || continue
+        [ "$(hdr "$candidate" fingerprint)" = "$finalhash" ] && { id=${candidate##*/}; break; }
+    done
+    if [ -z "$id" ]; then
+        id=$(store_msg mt unread "$peer" "$(hdr "$group/1" scts)" "" pdu "$joined" "$finalhash" "$ref" "$total" 1 "$finalsource" "$hashes") || return 1
+    fi
+    sync "$MSGDIR/$id" "$MSGDIR" "$POOL/next_id" "$POOL" 2>/dev/null || sync
+    # Clean only this validated group; complete-message hashes retain dedupe.
+    for candidate in "$group"/[0-9]* "$group/epoch"; do
+        [ ! -f "$candidate" ] || rm -f "$candidate" || return 1
+    done
+    rmdir "$group" || return 1
+    echo "new multipart SMS: $id from $peer ($total parts)"
+}
+
 # Called by mu300-smsd for a PDU that atd has already persisted from +CMT.
 # Idempotent: a network retry with the same PDU must not duplicate the inbox.
 # The modem is acknowledged only *after* this command returns successfully.
 cmd_import_pdu() {
     local file=${1:-} pdu decoded idx peer scts ref total part body hash text_hash f known= newid= coding=pdu
-    local source=${2:-direct}
+    local source=${2:-direct} scheme=
     case $source in direct|sim) ;; *) die "invalid SMS source" ;; esac
     [ -f "$file" ] || die "direct SMS spool file is missing"
     IFS= read -r pdu < "$file" || die "direct SMS spool file is empty"
@@ -497,12 +558,12 @@ cmd_import_pdu() {
     [ -r "$PDU_AWK" ] || die "SMS PDU decoder is missing"
     # The decoder emits UTF-8 bytes with %c; force byte-oriented awk even on
     # systems whose default locale treats %c values as Unicode code points.
-    decoded=$(printf '0\t%s\n' "$pdu" | LC_ALL=C awk -F '\t' -v mode=decode -f "$PDU_AWK") || decoded=
+    decoded=$(printf '0\t%s\n' "$pdu" | LC_ALL=C awk -F '\t' -v mode=decode -v metadata=1 -f "$PDU_AWK") || decoded=
     if [ -n "$decoded" ]; then
         # Tabs are IFS whitespace: read collapses an empty reference field
         # on single-part messages and shifts the body into multipart_part.
         # A non-whitespace separator preserves every optional field.
-        IFS="$(printf '\001')" read -r idx peer scts ref total part body <<EOF
+        IFS="$(printf '\001')" read -r idx peer scts ref total part body scheme <<EOF
 $(printf '%s' "$decoded" | tr '\t' '\001')
 EOF
     fi
@@ -519,13 +580,20 @@ EOF
     text_hash=$(fingerprint "$peer" "$scts" "$body")
     pool_init
     pool_lock
+    grep -qxF "$hash" "$POOL/deleted" 2>/dev/null && { pool_unlock; return 0; }
     for f in "$MSGDIR"/[0-9]*; do
         [ -f "$f" ] || continue
+        case " $(hdr "$f" multipart_hashes) " in *" $hash "*) known=$f; break ;; esac
         case $(hdr "$f" fingerprint) in
             "$hash") known=$f; break ;;
             "$text_hash") [ "${total:-1}" -le 1 ] && { known=$f; break; } ;;
         esac
     done
+    if [ -z "$known" ] && [ "${total:-1}" -gt 1 ]; then
+        import_multipart || { pool_unlock; die "could not safely assemble multipart SMS"; }
+        pool_unlock
+        return 0
+    fi
     if [ -z "$known" ]; then
         newid=$(store_msg mt unread "$peer" "$scts" "" "$coding" "$body" "$hash" "$ref" "$total" "$part" "$source") ||
             die "could not save direct SMS"
@@ -755,8 +823,13 @@ cmd_delete() {
     pool_init
     # tombstone every removed message so a later sync does not re-import it
     # from the SIM (a local-only delete must actually delete something)
-    tombstone() { [ -n "$(hdr "$1" fingerprint)" ] &&
-        printf '%s\n' "$(hdr "$1" fingerprint)" >> "$POOL/deleted" 2>/dev/null; }
+    tombstone() {
+        local deleted_hash
+        [ -n "$(hdr "$1" fingerprint)" ] && printf '%s\n' "$(hdr "$1" fingerprint)" >> "$POOL/deleted" 2>/dev/null
+        for deleted_hash in $(hdr "$1" multipart_hashes); do
+            printf '%s\n' "$deleted_hash" >> "$POOL/deleted" || return 1
+        done
+    }
     if [ "$what" = all ]; then
         for id in $(ids_newest_first); do
             [ "$wantsim" = true ] && sim_delete "$id" || [ "$wantsim" = false ] ||
