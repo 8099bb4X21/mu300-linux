@@ -47,7 +47,7 @@ esac
 SMS_POOL=$(uci -q get unisoc_modem.main.sms_pool 2>/dev/null)
 [ -d "${SMS_POOL:-/etc/unisoc-modem/sms}" ] || [ ! -d /etc/mu300/sms ] || SMS_POOL=/etc/mu300/sms
 export MU300_SMS_POOL=${MU300_SMS_POOL:-${SMS_POOL:-/etc/unisoc-modem/sms}}
-if [ "${MU300_SIM_SLOT:-0}" = 1 ]; then
+if [ "${MU300_SIM_SLOT:-0}" = 1 ] && [ "${1:-}" != sms-job ]; then
     export MU300_SMS_POOL=$MU300_SMS_POOL/sim1
     export MU300_SMS_OP_LOCK=/tmp/mu300-sms-op-sim1.lock
     export MU300_SMS_DIRECT_FLAG=/run/mu300-sms-direct-sim1
@@ -56,6 +56,8 @@ SMS=${MU300_SMS_BIN:-$(uci -q get unisoc_modem.main.sms_command 2>/dev/null)}
 [ -n "$SMS" ] || SMS=$(command -v mu300-sms 2>/dev/null || true)
 AT=${MU300_AT:-/usr/libexec/unisoc-modem/at}
 DIR=${MU300_DASH_DIR:-/tmp/unisoc-modem}
+SMS_JOB=$DIR/sms-job
+SMS_JOB_T=110
 CELL=$DIR/cell.json
 SIGF=$DIR/sig.json
 COLLECT_LCK=$DIR/collect.lck
@@ -305,22 +307,90 @@ m_sms_show() {
     fi
 }
 
+sms_job_running() {
+    [ -f "$SMS_JOB/start" ] && [ ! -f "$SMS_JOB/end" ] || return 1
+    local pid start
+    pid=$(cat "$SMS_JOB/pid" 2>/dev/null)
+    if [ -n "$pid" ]; then
+        kill -0 "$pid" 2>/dev/null
+    else
+        start=$(cat "$SMS_JOB/start" 2>/dev/null)
+        case $start in ''|*[!0-9]*) return 1 ;; esac
+        [ $(( $(now) - start )) -lt 10 ]
+    fi
+}
+sms_verdict() {
+    local out=$1 rc=$2
+    if [ "$rc" = 0 ]; then
+        printf '{"ok":1,"reply":"%s"}\n' "$(esc_ml "$out")"
+    elif printf '%s\n' "$out" | grep -qE '((mu300|unisoc)-at: busy|SMS operation is busy)'; then
+        printf '{"ok":0,"busy":1,"error":"AT 通道正忙，命令未发出，请重试"}\n'
+    else
+        printf '{"ok":0,"error":"%s"}\n' "$(esc_ml "${out:-调用失败}")"
+    fi
+}
+run_sms_job() {
+    local num text out rc=0
+    num=$(cat "$SMS_JOB/num") || return 1
+    text=$(cat "$SMS_JOB/text") || return 1
+    echo $$ > "$SMS_JOB/pid"
+    out=$(timeout "$SMS_JOB_T" "$SMS" send "$num" "$text" 2>&1) || rc=$?
+    sms_verdict "$out" "$rc" > "$SMS_JOB/result.part" &&
+        mv "$SMS_JOB/result.part" "$SMS_JOB/result"
+    now > "$SMS_JOB/end"
+    rm -f "$SMS_JOB/text" "$SMS_JOB/num"
+}
+m_sms_job() {
+    local result
+    [ -f "$SMS_JOB/start" ] || { printf '{"none":1}\n'; return; }
+    if sms_job_running; then
+        printf '{"running":1,"limit":%s}\n' "$SMS_JOB_T"; return
+    fi
+    result=$(cat "$SMS_JOB/result" 2>/dev/null)
+    [ -n "$result" ] || result='{"ok":0,"error":"调用失败"}'
+    # Unknown outcomes are never automatically resent (duplicate SMS risk).
+    printf '{"done":1,"running":0,%s\n' "${result#\{}"
+}
 m_sms_send() {
     local num text
     num=$(inp '@.num')
     text=$(inp '@.text')
-    case "$num" in ''|*[!+0-9]) printf '{"ok":0,"error":"号码只能是数字（可带 +）"}\n'; return ;; esac
+    case "$num" in ''|*[!+0-9]*)
+        printf '{"ok":0,"error":"号码只能是数字（可带 +）"}\n'; return ;;
+    esac
+    printf '%s\n' "$num" | grep -Eq '^\+?[0-9]{1,20}$' || {
+        printf '{"ok":0,"error":"号码只能是数字（可带 +）"}\n'; return;
+    }
     [ -n "$text" ] || { printf '{"ok":0,"error":"内容为空"}\n'; return; }
     [ ${#text} -le 480 ] || { printf '{"ok":0,"error":"内容太长（>480 字符）"}\n'; return; }
-    local out
-    out=$("$SMS" send "$num" "$text" 2>&1)
-    case "$out" in
-        *"busy"*) printf '{"ok":0,"busy":1,"error":"AT 通道正忙，命令未发出，请重试"}\n' ;;
-        *sent*|*OK*)
-            printf '{"ok":1,"reply":"%s"}\n' "$(esc_ml "$out")" ;;
-        *)
-            printf '{"ok":0,"error":"%s"}\n' "$(esc_ml "$(printf '%s' "$out" | tail -n1)")" ;;
-    esac
+    local claim=$DIR/sms-submit.lock owner
+    umask 077
+    mkdir -p "$DIR" || return 1
+    if ! mkdir "$claim" 2>/dev/null; then
+        owner=$(cat "$claim/pid" 2>/dev/null)
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+            rm -f "$claim/pid"; rmdir "$claim" 2>/dev/null || true
+        fi
+        mkdir "$claim" 2>/dev/null || {
+            printf '{"ok":0,"busy":1,"job":1,"error":"AT 通道正忙，命令未发出，请重试"}\n'; return;
+        }
+    fi
+    echo $$ > "$claim/pid"
+    if sms_job_running; then
+        rm -f "$claim/pid"; rmdir "$claim"
+        printf '{"ok":0,"busy":1,"job":1,"error":"AT 通道正忙，命令未发出，请重试"}\n'; return
+    fi
+    mkdir -p "$SMS_JOB"
+    rm -f "$SMS_JOB/pid" "$SMS_JOB/end" "$SMS_JOB/result" "$SMS_JOB/result.part"
+    if printf '%s\n' "$num" > "$SMS_JOB/num" && printf '%s' "$text" > "$SMS_JOB/text" && now > "$SMS_JOB/start"; then
+        setsid "$0" sms-job </dev/null >/dev/null 2>&1 &
+        echo $! > "$SMS_JOB/pid"
+        printf '{"ok":1,"started":1,"job":1,"limit":%s}\n' "$SMS_JOB_T"
+    else
+        rm -f "$SMS_JOB/start" "$SMS_JOB/num" "$SMS_JOB/text"
+        printf '{"ok":0,"error":"调用失败"}\n'
+    fi
+    rm -f "$claim/pid"; rmdir "$claim"
 }
 
 m_sms_delete() {
@@ -374,6 +444,7 @@ do_list() {
 	"sms_list": { "page": "String", "slot": "String" },
 	"sms_show": { "id": "String", "slot": "String" },
 	"sms_send": { "num": "String", "text": "String", "slot": "String" },
+	"sms_job": { "slot": "String" },
 	"sms_delete": { "id": "String", "sim": "String", "slot": "String" },
 	"sms_sync": { "slot": "String" },
 	"forward_get": { "profile": "String" },
@@ -411,6 +482,9 @@ run_m() {
 }
 
 case "${1:-}" in
+sms-job)
+    run_sms_job
+    ;;
 list)
     do_list
     ;;
@@ -454,6 +528,7 @@ call)
         sms_list)   run_m sms_list   'm_sms_list' ;;
         sms_show)   run_m sms_show   'm_sms_show' ;;
         sms_send)   run_m sms_send   'm_sms_send' ;;
+        sms_job)    m_sms_job ;;
         sms_delete) run_m sms_delete 'm_sms_delete' ;;
         sms_sync)   run_m sms_sync   'm_sms_sync' ;;
         forward_get) "$DASH/sms-forward" get "$(inp '@.profile' shared)" ;;

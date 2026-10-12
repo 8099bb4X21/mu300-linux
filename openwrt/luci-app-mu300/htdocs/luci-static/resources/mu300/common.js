@@ -92,6 +92,8 @@ function waitLockJob(started, active) {
 var callSmsList = scopedRpc({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
 var callSmsShow = scopedRpc({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
 var callSmsSend = scopedRpc({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
+var smsJobRpc = rpc.declare({ object: 'mu300dash', method: 'sms_job', params: [ 'slot' ], nobatch: true, expect: { '': {} } });
+function callSmsJob(slot) { return smsJobRpc(slot == null ? selectedSlot() : String(slot)); }
 var callSmsDel  = scopedRpc({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
 var callSmsSync = scopedRpc({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
 var callForwardGet = rpc.declare({ object: 'mu300dash', method: 'forward_get', params: [ 'profile' ], expect: { '': {} } });
@@ -1567,7 +1569,7 @@ return baseclass.extend({
 	callRates: callRates, callCells: callCells, mergeCell: mergeCell, callStatus: callStatus, callSignal: callSignal, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
 	callLockGet: callLockGet, callLockFresh: callLockFresh, callLockSet: callLockSet,
 	callLockStatus: callLockStatus, waitLockJob: waitLockJob,
-	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
+	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend, callSmsJob: callSmsJob,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	callForwardGet: callForwardGet, callForwardStatus: callForwardStatus,
 	callSimGet: callSimGet, simSelector: simSelector, selectedSlot: selectedSlot, selectViewedSlot: selectViewedSlot,
