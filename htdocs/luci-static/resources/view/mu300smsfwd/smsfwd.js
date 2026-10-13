@@ -1,5 +1,6 @@
 'use strict';
 'require view';
+'require rpc';
 'require poll';
 'require mu300.common as M';
 
