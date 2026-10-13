@@ -24,6 +24,7 @@ do_list() {
 	"test": { },
 	"lists_get": { },
 	"lists_set": { "payload": "String" },
+	"dump": { },
 	"msisdn": { }
 }
 EOF
@@ -44,6 +45,7 @@ call)
             ;;
         test) "$FWD" test-start ;;
         lists_get) "$FWD" lists-get ;;
+        dump) "$FWD" dump ;;
         lists_set)
             payload=$(inp '@.payload')
             printf '%s' "$payload" | "$FWD" lists-set

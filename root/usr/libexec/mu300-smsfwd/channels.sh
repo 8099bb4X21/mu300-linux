@@ -156,7 +156,8 @@ load_config() {
     [ -s "$CONFIG" ] || return 0
     json_load_file "$CONFIG" 2>/dev/null || return 1
     json_get_vars enabled method webhook_url dingtalk_webhook dingtalk_secret sms_to_phone
-    json_get_vars smtp_host smtp_port smtp_username smtp_to smtp_password
+    json_get_vars smtp_host smtp_username smtp_to smtp_password
+    json_get_var smtp_port smtp_port 465
     json_get_var wecom_key wecom_key ''
     json_get_var message_template message_template ''
     json_get_vars power_forward_enabled nickname

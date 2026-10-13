@@ -144,6 +144,33 @@ status_only() {
     add_status
     json_dump
 }
+dump_config() { # full configuration INCLUDING secrets, for export (LuCI/root).
+    # Booleans are emitted as 0/1 so the same object round-trips through set.
+    load_config || { reply_error invalid_config; return; }
+    json_init
+    json_add_int enabled "$enabled"
+    json_add_string method "$method"
+    json_add_string template_language "$template_language"
+    json_add_string message_template "$message_template"
+    json_add_string webhook_url "$webhook_url"
+    webhook_fields
+    json_add_string dingtalk_webhook "$dingtalk_webhook"
+    json_add_string dingtalk_secret "$dingtalk_secret"
+    json_add_string wecom_key "$wecom_key"
+    json_add_string sms_to_phone "$sms_to_phone"
+    json_add_string smtp_host "$smtp_host"
+    json_add_int smtp_port "$smtp_port"
+    json_add_string smtp_username "$smtp_username"
+    json_add_string smtp_to "$smtp_to"
+    json_add_string smtp_password "$smtp_password"
+    json_add_int power_forward_enabled "$power_forward_enabled"
+    json_add_string nickname "$nickname"
+    json_add_int smtp_forward_device_info "$smtp_forward_device_info"
+    json_add_int dingtalk_forward_device_info "$dingtalk_forward_device_info"
+    json_add_int wecom_forward_device_info "$wecom_forward_device_info"
+    json_add_int sms_forward_device_info "$sms_forward_device_info"
+    json_dump
+}
 set_config() {
     ensure_base || { reply_error forward_storage_failed; return; }
     exec 8> "$BASE/state.lock"
@@ -356,6 +383,7 @@ case "${1:-}" in
     status) OWN_MSISDN=$(msf_refresh_msisdn "$MSISDN_CACHE" "$MSISDN_TTL"); export OWN_MSISDN; status_only ;;
     set) set_config ;;
     lists-get) lists_get ;;
+    dump) dump_config ;;
     lists-set) lists_set ;;
     msisdn) show_msisdn ;;
     test-run) test_send "$@" ;;

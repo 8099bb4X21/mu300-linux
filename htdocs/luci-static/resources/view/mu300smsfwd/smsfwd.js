@@ -30,6 +30,7 @@ var callSet = rpc.declare({ object: 'mu300smsfwd', method: 'set', params: [ 'pay
 var callTest = rpc.declare({ object: 'mu300smsfwd', method: 'test', expect: { '': {} } });
 var callListsGet = rpc.declare({ object: 'mu300smsfwd', method: 'lists_get', expect: { '': {} } });
 var callListsSet = rpc.declare({ object: 'mu300smsfwd', method: 'lists_set', params: [ 'payload' ], expect: { '': {} } });
+var callDump = rpc.declare({ object: 'mu300smsfwd', method: 'dump', expect: { '': {} } });
 function result(code) { return M.translate(RESULTS[code] || '暂无投递'); }
 function lines(value) { return String(value || '').split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean); }
 function preset(name) {
@@ -52,26 +53,6 @@ function validPhones(value, max) {
 		if (!/^\+?[0-9]{3,32}$/.test(p) || seen[key]) return false;
 		seen[key] = true; return true;
 	});
-}
-/* Server config -> the flat shape set() expects. Secrets are never part of
- * get(), so they are absent here: an export carries no password, key or
- * token, and an import leaves the ones already on the device untouched. */
-function toPayload(c) {
-	c = c || {};
-	var smtp = c.smtp || {};
-	return {
-		enabled: c.enabled ? 1 : 0, method: c.method, template_language: c.template_language,
-		message_template: c.message_template || '', webhook_url: c.webhook_url || '',
-		webhook_method: c.webhook_method, webhook_content_type: c.webhook_content_type,
-		webhook_body: c.webhook_body || '', webhook_headers: c.webhook_headers || '', webhook_timeout: c.webhook_timeout,
-		dingtalk_webhook: c.dingtalk_webhook || '', sms_to_phone: c.sms_to_phone || '',
-		smtp_host: smtp.host || '', smtp_port: smtp.port || 465, smtp_username: smtp.username || '', smtp_to: smtp.to || '',
-		power_forward_enabled: c.power_forward_enabled ? 1 : 0, nickname: c.nickname || '',
-		smtp_forward_device_info: c.smtp_forward_device_info ? 1 : 0,
-		dingtalk_forward_device_info: c.dingtalk_forward_device_info ? 1 : 0,
-		wecom_forward_device_info: c.wecom_forward_device_info ? 1 : 0,
-		sms_forward_device_info: c.sms_forward_device_info ? 1 : 0
-	};
 }
 
 return view.extend({
@@ -127,7 +108,8 @@ return view.extend({
    <select id="msf-template_language"><option value="zh">简体中文</option><option value="en">English</option><option value="tr">Türkçe</option></select></div>
   <div class="mud-note">保存后用于转发标题、提示文字和电源通知；短信原文及设备备注保持不变。</div>
   <div class="msf-field"><label for="msf-message_template">消息模板（留空用内置）· 占位符 {from} {text} {time} {phone} {sim} {device} {kind}</label><textarea rows="4" id="msf-message_template" spellcheck="false" placeholder="F50_[短信]&#10;{text}&#10;[{from}]&#10;{time}&#10;手机号：{phone}"></textarea></div>
-  <div class="mud-note">一个模板全通道通用，各通道按自己格式发送（钉钉/企微/邮件/本机短信）。Webhook 仍用下方的正文模板。{phone}=本机号，{text}=短信原文。企业微信正文上限 2048 字节、钉钉约 4000 字符，超限不发送。</div>
+  <div class="mud-note">占位符（含义）：<b>{from}</b> 发件人 · <b>{text}</b> 短信原文 · <b>{time}</b> 短信时间 · <b>{phone}</b> 本机号（收短信这张卡）· <b>{sim}</b> 卡槽（SIM1）· <b>{device}</b> 机型+备注 · <b>{kind}</b> 事件类型（sms）。未知占位符原样保留。</div>
+  <div class="mud-note">一个模板全通道通用，各通道按自己格式发送（钉钉/企微 text JSON、邮件 MIME、本机短信转 PDU）；Webhook 仍用下方正文模板。企业微信正文上限 2048 字节、钉钉约 4000 字符，超限不发送。</div>
   <div class="msf-channel" data-method="webhook">
    <div class="msf-field"><label for="msf-webhook_url">HTTPS 地址</label><input id="msf-webhook_url" type="url" autocomplete="off" placeholder="https://example.com/hook"></div>
    <div class="msf-field"><label for="msf-preset">填入推送预设</label><select id="msf-preset"><option value="">自定义</option><option value="json">JSON Webhook</option><option value="bark">Bark</option><option value="pushplus">PushPlus</option><option value="serverchan">ServerChan</option><option value="telegram">Telegram</option><option value="wecom">企业微信</option><option value="dingtalk">钉钉 Webhook</option></select></div>
@@ -180,16 +162,20 @@ return view.extend({
   <div class="msf-field"><label for="msf-blacklist">黑名单关键词（正则，命中则不转发）</label><textarea id="msf-blacklist" placeholder="(?i)广告|推销"></textarea></div>
   <div class="msf-field"><label for="msf-regex">正则改写（pattern===replacement，顺序执行）</label><textarea id="msf-regex" placeholder="验证码.{0,4}(\d{4,8})===验证码：$1"></textarea></div>
    <div class="mud-note">改写作用于短信正文本身（各渠道通用），不改发件人/时间/设备信息、测试与电源消息。</div>
-  <h3 style="margin-top:22px">电源通知与备注</h3>
-  <label class="msf-toggle"><input id="msf-power_forward_enabled" type="checkbox">电源状态通知</label>
-  <div class="mud-note" id="msf-power-note">充电状态变化，或电量跨过 5%、20%、40%、60%、80%、100% 时通知。</div>
-  <div class="mud-note" id="msf-power-last"></div>
-  <div class="msf-field"><label for="msf-nickname">设备备注</label><input id="msf-nickname" maxlength="255" autocomplete="off"></div>
+  <h3 style="margin-top:22px">设备备注</h3>
+  <div class="msf-field"><label for="msf-nickname">设备备注（模板里用 {device} 引用）</label><input id="msf-nickname" maxlength="255" autocomplete="off"></div>
+  <div id="msf-power-block" hidden>
+   <h3 style="margin-top:22px">电源通知</h3>
+   <label class="msf-toggle"><input id="msf-power_forward_enabled" type="checkbox">电源状态通知</label>
+   <div class="mud-note" id="msf-power-note"></div>
+   <div class="mud-note" id="msf-power-last"></div>
+  </div>
  </section>
 </div>
 <section class="mud-card" style="margin-top:14px">
  <div class="msf-row"><h3>测试与状态</h3></div>
  <div class="mud-note">设备独立执行，关闭页面仍生效；仅转发新短信，失败不自动重发。</div>
+ <div class="mud-note">测试消息走同一条投递链路（相同的渠道与凭据），但用固定文案、发件人 NMS，且<b>不经过筛选与正则改写</b>；真实短信才会过 本机号白名单 / 关键词 / 正则。</div>
  <h3 style="margin-top:16px">最近投递记录</h3>
  <div class="mud-note">仅保留本次开机最近 30 次投递结果，不记录号码、地址或短信内容。</div>
  <div class="msf-history" id="msf-history" tabindex="0"></div>
@@ -320,8 +306,8 @@ return view.extend({
 		});
 		if (!history.childNodes.length) history.textContent = M.translate('暂无投递');
 		this.q('power_forward_enabled').disabled = !s.power_supported && !this.q('power_forward_enabled').checked;
-		this.q('power-note').textContent = M.translate(s.power_supported ?
-			'充电状态变化，或电量跨过 5%、20%、40%、60%、80%、100% 时通知。' : '设备暂未提供有效电池状态');
+		this.q('power-block').hidden = !s.power_supported;
+		this.q('power-note').textContent = M.translate('充电状态变化，或电量跨过 5%、20%、40%、60%、80%、100% 时通知。');
 	},
 	refreshStatus: function() {
 		var self = this;
@@ -415,17 +401,17 @@ return view.extend({
 			});
 		};
 		this.q('export').onclick = function() {
-			L.resolveDefault(callGet(), {}).then(function(g) {
+			L.resolveDefault(callDump(), {}).then(function(d) {
 				return L.resolveDefault(callListsGet(), {}).then(function(l) {
 					l = l || {};
-					var out = { app: 'mu300-smsfwd', version: 1, config: toPayload(g.config || {}),
+					var out = { app: 'mu300-smsfwd', version: 2, config: d || {},
 						lists: { whitelist: l.whitelist || '', keywords: l.keywords || '', blacklist: l.blacklist || '', regex: l.regex || '' } };
 					var blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
 					var url = URL.createObjectURL(blob), a = document.createElement('a');
 					a.href = url; a.download = 'mu300-smsfwd-config.json';
 					document.body.appendChild(a); a.click(); document.body.removeChild(a);
 					URL.revokeObjectURL(url);
-					M.toast('设置已导出', { type: 'success' });
+					M.toast('设置已导出（含密钥，请妥善保管）', { type: 'success' });
 				});
 			});
 		};
@@ -440,20 +426,22 @@ return view.extend({
 				fr.onload = function() {
 					var cfg;
 					try { cfg = JSON.parse(fr.result); } catch (e) { M.toast('导入失败：文件不是有效 JSON', { type: 'error' }); input.remove(); return; }
-					var chain = Promise.resolve();
-					if (cfg && cfg.config) chain = chain.then(function() {
-						return L.resolveDefault(callSet(JSON.stringify(cfg.config)), {}).then(function(r) {
-							if (!r.ok) throw new Error(r.error || '配置导入失败');
-						});
+					/* Merge: an empty/absent field keeps the current value, so an
+					 * import never wipes a setting (secrets included) by accident. */
+					var cur = self.payload(), src = (cfg && cfg.config) || cfg || {};
+					Object.keys(cur).forEach(function(k) {
+						if (Object.prototype.hasOwnProperty.call(src, k) &&
+							src[k] !== '' && src[k] !== null && src[k] !== undefined) cur[k] = src[k];
 					});
-					if (cfg && cfg.lists) chain = chain.then(function() {
-						return L.resolveDefault(callListsSet(JSON.stringify(cfg.lists)), {}).then(function(r) {
-							if (!r.ok) throw new Error(r.error || '名单导入失败');
+					var curl = self.listsPayload(), srcl = (cfg && cfg.lists) || {};
+					['whitelist', 'keywords', 'blacklist', 'regex'].forEach(function(k) { if (srcl[k]) curl[k] = srcl[k]; });
+					L.resolveDefault(callSet(JSON.stringify(cur)), {}).then(function(r) {
+						if (!r.ok) throw new Error(r.error || '配置导入失败');
+						return L.resolveDefault(callListsSet(JSON.stringify(curl)), {}).then(function(r2) {
+							if (!r2.ok) throw new Error(r2.error || '名单导入失败');
+							M.toast('设置已导入（空项保留原值）', { type: 'success' });
+							return self.reload();
 						});
-					});
-					chain.then(function() {
-						M.toast('设置已导入', { type: 'success' });
-						return self.reload();
 					}).catch(function(e) {
 						self.error(M.translate(ERRORS[e.message] || e.message || '导入失败'));
 						M.toast('导入失败', { type: 'error' });
