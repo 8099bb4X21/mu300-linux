@@ -52,6 +52,26 @@ function validPhones(value, max) {
 		seen[key] = true; return true;
 	});
 }
+/* Server config -> the flat shape set() expects. Secrets are never part of
+ * get(), so they are absent here: an export carries no password, key or
+ * token, and an import leaves the ones already on the device untouched. */
+function toPayload(c) {
+	c = c || {};
+	var smtp = c.smtp || {};
+	return {
+		enabled: c.enabled ? 1 : 0, method: c.method, template_language: c.template_language,
+		message_template: c.message_template || '', webhook_url: c.webhook_url || '',
+		webhook_method: c.webhook_method, webhook_content_type: c.webhook_content_type,
+		webhook_body: c.webhook_body || '', webhook_headers: c.webhook_headers || '', webhook_timeout: c.webhook_timeout,
+		dingtalk_webhook: c.dingtalk_webhook || '', sms_to_phone: c.sms_to_phone || '',
+		smtp_host: smtp.host || '', smtp_port: smtp.port || 465, smtp_username: smtp.username || '', smtp_to: smtp.to || '',
+		power_forward_enabled: c.power_forward_enabled ? 1 : 0, nickname: c.nickname || '',
+		smtp_forward_device_info: c.smtp_forward_device_info ? 1 : 0,
+		dingtalk_forward_device_info: c.dingtalk_forward_device_info ? 1 : 0,
+		wecom_forward_device_info: c.wecom_forward_device_info ? 1 : 0,
+		sms_forward_device_info: c.sms_forward_device_info ? 1 : 0
+	};
+}
 
 return view.extend({
 	load: function() {
@@ -177,7 +197,10 @@ return view.extend({
   <button class="mud-btn on" id="msf-save">保存设置</button>
   <button class="mud-btn" id="msf-test">发送测试消息</button>
   <button class="mud-btn" id="msf-refresh">刷新状态</button>
+  <button class="mud-btn" id="msf-export">导出设置</button>
+  <button class="mud-btn" id="msf-import">导入设置</button>
  </div>
+ <div class="mud-note">导出为一个 JSON 文件（渠道/开关/名单，不含密码与密钥）；导入会覆盖渠道与名单设置，密钥类留空即保留设备上已有的。</div>
 </section>`;
 		M.localize(root);
 		this.root = root;
@@ -311,6 +334,15 @@ return view.extend({
 		}).finally(function() { self._inflight = null; });
 		return this._inflight;
 	},
+	reload: function() {
+		var self = this;
+		return L.resolveDefault(callGet(), {}).then(function(v) {
+			if (v.config) { self.saved = v.config; self.status = v.status || {}; self.msisdn = v.msisdn || ''; self.fill(v.config); self.savedPayload = JSON.stringify(self.payload()); }
+			return L.resolveDefault(callListsGet(), {}).then(function(vl) {
+				self.fillLists(vl || {}); self.savedLists = JSON.stringify(self.listsPayload()); self.paintStatus();
+			});
+		});
+	},
 	unload: function() { poll.remove(this._refresh); },
 	wire: function() {
 		var self = this;
@@ -380,6 +412,56 @@ return view.extend({
 					setTimeout(function() { self.refreshStatus(); }, 1500);
 				});
 			});
+		};
+		this.q('export').onclick = function() {
+			L.resolveDefault(callGet(), {}).then(function(g) {
+				return L.resolveDefault(callListsGet(), {}).then(function(l) {
+					l = l || {};
+					var out = { app: 'mu300-smsfwd', version: 1, config: toPayload(g.config || {}),
+						lists: { whitelist: l.whitelist || '', keywords: l.keywords || '', blacklist: l.blacklist || '', regex: l.regex || '' } };
+					var blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+					var url = URL.createObjectURL(blob), a = document.createElement('a');
+					a.href = url; a.download = 'mu300-smsfwd-config.json';
+					document.body.appendChild(a); a.click(); document.body.removeChild(a);
+					URL.revokeObjectURL(url);
+					M.toast('设置已导出', { type: 'success' });
+				});
+			});
+		};
+		this.q('import').onclick = function() {
+			var input = document.createElement('input');
+			input.type = 'file'; input.accept = 'application/json,.json'; input.style.display = 'none';
+			document.body.appendChild(input);
+			input.onchange = function() {
+				var f = input.files && input.files[0];
+				if (!f) { input.remove(); return; }
+				var fr = new FileReader();
+				fr.onload = function() {
+					var cfg;
+					try { cfg = JSON.parse(fr.result); } catch (e) { M.toast('导入失败：文件不是有效 JSON', { type: 'error' }); input.remove(); return; }
+					var chain = Promise.resolve();
+					if (cfg && cfg.config) chain = chain.then(function() {
+						return L.resolveDefault(callSet(JSON.stringify(cfg.config)), {}).then(function(r) {
+							if (!r.ok) throw new Error(r.error || '配置导入失败');
+						});
+					});
+					if (cfg && cfg.lists) chain = chain.then(function() {
+						return L.resolveDefault(callListsSet(JSON.stringify(cfg.lists)), {}).then(function(r) {
+							if (!r.ok) throw new Error(r.error || '名单导入失败');
+						});
+					});
+					chain.then(function() {
+						M.toast('设置已导入', { type: 'success' });
+						return self.reload();
+					}).catch(function(e) {
+						self.error(M.translate(ERRORS[e.message] || e.message || '导入失败'));
+						M.toast('导入失败', { type: 'error' });
+					});
+					input.remove();
+				};
+				fr.readAsText(f, 'utf-8');
+			};
+			input.click();
 		};
 		this.q('refresh').onclick = function() { self.refreshStatus(); };
 	}
