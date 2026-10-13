@@ -138,7 +138,12 @@ class Rules(unittest.TestCase):
         self.assertIn('cat /run/mu300-usb-host-mac', defaults)
         self.assertIn('mu300cell-v6.sh', builder)
         self.assertIn('tools/keys/mu300-keys', builder)
-        self.assertTrue((TOP / 'openwrt' / 'overlay' / 'lib' / 'netifd' / 'proto' / 'mu300cell-v6.sh').is_file())
+        renew = TOP / 'openwrt' / 'overlay' / 'lib' / 'netifd' / 'proto' / 'mu300cell-v6.sh'
+        self.assertTrue(renew.is_file())
+        renew_text = renew.read_text()
+        self.assertIn('*+CGEV:*ACT*', renew_text)
+        self.assertIn('*+CGEV:*DETACH*', renew_text)
+        self.assertIn('*+SPPCODATA:*', renew_text)
 
     def test_aurora_is_baked_into_openwrt_and_default(self):
         rootfs = (TOP / 'openwrt' / 'build-rootfs.sh').read_text()

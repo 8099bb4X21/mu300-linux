@@ -742,7 +742,8 @@ static netdev_tx_t iface_start_xmit(struct sk_buff *skb, struct net_device *ndev
 	ret = sprd_send_data(vif->priv, vif, msg, skb, SPRD_DATA_TYPE_NORMAL,
 			     offset, true);
 	if (ret) {
-		netdev_err(ndev, "%s drop msg due to TX Err\n", __func__);
+		if (net_ratelimit())
+			netdev_err(ndev, "%s drop msg due to TX Err\n", __func__);
 		/* FIXME
 		 * as debug sdiom later, just drop the msg here
 		 * wapi temp drop

@@ -1873,3 +1873,37 @@ experiment, and `mu300-update` keeps that segment. 33e made init honour a guard 
 from Android with mu300-linux is exactly that. The generic ramdisk segment, which every update appends behind the
 device segment, now carries an empty `etc/mu300-trial-guard` (a later file replaces an earlier one), and an
 experiment's guard goes into a segment of its own behind the generic one.
+
+## 2026-10-13: Mobility renewal gaps in the OpenWrt protocol
+
+The existing event monitor was only started for dual-stack contexts. IPv4-only
+connections therefore missed in-place address/DNS renewal, while the watchdog
+redialled when CGPADDR differed from the kernel address. Both families now use
+the same event owner; the watchdog requests renew for an active context and
+does not confuse failed AT reads with detach or radio-off. ACT/DETACH/PCO hints
+are coalesced without dropping hints during cooldown. Persistent explicit
+inactivity still requests netifd recovery after bounded confirmation.
+
+Replacement addresses are installed before old ones are withdrawn; failed
+updates retain the previous snapshot for retry. External IPv6 reporting and
+finite RA lifetimes remain intact. There is no ModemManager registration
+timeout here, so the E5/T551M 45-second change was not copied.
+
+20 focused checks passed, including dash/bash/BusyBox renewal tests; adjacent
+IPv6 regressions passed with dash/bash (35 combined checks). No MU300 device
+was deployed or tested for this change. See
+[implementation and validation](CELLULAR-MOBILITY-20261013.zh-CN.md).
+
+## 2026-10-13：对齐 T551M 发现的 Wi-Fi 接入缺陷
+
+MU300 的 AP/GO RX 同样把网络字节序 h_proto 与主机字节序协议常量直接
+比较，导致 IP 组播进入额外复制转发分支。已修正主线共用源码，并补齐
+5.4 构建补丁；保留单播 W2W、非 IP、桥接与 IPv6。
+
+PCIe/SDIO 的过期客户端丢弃和组播 LUT 查找日志收敛，上层 TX 错误限速，
+队列、credit 和 skb/message 释放路径不变。现有 WCN 事件恢复保留，补上
+down 后复查 disabled，避免恢复期间用户关闭 Wi-Fi 仍被重新打开。
+
+34 项 RX/TX/WCN/蜂窝相关测试通过，全部 5.4 Wi-Fi 补丁从原始厂商源码
+实际应用成功。未部署 MU300 实机，不能把 T551M 的现场结果当作 MU300
+验证。详见 [Wi-Fi 对齐记录](WIFI-FORWARDING-20261013.zh-CN.md)。

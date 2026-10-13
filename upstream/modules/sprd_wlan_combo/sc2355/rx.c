@@ -284,8 +284,9 @@ static void rx_skb_process(struct sprd_priv *priv, struct sk_buff *skb)
 		    msdu_desc->bc_mc_w2w_flag) {
 			struct ethhdr *eth = (struct ethhdr *)skb->data;
 
-			if (eth->h_proto != ETH_P_IP &&
-			    eth->h_proto != ETH_P_IPV6) {
+			/* IP multicast is forwarded by the host network stack. */
+			if (eth->h_proto != htons(ETH_P_IP) &&
+			    eth->h_proto != htons(ETH_P_IPV6)) {
 				tx_skb = pskb_copy(skb, GFP_ATOMIC);
 				if (likely(tx_skb)) {
 					tx_skb->dev = ndev;

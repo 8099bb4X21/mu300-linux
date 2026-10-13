@@ -126,7 +126,9 @@ proto_mu300cell_setup() {
 	printf '{"phase":"connected"}\n' > "/run/unisoc-apn-dial-$slot.json"
 	# The event-driven child is the protocol task netifd owns. It reports IPv6
 	# netlink changes and CGEV-triggered IPv4/DNS changes without holding setup.
-	[ "${pdptype:-IP}" != IP ] && proto_run_command "$config" \
+	# IPv4-only contexts change address/DNS during mobility too. Keep the
+	# same event owner for both PDP families; IPv6 monitoring blocks while idle.
+	proto_run_command "$config" \
 		/lib/netifd/proto/mu300cell-v6.sh "$config" "$ifname" "$ip" \
 		"${prefix:-32}" "$dns1" "$dns2" "${peerdns:-1}" "" "$slot"
 	[ "${pdptype:-IP}" = IP ] && [ -w "/proc/sys/net/ipv6/conf/$ifname/disable_ipv6" ] &&
