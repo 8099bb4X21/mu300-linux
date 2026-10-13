@@ -60,8 +60,9 @@ jobs:
           name: mu300-smsfwd-apk
           path: work/mu300-smsfwd.apk*
 
-      - name: List APK contents
+      - name: Show APK artifact
+        # NOTE: the apk-tools v3 container is opaque to tar; installability
+        # is proven device-side via apk add --simulate (see build log).
         run: |
           ls -la work/
-          f=$(ls work/mu300-smsfwd-*.apk | head -1)
-          tar -tzf "$f" | sort | head -60 || echo "(apk content list skipped)"
+          sha256sum work/mu300-smsfwd.apk
