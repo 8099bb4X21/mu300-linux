@@ -3,6 +3,7 @@ name: SMSFWD package build
 # Standalone mu300-smsfwd APK (sidecar SMS forwarding with own-number
 # whitelist). Independent repo: push here builds the APK, Artifacts only,
 # no Release. The firmware repo is never touched.
+# (retrigger note: second push to verify Actions pickup on a new branch)
 on:
   push:
     paths: ['Makefile', 'htdocs/**', 'root/**', 'cloud/**', 'tests/**', '.github/workflows/smsfwd-build.yml']
