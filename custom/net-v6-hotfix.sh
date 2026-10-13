@@ -15,7 +15,7 @@ set -eu
 # 载荷一致性（10-07 验证版 md5）：
 md5sum /in/custom/net-v6/mu300-v6-share.sh | grep -q '^6434f10c5f14678a97a1d7983dfe6058 ' \
     || { echo "net-v6-hotfix: payload mu300-v6-share.sh mismatch" >&2; exit 1; }
-md5sum /in/custom/net-v6/mu300-ipv6-monitor.sh | grep -q '^cebd5fe1611e2ff6a55bf76753402404 ' \
+md5sum /in/custom/net-v6/mu300-ipv6-monitor.sh | grep -q '^34253668023dfff613f9cff9b9f3a1fd ' \
     || { echo "net-v6-hotfix: payload mu300-ipv6-monitor.sh mismatch" >&2; exit 1; }
 md5sum /in/custom/net-v6/mu300-ipv6-monitor.init | grep -q '^574052adc434fee693ecb70ea8ec48da ' \
     || { echo "net-v6-hotfix: payload mu300-ipv6-monitor.init mismatch" >&2; exit 1; }
