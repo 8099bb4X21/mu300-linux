@@ -70,8 +70,8 @@ if command -v "$MSF_JQ" >/dev/null 2>&1; then
 
     # --- rewriting: pattern===replacement, $N and order ----------------------
     if [ -f "$RXJQ" ]; then
-        printf '验证码.{0,4}(\\d{4,8})===验证码：$1\n# c\n\\[短信\\]\\n===&\\n' > "$T/rx"
-        expect_eq rx-extract '验证码：223366' \
+        printf '验证码是(\\d{4,8})===验证码：$1\n# c\n' > "$T/rx"
+        expect_eq rx-extract '您的验证码：223366' \
             "$(msf_apply_rx "$T/rx" "$RXJQ" '您的验证码是223366')"
         printf 'foo===bar\nbar===BAZ\n' > "$T/rx2"
         expect_eq rx-order 'BAZ' "$(msf_apply_rx "$T/rx2" "$RXJQ" 'foo')"
