@@ -6,6 +6,7 @@
 #   块1 修好标志：git ls-files -s cmt-spool 显示 100755。
 #   块2 修好标志：mu300-sms 自带显示时间重排（含 fmt_time 或等价）。
 #   块3 修好标志：出厂 unisoc_modem 的 sms_pool 即 /etc/mu300/sms。
+#   块4 修好标志：mu300-sms 的 import_multipart 组 key 不含 SMSC。
 #
 # 历史：2026-10-12 上游 a5bd3e0 已自行重组长短信（import_multipart），比本文件
 #   原先的载荷（分组/暂存/扫尾）更严，该载荷与其冲突且落后，已随该更新删除；
@@ -75,5 +76,19 @@ if grep -q "option sms_pool '/etc/unisoc-modem/sms'" /etc/config/unisoc_modem 2>
 fi
 grep -q "option sms_pool '/etc/mu300/sms'" /etc/config/unisoc_modem \
     || { echo "sms-hotfix: sms_pool not pointing at kano pool" >&2; exit 1; }
+
+# --- 块4：长短信组 key 去掉 SMSC（上游 key = peer|ref|total|scheme，而 scheme
+# 末段是 SMSC；部分运营商同一条长短信的各段走不同 SMSC —— 本网实测
+# ...05005F0 vs ...06005F0 —— 于是各段 key 不同、永不合组、短信收不到） ---
+# 上游修好标志：import_multipart 的 key 不含 SMSC。届时删本块。
+if grep -qF 'scheme%:*}' "$SMS" 2>/dev/null; then
+    echo "sms-hotfix: smsc key patch already present, block 4 skipped" >&2
+else
+    [ "$(grep -cF '"$scheme" | md5sum' "$SMS" 2>/dev/null)" = 1 ] \
+        || { echo "sms-hotfix: scheme key anchor count != 1" >&2; exit 1; }
+    sed -i 's/"\$scheme" | md5sum/"\${scheme%:*}" | md5sum/' "$SMS" || { echo "sms-hotfix: key sed failed" >&2; exit 1; }
+    grep -qF 'scheme%:*}' "$SMS" || { echo "sms-hotfix: key patch missing after sed" >&2; exit 1; }
+    sh -n "$SMS" || { echo "sms-hotfix: mu300-sms broken after key patch" >&2; exit 1; }
+fi
 
 echo "sms-hotfix: done"
