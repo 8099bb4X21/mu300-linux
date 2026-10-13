@@ -31,6 +31,7 @@ var callTest = rpc.declare({ object: 'mu300smsfwd', method: 'test', expect: { ''
 var callListsGet = rpc.declare({ object: 'mu300smsfwd', method: 'lists_get', expect: { '': {} } });
 var callListsSet = rpc.declare({ object: 'mu300smsfwd', method: 'lists_set', params: [ 'payload' ], expect: { '': {} } });
 var callDump = rpc.declare({ object: 'mu300smsfwd', method: 'dump', expect: { '': {} } });
+var callTestDryrun = rpc.declare({ object: 'mu300smsfwd', method: 'test_dryrun', params: [ 'num', 'text' ], expect: { '': {} } });
 function result(code) { return M.translate(RESULTS[code] || '暂无投递'); }
 function lines(value) { return String(value || '').split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean); }
 function preset(name) {
@@ -188,6 +189,13 @@ return view.extend({
   <button class="mud-btn" id="msf-import">导入设置</button>
  </div>
  <div class="mud-note">导出为一个 JSON 文件（渠道/开关/名单，不含密码与密钥）；导入会覆盖渠道与名单设置，密钥类留空即保留设备上已有的。</div>
+ <div class="msf-pair" style="margin-top:12px">
+  <div class="msf-field"><label for="msf-dry-num">模拟发件人</label><input id="msf-dry-num" value="+8619999999" autocomplete="off"></div>
+  <div class="msf-field"><label for="msf-dry-text">模拟短信内容</label><input id="msf-dry-text" value="【测试】您的验证码是223366，5分钟内有效。" autocomplete="off"></div>
+ </div>
+ <button class="mud-btn" id="msf-dryrun">模拟短信全链条测试</button>
+ <div class="mud-note">过模板+正则+渠道，<b>绕过筛选</b>；用来预览/验证真实短信会被发成什么样（会真的投递一次）。</div>
+ <div class="msf-field"><label for="msf-dry-preview">最终消息预览（只读，测试后回填）</label><textarea id="msf-dry-preview" rows="4" readonly></textarea></div>
 </section>`;
 		M.localize(root);
 		this.root = root;
@@ -453,5 +461,22 @@ return view.extend({
 			input.click();
 		};
 		this.q('refresh').onclick = function() { self.refreshStatus(); };
+		this.q('dryrun').onclick = function() {
+			var num = self.q('dry-num').value.trim();
+			var text = self.q('dry-text').value;
+			if (!text) { self.error('请输入模拟内容'); return; }
+			var btn = self.q('dryrun'); M.busy(btn, true); self.error('');
+			L.resolveDefault(callTestDryrun(num, text), {}).then(function(r) {
+				M.busy(btn, false);
+				if (r && r.ok) {
+					M.toast('模拟结果：' + M.translate(RESULTS[r.result] || r.result),
+						{ type: r.result === 'sent' ? 'success' : 'error' });
+					if (r.preview != null && self.q('dry-preview')) { self.q('dry-preview').value = r.preview; }
+					self.refreshStatus();
+				} else {
+					self.error(M.translate(ERRORS[(r && r.error) || ''] || '模拟失败'));
+				}
+			});
+		};
 	}
 });

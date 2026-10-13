@@ -398,6 +398,7 @@ $(device_info)"; fi
         wecom) [ "$(msf_byte_len "$_content")" -le 2048 ] || { DELIVER_RESULT=message_too_long; return 1; } ;;
         dingtalk) [ "$(msf_byte_len "$_content")" -le 12000 ] || { DELIVER_RESULT=message_too_long; return 1; } ;;
     esac
+    MSF_CONTENT=$_content
     if [ "$method" = sms ]; then
         [ -n "$SMS" ] && [ -x "$SMS" ] || { DELIVER_RESULT=source_unavailable; return 1; }
         # The local SMS adapter only supports one 70-unit UCS-2 part. Do not

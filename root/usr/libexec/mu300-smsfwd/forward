@@ -345,6 +345,34 @@ test_send() {
     record_delivery test || :
     write_result "$DELIVER_RESULT" "$power_last_result" || :
 }
+# Simulated full-chain test (mirrors the Android plugin's dryrun): the caller
+# supplies a sender and free text; the message goes through the SAME template
+# + regex rewrite + channel as a real SMS, but bypasses the whitelist/keyword
+# filter. Exists so the chain can be verified without waiting for a real SMS.
+test_dryrun() {
+    ensure_base || exit 1
+    exec 8> "$BASE/state.lock"
+    flock -n 8 || { reply_error forward_busy; return; }
+    _payload=$(cat)
+    json_load "$_payload" 2>/dev/null || { reply_error invalid_config; return; }
+    json_get_var _num num
+    json_get_var _txt text
+    [ -n "$_txt" ] || { reply_error invalid_config; return; }
+    OWN_MSISDN=$(msf_refresh_msisdn "$MSISDN_CACHE" "$MSISDN_TTL")
+    export OWN_MSISDN
+    load_config || { reply_error invalid_config; return; }
+    load_state; read_result
+    # A test exercises the channel even while forwarding is off.
+    enabled=1
+    deliver sms "${_num:-NMS}" "$_txt" "$(date '+%y/%m/%d,%H:%M:%S')" || :
+    record_delivery test || :
+    write_result "$DELIVER_RESULT" "$power_last_result" || :
+    json_init
+    json_add_int ok 1
+    json_add_string result "$DELIVER_RESULT"
+    json_add_string preview "$MSF_CONTENT"
+    json_dump
+}
 start_test() {
     ensure_base && load_config || { reply_error invalid_config; return; }
     [ "$enabled" = 1 ] || { reply_error disabled; return; }
@@ -387,7 +415,8 @@ case "${1:-}" in
     lists-set) lists_set ;;
     msisdn) show_msisdn ;;
     test-run) test_send "$@" ;;
+    test-dryrun) test_dryrun ;;
     test-start) start_test ;;
     run) run_daemon ;;
-    *) echo 'usage: forward {get|status|set|lists-get|lists-set|msisdn|test-run|test-start|run}' >&2; exit 2 ;;
+    *) echo 'usage: forward {get|status|set|lists-get|lists-set|msisdn|dump|test-run|test-dryrun|test-start|run}' >&2; exit 2 ;;
 esac

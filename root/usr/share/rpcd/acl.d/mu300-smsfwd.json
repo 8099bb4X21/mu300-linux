@@ -8,7 +8,7 @@
   },
   "write": {
    "ubus": {
-    "mu300smsfwd": [ "get", "status", "lists_get", "msisdn", "set", "test", "lists_set" ]
+    "mu300smsfwd": [ "get", "status", "lists_get", "msisdn", "set", "test", "test_dryrun", "lists_set" ]
    }
   }
  }
