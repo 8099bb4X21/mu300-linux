@@ -1,10 +1,8 @@
 #!/bin/sh
 # own: IPv6 安卓对齐的 uci 默认值（95-own-defaults 同机制）。
 # 在 kano 90-mu300 之后执行（编号 96），覆盖它写死的 relay/NAT66。
-# 只在全新安装首启生效一次（marker 见末尾；sysupgrade 保留配置的用户改动不再覆盖）。
+# 全新安装首启执行一次（成功后系统自动删除本文件，无需 marker）。
 # 由 custom/net-v6-hotfix.sh 容器期安装；上游默认改对后随 hotfix 整块删除。
-[ "$(uci -q get system.net_v6_hotfix.enabled)" = 1 ] && exit 0
-
 uci -q batch <<UCI
 set dhcp.lan.ra='server'
 set dhcp.lan.dhcpv6='disabled'
@@ -31,14 +29,8 @@ uci -q delete "$zone".masq6 2>/dev/null || true
 uci commit dhcp
 uci commit firewall
 
-# 断言（失败则本文件留待下次开机重试，不写 marker）：
+# 断言（失败则 exit 1，本文件留待下次开机重试）：
 [ "$(uci -q get dhcp.lan.ra)" = server ] || exit 1
 [ "$(uci -q get dhcp.wan.ra)" = disabled ] || exit 1
 uci -q get "$zone".masq6 >/dev/null 2>&1 && exit 1
-
-uci -q batch <<UCI
-set system.net_v6_hotfix=net_v6_hotfix
-set system.net_v6_hotfix.enabled='1'
-UCI
-uci commit system
 exit 0

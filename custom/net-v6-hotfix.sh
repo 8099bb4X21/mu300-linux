@@ -10,23 +10,17 @@
 # custom/net-v6/96-net-v6-defaults（编号在 90 之后，首启覆盖它）。
 set -eu
 
-# --- 块1：部署脚本（上游无这些文件；若上游自带同名则复核冲突） ---
+# --- 块1：部署脚本（v6-share 供 cell hook 调；monitor 供 cron 调） ---
 # 上游修好标志：官方提供同等前缀镜像/监控机制。届时删本块。
-# 载荷一致性（10-07 验证版 md5）：
+# 载荷一致性（线上验证版 md5）：
 md5sum /in/custom/net-v6/mu300-v6-share.sh | grep -q '^6434f10c5f14678a97a1d7983dfe6058 ' \
     || { echo "net-v6-hotfix: payload mu300-v6-share.sh mismatch" >&2; exit 1; }
-md5sum /in/custom/net-v6/mu300-ipv6-monitor.sh | grep -q '^34253668023dfff613f9cff9b9f3a1fd ' \
+md5sum /in/custom/net-v6/mu300-ipv6-monitor.sh | grep -q '^46f07b119bdacefabb545a9f32bb83bc ' \
     || { echo "net-v6-hotfix: payload mu300-ipv6-monitor.sh mismatch" >&2; exit 1; }
-md5sum /in/custom/net-v6/mu300-ipv6-monitor.init | grep -q '^574052adc434fee693ecb70ea8ec48da ' \
-    || { echo "net-v6-hotfix: payload mu300-ipv6-monitor.init mismatch" >&2; exit 1; }
+mkdir -p /usr/script
 cp /in/custom/net-v6/mu300-v6-share.sh /usr/sbin/mu300-v6-share
-cp /in/custom/net-v6/mu300-ipv6-monitor.sh /usr/sbin/mu300-ipv6-monitor
-cp /in/custom/net-v6/mu300-ipv6-monitor.init /etc/init.d/mu300-ipv6-monitor
-chmod 0755 /usr/sbin/mu300-v6-share /usr/sbin/mu300-ipv6-monitor /etc/init.d/mu300-ipv6-monitor
-# monitor 开机自启（容器内无 procd/ubus，直接链 rc.d，仿 ksmbd 段）：
-n=$(sed -n "s/^START=//p" /etc/init.d/mu300-ipv6-monitor)
-[ -n "$n" ] || { echo "net-v6-hotfix: no START in monitor init" >&2; exit 1; }
-ln -sf ../init.d/mu300-ipv6-monitor "/etc/rc.d/S${n}mu300-ipv6-monitor"
+cp /in/custom/net-v6/mu300-ipv6-monitor.sh /usr/script/mu300-ipv6-monitor
+chmod 0755 /usr/sbin/mu300-v6-share /usr/script/mu300-ipv6-monitor
 
 # --- 块2：mu300cell hook（幂等追加；禁整文件覆盖：上游已加双 SIM，覆盖会杀掉它） ---
 # 上游修好标志：官方 report() 自带前缀镜像触发。届时删本块。
@@ -50,5 +44,24 @@ grep -q "mu300-v6-share" /lib/netifd/proto/mu300cell-v6.sh 2>/dev/null || {
 [ -f /in/custom/net-v6/96-net-v6-defaults ] || { echo "net-v6-hotfix: 96 defaults missing" >&2; exit 1; }
 cp /in/custom/net-v6/96-net-v6-defaults /etc/uci-defaults/96-net-v6-defaults
 chmod 0755 /etc/uci-defaults/96-net-v6-defaults
+
+# --- 块4：cron 注释行 + 启用 cron（monitor 改由 cron 调；默认注释，用户自启用） ---
+# 上游修好标志：官方自带等效机制。届时删本块。
+# 注意：OpenWrt 的 /etc/init.d/cron 在 /etc/crontabs 为空时 start_service 直接
+# return 1 不启动，所以必须建出这个（非空的）文件，cron 才会随 S50cron 起。
+CR=/etc/crontabs/root
+mkdir -p /etc/crontabs
+[ -f "$CR" ] || : > "$CR"
+grep -q "mu300-ipv6-monitor" "$CR" 2>/dev/null || \
+    printf '%s\n' \
+      '# IPv6 断线监控：取消下一行注释即启用（每 4 分钟检测一次；一次运行内含最多 3 次、间隔 30s 复检，连续失败自动重拨，重拨无效过冷却则重启）' \
+      '#*/4 * * * * /usr/script/mu300-ipv6-monitor' >> "$CR"
+grep -q '/usr/script/mu300-ipv6-monitor' "$CR" \
+    || { echo "net-v6-hotfix: crontab line missing" >&2; exit 1; }
+# cron 开机自启（rc.common enable 需 ubus，容器内直接链 rc.d，仿 ksmbd 段）
+if [ -e /etc/init.d/cron ] && [ ! -e /etc/rc.d/S50cron ]; then
+    n=$(sed -n 's/^START=//p' /etc/init.d/cron)
+    [ -n "$n" ] && ln -sf ../init.d/cron "/etc/rc.d/S${n}cron"
+fi
 
 echo "net-v6-hotfix: done"
