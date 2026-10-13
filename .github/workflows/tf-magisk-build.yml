@@ -136,8 +136,32 @@ jobs:
       # SDK, so build it once here on a native x86 runner. The arm build jobs
       # download it and build-block-mount.sh's verified-cache check then skips
       # the docker SDK build (emulating that under QEMU took ~85 min per leg).
-      - name: Build block-mount APK (native x86)
+      - name: Compute cache key
+        id: key
+        run: |
+          # same inputs as the stamp in openwrt/build-block-mount.sh: any change
+          # rebuilds, anything else reuses the cached APK
+          k="blockmount-$(cat openwrt/block-mount.Dockerfile openwrt/build-block-mount.sh openwrt/build-block-mount-inner.sh openwrt/block-probe-guard.h openwrt/patches/fstools-probe-device-types.patch | sha256sum | cut -d' ' -f1)"
+          echo "key=$k" >> "$GITHUB_OUTPUT"
+          echo "key=$k"
+
+      - name: Restore block-mount APK
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: work/
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Build block-mount APK (native x86, cache miss)
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh openwrt/build-block-mount.sh "$PWD/work/block-mount-mu300.apk"
+
+      - name: Save block-mount APK (cache miss)
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: work/
+          key: ${{ steps.key.outputs.key }}
 
       - name: Upload block-mount APK
         uses: actions/upload-artifact@v4
