@@ -12,7 +12,7 @@ BASE=${MSF_BASE:-/etc/mu300/smsfwd}
 die() { echo "mu300-smsfwd: $*" >&2; exit 1; }
 need_root() { [ "$(id -u)" = 0 ] || die "run as root"; }
 
-cnt() { _c=$(grep -c . "$1" 2>/dev/null || true); [ -n "$_c" ] || _c=0; printf '%s' "$_c"; }
+cnt() { _c=$(awk '!/^[[:space:]]*#/ && NF { n++ } END { print n + 0 }' "$1" 2>/dev/null); [ -n "$_c" ] || _c=0; printf '%s' "$_c"; }
 
 cmd_status() {
     echo "service: $(/etc/init.d/mu300-smsfwd enabled 2>/dev/null && echo enabled || echo disabled)"
