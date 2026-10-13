@@ -1,0 +1,66 @@
+name: SMSFWD package build
+
+# Standalone mu300-smsfwd APK (sidecar SMS forwarding with own-number
+# whitelist). Independent repo: push here builds the APK, Artifacts only,
+# no Release. The firmware repo is never touched.
+on:
+  push:
+    paths: ['Makefile', 'htdocs/**', 'root/**', 'cloud/**', 'tests/**', '.github/workflows/smsfwd-build.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax checks
+        run: |
+          set -eu
+          for f in \
+            root/usr/libexec/mu300-smsfwd/forward \
+            root/usr/libexec/mu300-smsfwd/lib.sh \
+            root/usr/libexec/mu300-smsfwd/channels.sh \
+            root/usr/libexec/rpcd/mu300smsfwd \
+            root/usr/sbin/mu300-smsfwd \
+            root/etc/init.d/mu300-smsfwd \
+            cloud/build.sh \
+            cloud/build-inner.sh \
+            tests/test_msfwd_lib.sh; do
+            [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
+            sh -n "$f" || { echo "syntax error: $f" >&2; exit 1; }
+          done
+          echo "shell syntax OK"
+
+      - name: Filter unit test (dash and bash)
+        run: |
+          set -eu
+          for shbin in dash bash; do
+            command -v "$shbin" >/dev/null 2>&1 || continue
+            echo "== $shbin =="
+            "$shbin" tests/test_msfwd_lib.sh || exit 1
+          done
+
+      - name: Restore APK cache
+        uses: actions/cache@v4
+        with:
+          path: work/mu300-smsfwd.apk*
+          key: smsfwd-apk-${{ hashFiles('Makefile', 'htdocs/**', 'root/**', 'cloud/**') }}
+
+      - name: Build APK (native x86 SDK, cache miss)
+        run: sh cloud/build.sh work/mu300-smsfwd.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mu300-smsfwd-apk
+          path: work/mu300-smsfwd.apk*
+
+      - name: List APK contents
+        run: |
+          ls -la work/
+          f=$(ls work/mu300-smsfwd-*.apk | head -1)
+          tar -tzf "$f" | sort | head -60 || echo "(apk content list skipped)"

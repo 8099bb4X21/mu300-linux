@@ -1,0 +1,8 @@
+# mu300-smsfwd whitelist: own SIM numbers that default to FORWARD.
+# One number per line; '#' starts a comment. Any format works, digits are
+# compared (last 11 digits, so a country code is ignored):
+#   18566098412
+#   +8618566098412
+# A card whose own number is NOT listed here is NOT forwarded, unless the
+# SMS content hits a whitelist keyword (keywords.txt). An unreadable own
+# number also blocks. This is the per-card policy switch for SIM swaps.

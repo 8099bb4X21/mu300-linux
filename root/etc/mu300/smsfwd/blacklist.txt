@@ -1,0 +1,6 @@
+# mu300-smsfwd blacklist keywords: one regex per line, '#' starts a comment.
+# Only consulted after the own number passed the whitelist (and no whitelist
+# keyword hit). A new SMS whose content matches ANY line is NOT forwarded.
+# Same regex rules as keywords.txt.
+# Examples:
+# (?i)广告|推销|退订

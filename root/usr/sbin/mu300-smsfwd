@@ -1,0 +1,76 @@
+#!/bin/sh
+# mu300-smsfwd: operator CLI for the sidecar forwarding package.
+#   mu300-smsfwd status        service + own number + cursor + last results
+#   mu300-smsfwd enable|disable
+#   mu300-smsfwd test          send one test message through the saved channel
+#   mu300-smsfwd msisdn        refresh and print the own number
+#   mu300-smsfwd lists         print the four list files with line counts
+export PATH="$PATH:/opt/mu300/bin:/usr/libexec/mu300-smsfwd:/usr/sbin:/sbin"
+FWD=${MSF_FWD_BIN:-/usr/libexec/mu300-smsfwd/forward}
+BASE=${MSF_BASE:-/etc/mu300/smsfwd}
+
+die() { echo "mu300-smsfwd: $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" = 0 ] || die "run as root"; }
+
+cnt() { _c=$(grep -c . "$1" 2>/dev/null || true); [ -n "$_c" ] || _c=0; printf '%s' "$_c"; }
+
+cmd_status() {
+    echo "service: $(/etc/init.d/mu300-smsfwd enabled 2>/dev/null && echo enabled || echo disabled)"
+    "$FWD" status 2>/dev/null | jsonfilter -e '@.status.enabled' 2>/dev/null | grep -q 1 &&
+        echo "forwarding: on" || echo "forwarding: off"
+    printf 'own number: %s\n' "$("$FWD" msisdn 2>/dev/null | jsonfilter -e '@.msisdn' 2>/dev/null)"
+    [ -r "$BASE/state" ] && printf 'cursor: %s\n' "$(cat "$BASE/state")"
+    [ -r /run/mu300-smsfwd-result ] && printf 'last: %s\n' "$(cat /run/mu300-smsfwd-result)"
+    printf 'lists: wl=%s kw=%s bl=%s rx=%s\n' \
+        "$(cnt "$BASE/whitelist.txt")" "$(cnt "$BASE/keywords.txt")" \
+        "$(cnt "$BASE/blacklist.txt")" "$(cnt "$BASE/regex.txt")"
+}
+
+cmd_enable() { cmd_flip 1; }
+cmd_disable() { cmd_flip 0; }
+# Flip enabled through the full set path so the replay barrier and
+# validation run exactly as in the UI. Secrets stay (set keeps them
+# unless a new value or a clear flag is sent).
+cmd_flip() {
+    need_root
+    command -v jq >/dev/null 2>&1 || die "jq is required (apk add jq)"
+    _cur=$("$FWD" get 2>/dev/null) || die "cannot read current config"
+    _payload=$(printf '%s' "$_cur" | jq -c --argjson en "$1" '.config | {
+        enabled: $en, method, template_language, webhook_url,
+        webhook_method, webhook_content_type, webhook_body,
+        webhook_headers, webhook_timeout, dingtalk_webhook,
+        sms_to_phone, smtp_host: .smtp.host, smtp_port: .smtp.port,
+        smtp_username: .smtp.username, smtp_to: .smtp.to,
+        power_forward_enabled, nickname, smtp_forward_device_info,
+        dingtalk_forward_device_info, wecom_forward_device_info, sms_forward_device_info
+    }') || die "cannot build config payload"
+    printf '%s' "$_payload" | "$FWD" set
+}
+
+cmd_test() {
+    need_root
+    "$FWD" test-start
+}
+
+cmd_msisdn() {
+    "$FWD" msisdn
+}
+
+cmd_lists() {
+    for f in whitelist.txt keywords.txt blacklist.txt regex.txt; do
+        printf '=== %s ===\n' "$f"
+        cat "$BASE/$f" 2>/dev/null
+    done
+}
+
+case ${1:-status} in
+    status) cmd_status ;;
+    enable) cmd_enable ;;
+    disable) cmd_disable ;;
+    test) cmd_test ;;
+    msisdn) cmd_msisdn ;;
+    lists) cmd_lists ;;
+    -h|--help|help)
+        sed -n '2,8s/^# \{0,1\}//p' "$0" ;;
+    *) echo "usage: mu300-smsfwd status|enable|disable|test|msisdn|lists" >&2; exit 2 ;;
+esac

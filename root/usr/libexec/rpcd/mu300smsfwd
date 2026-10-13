@@ -1,0 +1,59 @@
+#!/bin/sh
+# mu300smsfwd -- the RPC object of mu300-smsfwd (standalone sidecar).
+#
+# Called by LuCI as:  ubus call mu300smsfwd <method> '{...}'
+#   rpcd runs this script as:  mu300smsfwd call <method> with params on stdin,
+#   and `mu300smsfwd list` must print the method declaration blob.
+# The reply is one JSON line on stdout.
+export PATH="$PATH:/opt/mu300/bin:/usr/libexec/mu300-smsfwd:/usr/sbin:/sbin"
+
+FWD=${MSF_FWD_BIN:-/usr/libexec/mu300-smsfwd/forward}
+
+inp() {  # inp JSONPATH [default] -> param value
+    _v=$(printf '%s' "$INPUT" | jsonfilter -e "$1" 2>/dev/null)
+    case $_v in ''|null) _v=${2-} ;; esac
+    printf '%s' "$_v"
+}
+
+do_list() {
+    cat <<EOF
+{
+	"get": { },
+	"status": { },
+	"set": { "payload": "String" },
+	"test": { },
+	"lists_get": { },
+	"lists_set": { "payload": "String" },
+	"msisdn": { }
+}
+EOF
+}
+
+case "${1:-}" in
+list)
+    do_list
+    ;;
+call)
+    INPUT=$(cat 2>/dev/null)
+    case ${2:-} in
+        get) "$FWD" get ;;
+        status) "$FWD" status ;;
+        set)
+            payload=$(inp '@.payload')
+            printf '%s' "$payload" | "$FWD" set
+            ;;
+        test) "$FWD" test-start ;;
+        lists_get) "$FWD" lists-get ;;
+        lists_set)
+            payload=$(inp '@.payload')
+            printf '%s' "$payload" | "$FWD" lists-set
+            ;;
+        msisdn) "$FWD" msisdn ;;
+        *) printf '{"ok":0,"error":"no such method"}\n' ;;
+    esac
+    ;;
+*)
+    echo "usage: $0 {list|call <method>}" >&2
+    exit 2
+    ;;
+esac

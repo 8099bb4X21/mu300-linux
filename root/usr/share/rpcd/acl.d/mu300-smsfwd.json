@@ -1,0 +1,15 @@
+{
+ "luci-app-mu300-smsfwd": {
+  "description": "MU300 sidecar SMS forwarding (own-number whitelist)",
+  "read": {
+   "ubus": {
+    "mu300smsfwd": [ "get", "status", "lists_get", "msisdn" ]
+   }
+  },
+  "write": {
+   "ubus": {
+    "mu300smsfwd": [ "get", "status", "lists_get", "msisdn", "set", "test", "lists_set" ]
+   }
+  }
+ }
+}

@@ -1,0 +1,6 @@
+# mu300-smsfwd whitelist keywords: one regex per line, '#' starts a comment.
+# A new SMS whose content matches ANY line is forwarded at once, with the
+# highest priority: it bypasses the own-number whitelist AND the blacklist.
+# Oniguruma via jq (same as the Android plugin): (?i), (?s) and lookahead work.
+# Examples:
+# (?i)验证码|动态密码|验证

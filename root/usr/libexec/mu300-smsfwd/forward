@@ -1,0 +1,355 @@
+#!/bin/sh
+# mu300-smsfwd: sidecar SMS forwarding with an own-number whitelist.
+# Reads the same local SMS pool the platform adapter maintains
+# (/etc/mu300/sms by default), advances its own cursor, and delivers new
+# messages through the same four channels as the built-in forwarding.
+# Never touches AT itself except for a cached, out-of-lock AT+CNUM read
+# that refreshes the own-number cache every few minutes.
+umask 077
+export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
+. /usr/share/libubox/jshn.sh
+
+LIBDIR=${MSF_LIBDIR:-/usr/libexec/mu300-smsfwd}
+BASE=${MSF_BASE:-/etc/mu300/smsfwd}
+POOL=${MU300_SMS_POOL:-$(uci -q get unisoc_modem.main.sms_pool 2>/dev/null)}
+[ -d "${POOL:-/etc/unisoc-modem/sms}/msg" ] || [ ! -d /etc/mu300/sms/msg ] || POOL=/etc/mu300/sms
+POOL=${POOL:-/etc/unisoc-modem/sms}
+CONFIG=$BASE/config.json
+STATE=$BASE/state
+RESULT=${MSF_RESULT:-/run/mu300-smsfwd-result}
+HISTORY=${MSF_HISTORY:-$RESULT.history}
+RENDERER=$LIBDIR/own-template.uc
+WL=$BASE/whitelist.txt
+KW=$BASE/keywords.txt
+BL=$BASE/blacklist.txt
+MSF_RX=$BASE/regex.txt
+MSF_RXJQ=$LIBDIR/rx.jq
+export MSF_RX MSF_RXJQ
+. "$LIBDIR/lib.sh"
+. "$LIBDIR/channels.sh"
+SMS=${MU300_SMS_BIN:-$(uci -q get unisoc_modem.main.sms_command 2>/dev/null)}
+[ -n "$SMS" ] || SMS=$(command -v mu300-sms 2>/dev/null || true)
+case "$SMS" in */*) ;; *) SMS=$(command -v "$SMS" 2>/dev/null || true) ;; esac
+BATTERY=${MSF_BATTERY:-/sys/class/power_supply/battery}
+MSISDN_CACHE=${MSF_MSISDN_CACHE:-/run/mu300-smsfwd-msisdn}
+MSISDN_TTL=${MSF_MSISDN_TTL:-300}
+OWN_MSISDN=
+POLL=${MSF_POLL:-5}
+LIST_CAP=${MSF_LIST_CAP:-32768}
+
+message_file() { printf '%s/msg/%06d' "$POOL" "$1"; }
+msg_field() { sed -n "1,/^$/s/^$2: //p" "$1" | head -n1; }
+msg_body() { sed -n '1,/^$/!p' "$1"; }
+list_lines() { [ -s "$1" ] && grep -c . "$1" 2>/dev/null || echo 0; }
+
+process_sms() {
+    [ "$enabled" = 1 ] || return 0
+    _max=$(cat "$POOL/next_id" 2>/dev/null)
+    number "$_max" || return 0
+    _processed=0 _start_id=$last_id
+    while [ "$last_id" -lt "$_max" ] && [ "$_processed" -lt 1 ]; do
+        _id=$((last_id + 1))
+        _file=$(message_file "$_id")
+        # next_id is written before the message rename. Keep the newest
+        # missing ID pending until the next poll; older missing IDs were
+        # deleted, so those may be skipped.
+        if [ ! -f "$_file" ]; then
+            if [ "$_id" -eq "$_max" ]; then
+                [ "$last_id" = "$_start_id" ] || save_state
+                return 0
+            fi
+            last_id=$_id
+            continue
+        fi
+        _dir=$(msg_field "$_file" dir)
+        _from=$(msg_field "$_file" from)
+        _received=$(msg_field "$_file" received)
+        _scts=$(msg_field "$_file" scts)
+        _source=$(msg_field "$_file" source)
+        _coding=$(msg_field "$_file" coding)
+        _body=$(msg_body "$_file")
+        last_id=$_id
+        save_state || { write_result storage_failed "$power_last_result"; return 1; }
+        _processed=$((_processed + 1))
+        [ "$_dir" = mt ] || continue
+        # A raw SIM PDU has no trustworthy original timestamp; keep it local.
+        [ "$_source" = direct ] || [ "$_coding" != raw-pdu ] || continue
+        sms_is_new "$_source" "$_scts" "$_received" || continue
+        # Own-number whitelist first, keyword bypass highest: 0 means skip.
+        if msf_filtered_out "$WL" "$KW" "$BL" "$_from" "$_body" "$OWN_MSISDN"; then
+            echo "mu300-smsfwd: id=$_id filtered out" >&2
+            continue
+        fi
+        echo "mu300-smsfwd: id=$_id forwarding" >&2
+        deliver sms "$_from" "$_body" "$_scts" || :
+        record_delivery sms || :
+        write_result "$DELIVER_RESULT" "$power_last_result" || :
+    done
+    [ "$_processed" -gt 0 ] || [ "$last_id" = "$_start_id" ] || save_state
+}
+get_view() {
+    load_config || { reply_error invalid_config; return; }
+    load_state
+    json_init
+    json_add_object config
+    json_add_boolean enabled "$enabled"
+    json_add_string method "$method"
+    json_add_string template_language "$template_language"
+    json_add_string webhook_url "$webhook_url"
+    webhook_fields
+    json_add_string dingtalk_webhook "$dingtalk_webhook"
+    json_add_boolean dingtalk_secret_configured "$([ -n "$dingtalk_secret" ] && echo 1 || echo 0)"
+    json_add_boolean wecom_key_configured "$([ -n "$wecom_key" ] && echo 1 || echo 0)"
+    json_add_string sms_to_phone "$sms_to_phone"
+    json_add_object smtp
+    json_add_string host "$smtp_host"
+    json_add_int port "$smtp_port"
+    json_add_string username "$smtp_username"
+    json_add_string to "$smtp_to"
+    json_add_boolean password_configured "$([ -n "$smtp_password" ] && echo 1 || echo 0)"
+    json_close_object
+    json_add_boolean power_forward_enabled "$power_forward_enabled"
+    json_add_string nickname "$nickname"
+    json_add_boolean smtp_forward_device_info "$smtp_forward_device_info"
+    json_add_boolean dingtalk_forward_device_info "$dingtalk_forward_device_info"
+    json_add_boolean wecom_forward_device_info "$wecom_forward_device_info"
+    json_add_boolean sms_forward_device_info "$sms_forward_device_info"
+    json_close_object
+    json_add_string msisdn "${OWN_MSISDN:-}"
+    json_add_object lists
+    json_add_int whitelist "$(list_lines "$WL")"
+    json_add_int keywords "$(list_lines "$KW")"
+    json_add_int blacklist "$(list_lines "$BL")"
+    json_add_int regex "$(list_lines "$MSF_RX")"
+    json_close_object
+    add_status
+    json_dump
+}
+status_only() {
+    load_config || { reply_error invalid_config; return; }
+    load_state
+    json_init
+    json_add_string msisdn "${OWN_MSISDN:-}"
+    json_add_object lists
+    json_add_int whitelist "$(list_lines "$WL")"
+    json_add_int keywords "$(list_lines "$KW")"
+    json_add_int blacklist "$(list_lines "$BL")"
+    json_add_int regex "$(list_lines "$MSF_RX")"
+    json_close_object
+    add_status
+    json_dump
+}
+set_config() {
+    ensure_base || { reply_error forward_storage_failed; return; }
+    exec 8> "$BASE/state.lock"
+    flock -n 8 || { reply_error forward_busy; return; }
+    _payload=$(cat)
+    [ ${#_payload} -le 32768 ] && json_load "$_payload" 2>/dev/null ||
+        { reply_error invalid_config; return; }
+    json_get_var new_webhook_method webhook_method POST
+    json_get_var new_webhook_content_type webhook_content_type application/json
+    json_get_var new_webhook_body webhook_body ''
+    json_get_var new_webhook_headers webhook_headers ''
+    json_get_var new_webhook_timeout webhook_timeout 12
+    json_get_var new_enabled enabled
+    json_get_var new_method method
+    json_get_var new_template_language template_language
+    json_get_var new_webhook_url webhook_url
+    json_get_var new_dingtalk_webhook dingtalk_webhook
+    json_get_var new_dingtalk_secret dingtalk_secret
+    json_get_var new_wecom_key wecom_key
+    json_get_var new_sms_to_phone sms_to_phone
+    json_get_var new_smtp_host smtp_host
+    json_get_var new_smtp_port smtp_port
+    json_get_var new_smtp_username smtp_username
+    json_get_var new_smtp_to smtp_to
+    json_get_var new_smtp_password smtp_password
+    json_get_var new_power_forward_enabled power_forward_enabled
+    json_get_var new_nickname nickname
+    json_get_var new_smtp_forward_device_info smtp_forward_device_info
+    json_get_var new_dingtalk_forward_device_info dingtalk_forward_device_info
+    json_get_var new_wecom_forward_device_info wecom_forward_device_info
+    json_get_var new_sms_forward_device_info sms_forward_device_info
+    json_get_vars clear_smtp_password clear_dingtalk_secret clear_wecom_key
+    load_config || { reply_error invalid_config; return; }
+    old_enabled=$enabled old_method=$method
+    enabled=${new_enabled:-0}; method=${new_method:-webhook}
+    # Older clients omit this field; retain the saved language in that case.
+    template_language=${new_template_language:-${template_language:-zh}}
+    webhook_url=${new_webhook_url:-}; dingtalk_webhook=${new_dingtalk_webhook:-}
+    webhook_method=$new_webhook_method webhook_content_type=$new_webhook_content_type
+    webhook_body=$new_webhook_body webhook_headers=$new_webhook_headers webhook_timeout=$new_webhook_timeout
+    sms_to_phone=${new_sms_to_phone:-}; smtp_host=${new_smtp_host:-}
+    smtp_port=${new_smtp_port:-465}; smtp_username=${new_smtp_username:-}; smtp_to=${new_smtp_to:-}
+    power_forward_enabled=${new_power_forward_enabled:-0}
+    nickname=${new_nickname:-}
+    smtp_forward_device_info=${new_smtp_forward_device_info:-0}
+    dingtalk_forward_device_info=${new_dingtalk_forward_device_info:-0}
+    wecom_forward_device_info=${new_wecom_forward_device_info:-0}
+    sms_forward_device_info=${new_sms_forward_device_info:-0}
+    if [ "${clear_smtp_password:-0}" = 1 ]; then
+        smtp_host= smtp_username= smtp_to= smtp_password=
+        smtp_port=465
+    fi
+    [ -n "${new_smtp_password:-}" ] && smtp_password=$new_smtp_password
+    [ "${clear_dingtalk_secret:-0}" = 1 ] && dingtalk_secret=
+    [ -n "${new_dingtalk_secret:-}" ] && dingtalk_secret=$new_dingtalk_secret
+    [ "${clear_wecom_key:-0}" = 1 ] && wecom_key=
+    [ -n "${new_wecom_key:-}" ] && wecom_key=$new_wecom_key
+    for _bit in "$enabled" "$power_forward_enabled" "$smtp_forward_device_info" \
+        "$dingtalk_forward_device_info" "$wecom_forward_device_info" "$sms_forward_device_info"; do
+        bool "$_bit" || { reply_error invalid_config; return; }
+    done
+    case "$method" in webhook|dingtalk|wecom|smtp|sms) ;; *) reply_error invalid_config; return ;; esac
+    case "$template_language" in zh|en|tr) ;; *) reply_error invalid_config; return ;; esac
+    [ -z "$webhook_url" ] || https_url "$webhook_url" || { reply_error invalid_destination; return; }
+    number "$webhook_timeout" && [ "$webhook_timeout" -ge 1 ] && [ "$webhook_timeout" -le 120 ] &&
+        render_webhook >/dev/null || { reply_error invalid_forward_config; return; }
+    [ -z "$dingtalk_webhook" ] || {
+        https_url "$dingtalk_webhook" &&
+        case "$dingtalk_webhook" in https://oapi.dingtalk.com/robot/send*) true ;; *) false ;; esac
+    } || { reply_error invalid_destination; return; }
+    list_valid "$sms_to_phone" 3 &&
+        [ ${#nickname} -le 255 ] && one_line "$nickname" &&
+        [ ${#dingtalk_secret} -le 256 ] && one_line "$dingtalk_secret" &&
+        [ ${#smtp_password} -le 512 ] && one_line "$smtp_password" ||
+        { reply_error invalid_forward_config; return; }
+    if [ -n "$wecom_key" ]; then
+        one_line "$wecom_key" && [ ${#wecom_key} -le 128 ] ||
+            { reply_error invalid_forward_config; return; }
+        case "$wecom_key" in *[!A-Za-z0-9_-]*) reply_error invalid_forward_config; return ;; esac
+    fi
+    case "$smtp_port" in 465|587) ;; *) reply_error invalid_forward_config; return ;; esac
+    if [ -n "$smtp_host$smtp_username$smtp_to$smtp_password" ]; then
+        host_name "$smtp_host" && mailbox "$smtp_username" && mailbox "$smtp_to" &&
+        [ -n "$smtp_password" ] ||
+            { reply_error invalid_forward_config; return; }
+    fi
+    if [ "$enabled" = 1 ]; then
+        case "$method" in
+            webhook) [ -n "$webhook_url" ] ;;
+            dingtalk) [ -n "$dingtalk_webhook" ] ;;
+            wecom) [ -n "$wecom_key" ] ;;
+            smtp) [ -n "$smtp_host$smtp_username$smtp_to$smtp_password" ] ;;
+            sms) [ -n "$sms_to_phone" ] ;;
+        esac || { reply_error invalid_forward_config; return; }
+        [ -r "$POOL/next_id" ] || { reply_error sms_list_unavailable; return; }
+    fi
+    power_read
+    [ "$power_forward_enabled" = 0 ] || [ "$power_ok" = 1 ] ||
+        { reply_error power_unavailable; return; }
+    load_state
+    if [ "$enabled" = 1 ] && { [ "$old_enabled" != 1 ] || [ "$old_method" != "$method" ]; }; then
+        _max=$(cat "$POOL/next_id" 2>/dev/null)
+        number "$_max" || { reply_error sms_list_unavailable; return; }
+        last_id=$_max
+        since=$(date +%s)
+    fi
+    if [ "$power_forward_enabled" = 1 ] && [ "$power_ok" = 1 ]; then
+        power_percent=$current_percent; power_status=$current_status
+        ( STATE=$BASE/state.power; save_state ) || { reply_error forward_storage_failed; return; }
+    fi
+    # Save the replay barrier before making the new enabled configuration visible.
+    if [ -r "$POOL/next_id" ] || [ -s "$STATE" ]; then
+        save_state || { reply_error forward_storage_failed; return; }
+    fi
+    save_config || { reply_error forward_storage_failed; return; }
+    write_result idle idle || :
+    reply_ok
+}
+lists_get() {
+    json_init
+    for _pair in "whitelist $WL" "keywords $KW" "blacklist $BL" "regex $MSF_RX"; do
+        set -- $_pair
+        _text=
+        if [ -r "$2" ]; then
+            _text=$(cat "$2" 2>/dev/null)
+            [ ${#_text} -le "$LIST_CAP" ] || { reply_error invalid_forward_config; return; }
+        fi
+        json_add_string "$1" "$_text"
+    done
+    json_dump
+}
+lists_set() {
+    ensure_base || { reply_error forward_storage_failed; return; }
+    exec 8> "$BASE/state.lock"
+    flock -n 8 || { reply_error forward_busy; return; }
+    _payload=$(cat)
+    [ ${#_payload} -le $((LIST_CAP * 4 + 1024)) ] && json_load "$_payload" 2>/dev/null ||
+        { reply_error invalid_config; return; }
+    for _pair in "whitelist $WL" "keywords $KW" "blacklist $BL" "regex $MSF_RX"; do
+        set -- $_pair
+        json_get_var _text "$1" ''
+        _text=$(printf '%s' "$_text" | tr -d '\r')
+        [ ${#_text} -le "$LIST_CAP" ] || { reply_error invalid_forward_config; return; }
+        printf '%s' "$_text" > "$2.tmp.$$" || { reply_error forward_storage_failed; return; }
+        chmod 600 "$2.tmp.$$"
+        mv -f "$2.tmp.$$" "$2" || { reply_error forward_storage_failed; return; }
+    done
+    reply_ok
+}
+show_msisdn() {
+    OWN_MSISDN=$(msf_refresh_msisdn "$MSISDN_CACHE" 0)
+    json_init
+    json_add_string msisdn "${OWN_MSISDN:-}"
+    json_dump
+}
+test_send() {
+    ensure_base || exit 1
+    if [ "${2:-}" != locked ]; then
+        exec 8> "$BASE/state.lock"
+        flock -n 8 || exit 1
+    fi
+    OWN_MSISDN=$(msf_refresh_msisdn "$MSISDN_CACHE" "$MSISDN_TTL")
+    export OWN_MSISDN
+    load_config || exit 1
+    load_state; read_result
+    deliver test NMS '' || :
+    record_delivery test || :
+    write_result "$DELIVER_RESULT" "$power_last_result" || :
+}
+start_test() {
+    ensure_base && load_config || { reply_error invalid_config; return; }
+    [ "$enabled" = 1 ] || { reply_error disabled; return; }
+    exec 8> "$BASE/state.lock"
+    flock -n 8 || { reply_error forward_busy; return; }
+    # The child inherits the admission lock; repeated clicks cannot enqueue
+    # an unbounded group of workers or occupy an RPC for a slow HTTP timeout.
+    setsid "$0" test-run locked </dev/null >/dev/null 2>&1 &
+    printf '{"ok":1,"started":1}\n'
+}
+run_daemon() {
+    ensure_base || exit 1
+    # procd owns the process. A second manual start exits without stealing work.
+    exec 9> "$BASE/daemon.lock"
+    flock -n 9 || exit 0
+    while :; do
+        # Refresh the own number out of the state lock: an AT round must
+        # never run while the admission lock is held.
+        OWN_MSISDN=$(msf_refresh_msisdn "$MSISDN_CACHE" "$MSISDN_TTL")
+        export OWN_MSISDN
+        exec 8> "$BASE/state.lock"
+        flock -x 8 || exit 1
+        if load_config; then
+            load_state; read_result
+            process_sms || :
+            load_state; read_result
+            ( STATE=$BASE/state.power; load_state; process_power ) || :
+        fi
+        flock -u 8
+        # Idle sleep must not retain the singleton lock after procd stops us.
+        sleep "$POLL" 8>&- 9>&-
+    done
+}
+case "${1:-}" in
+    get) OWN_MSISDN=$(msf_refresh_msisdn "$MSISDN_CACHE" "$MSISDN_TTL"); export OWN_MSISDN; get_view ;;
+    status) OWN_MSISDN=$(msf_refresh_msisdn "$MSISDN_CACHE" "$MSISDN_TTL"); export OWN_MSISDN; status_only ;;
+    set) set_config ;;
+    lists-get) lists_get ;;
+    lists-set) lists_set ;;
+    msisdn) show_msisdn ;;
+    test-run) test_send "$@" ;;
+    test-start) start_test ;;
+    run) run_daemon ;;
+    *) echo 'usage: forward {get|status|set|lists-get|lists-set|msisdn|test-run|test-start|run}' >&2; exit 2 ;;
+esac

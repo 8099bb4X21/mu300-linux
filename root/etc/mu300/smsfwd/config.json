@@ -1,0 +1,6 @@
+{
+	"enabled": false,
+	"method": "webhook",
+	"template_language": "zh",
+	"power_forward_enabled": false
+}
