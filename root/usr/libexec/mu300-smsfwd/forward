@@ -24,7 +24,8 @@ KW=$BASE/keywords.txt
 BL=$BASE/blacklist.txt
 MSF_RX=$BASE/regex.txt
 MSF_RXJQ=$LIBDIR/rx.jq
-export MSF_RX MSF_RXJQ
+MSGTEMPLATE=$LIBDIR/msg-template.uc
+export MSF_RX MSF_RXJQ MSGTEMPLATE
 . "$LIBDIR/lib.sh"
 . "$LIBDIR/channels.sh"
 SMS=${MU300_SMS_BIN:-$(uci -q get unisoc_modem.main.sms_command 2>/dev/null)}
@@ -95,6 +96,7 @@ get_view() {
     json_add_boolean enabled "$enabled"
     json_add_string method "$method"
     json_add_string template_language "$template_language"
+    json_add_string message_template "$message_template"
     json_add_string webhook_url "$webhook_url"
     webhook_fields
     json_add_string dingtalk_webhook "$dingtalk_webhook"
@@ -154,6 +156,7 @@ set_config() {
     json_get_var new_enabled enabled
     json_get_var new_method method
     json_get_var new_template_language template_language
+    json_get_var new_message_template message_template
     json_get_var new_webhook_url webhook_url
     json_get_var new_dingtalk_webhook dingtalk_webhook
     json_get_var new_dingtalk_secret dingtalk_secret
@@ -176,6 +179,9 @@ set_config() {
     enabled=${new_enabled:-0}; method=${new_method:-webhook}
     # Older clients omit this field; retain the saved language in that case.
     template_language=${new_template_language:-${template_language:-zh}}
+    # A shared message template (empty keeps the built-in layout). Newlines
+    # are allowed; only the length is bounded.
+    message_template=${new_message_template:-$message_template}
     webhook_url=${new_webhook_url:-}; dingtalk_webhook=${new_dingtalk_webhook:-}
     webhook_method=$new_webhook_method webhook_content_type=$new_webhook_content_type
     webhook_body=$new_webhook_body webhook_headers=$new_webhook_headers webhook_timeout=$new_webhook_timeout
@@ -202,6 +208,7 @@ set_config() {
     done
     case "$method" in webhook|dingtalk|wecom|smtp|sms) ;; *) reply_error invalid_config; return ;; esac
     case "$template_language" in zh|en|tr) ;; *) reply_error invalid_config; return ;; esac
+    [ ${#message_template} -le 4096 ] || { reply_error invalid_forward_config; return; }
     [ -z "$webhook_url" ] || https_url "$webhook_url" || { reply_error invalid_destination; return; }
     number "$webhook_timeout" && [ "$webhook_timeout" -ge 1 ] && [ "$webhook_timeout" -le 120 ] &&
         render_webhook >/dev/null || { reply_error invalid_forward_config; return; }

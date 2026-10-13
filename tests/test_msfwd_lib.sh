@@ -29,6 +29,10 @@ expect_eq norm-noise 18566098412 "$(msf_norm_phone '+86 185-6609-8412')"
 expect_eq norm-short 10086 "$(msf_norm_phone '10086')"
 expect_eq norm-empty '' "$(msf_norm_phone '')"
 
+# --- byte length (channel hard-limit helper) --------------------------------
+expect_eq bytelen-ascii 3 "$(msf_byte_len 'abc')"
+expect_eq bytelen-cn 6 "$(msf_byte_len '中文')"
+
 # --- whitelist: normalized literal match, comments/blank skipped -------------
 printf '# comment\n\n18566098412\n+8613800000000\n' > "$T/wl"
 expect_rc wl-hit 0 msf_list_has "$T/wl" 18566098412

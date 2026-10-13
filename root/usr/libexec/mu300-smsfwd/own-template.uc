@@ -11,7 +11,7 @@ function urlenc(s) {
     return out;
 }
 function fill(s, values, encode) {
-    return replace(s, /\{(from|text|time|sim|device|kind)\}/g,
+    return replace(s, /\{(from|text|time|phone|sim|device|kind)\}/g,
         (all, key) => encode(`${values[key] ?? ''}`));
 }
 function walk(value, values) {

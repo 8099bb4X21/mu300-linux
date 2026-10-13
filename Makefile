@@ -45,7 +45,7 @@ define Package/mu300-smsfwd/install
 	$(CP) ./htdocs/. $(1)/www/
 	$(CP) ./root/. $(1)/
 	chmod 0755 $(1)/etc/init.d/mu300-smsfwd $(1)/usr/libexec/rpcd/mu300smsfwd $(1)/usr/libexec/mu300-smsfwd/forward $(1)/usr/sbin/mu300-smsfwd
-	chmod 0644 $(1)/usr/libexec/mu300-smsfwd/lib.sh $(1)/usr/libexec/mu300-smsfwd/channels.sh $(1)/usr/libexec/mu300-smsfwd/own-template.uc $(1)/usr/libexec/mu300-smsfwd/rx.jq
+	chmod 0644 $(1)/usr/libexec/mu300-smsfwd/lib.sh $(1)/usr/libexec/mu300-smsfwd/channels.sh $(1)/usr/libexec/mu300-smsfwd/own-template.uc $(1)/usr/libexec/mu300-smsfwd/msg-template.uc $(1)/usr/libexec/mu300-smsfwd/rx.jq
 	chmod 0700 $(1)/etc/mu300/smsfwd
 	chmod 0600 $(1)/etc/mu300/smsfwd/*
 endef

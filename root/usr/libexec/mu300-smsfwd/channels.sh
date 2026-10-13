@@ -38,10 +38,25 @@ render_webhook() { # JSON input, no eval or shell expansion of templates
     json_add_object values
     json_add_string from "${_from:-}"; json_add_string text "${_text:-}"
     json_add_string time "${_date:-}"
+    json_add_string phone "${OWN_MSISDN:-}"
     json_add_string sim "SIM$((${MU300_SIM_SLOT:-0} + 1))"
     json_add_string device "${nickname:-$(cat /proc/sys/kernel/hostname 2>/dev/null)}"
     json_add_string kind "${_kind:-sms}"; json_close_object
     json_dump | ucode "$RENDERER" 2>/dev/null
+}
+render_message_template() { # shared plain-text template; uses _from _text _date
+    json_init
+    json_add_string template "$message_template"
+    json_add_object values
+    json_add_string from "${_from:-}"
+    json_add_string text "${_text:-}"
+    json_add_string time "${_date:-}"
+    json_add_string phone "${OWN_MSISDN:-}"
+    json_add_string sim "SIM$((${MU300_SIM_SLOT:-0} + 1))"
+    json_add_string device "${nickname:-$(cat /proc/sys/kernel/hostname 2>/dev/null)}"
+    json_add_string kind "${_kind:-sms}"
+    json_close_object
+    json_dump | ucode "$MSGTEMPLATE" 2>/dev/null
 }
 one_line() {
     case "$1" in *"$NL"*|*"$CR"*) return 1 ;; esac
@@ -133,6 +148,7 @@ load_config() {
     enabled=0 method=webhook webhook_url= dingtalk_webhook= dingtalk_secret=
     sms_to_phone= smtp_host= smtp_port=465 smtp_username= smtp_to= smtp_password=
     wecom_key=
+    message_template=
     power_forward_enabled=0 nickname= template_language=
     smtp_forward_device_info=0 dingtalk_forward_device_info=0 sms_forward_device_info=0
     wecom_forward_device_info=0
@@ -142,6 +158,7 @@ load_config() {
     json_get_vars enabled method webhook_url dingtalk_webhook dingtalk_secret sms_to_phone
     json_get_vars smtp_host smtp_port smtp_username smtp_to smtp_password
     json_get_var wecom_key wecom_key ''
+    json_get_var message_template message_template ''
     json_get_vars power_forward_enabled nickname
     json_get_vars smtp_forward_device_info dingtalk_forward_device_info sms_forward_device_info
     json_get_var wecom_forward_device_info wecom_forward_device_info 0
@@ -173,6 +190,7 @@ save_config() {
     json_add_string template_language "$template_language"
     json_add_string webhook_url "$webhook_url"
     webhook_fields
+    json_add_string message_template "$message_template"
     json_add_string dingtalk_webhook "$dingtalk_webhook"
     json_add_string dingtalk_secret "$dingtalk_secret"
     json_add_string wecom_key "$wecom_key"
@@ -361,13 +379,24 @@ deliver() { # kind, sender, body, date. Returns a finite result code in DELIVER_
         wecom) _include=$wecom_forward_device_info ;;
         sms) _include=$sms_forward_device_info ;;
     esac
-    if [ "$_include" = 1 ]; then
+    # One shared template, universal placeholders, each channel interprets it.
+    # With a template set the body IS the template (device info is a
+    # placeholder there, not appended); the generic webhook keeps its own body.
+    if [ "$_kind" = sms ] && [ "$method" != webhook ] && [ -n "$message_template" ]; then
+        _content=$(render_message_template)
+    elif [ "$_include" = 1 ]; then
         if [ "$method" = sms ]; then _content="$_content$NL$(device_info_sms)"
         else _content="$_content
 
 $(device_info)"; fi
     fi
-    # (The SMS body was already rewritten above, before formatting.)
+    # Channel hard limits: WeCom text 2048 bytes (official), DingTalk text
+    # about 4000 characters (capped here at 12000 bytes). The local SMS
+    # adapter's 70-unit cap is checked in its branch below.
+    case "$method" in
+        wecom) [ "$(msf_byte_len "$_content")" -le 2048 ] || { DELIVER_RESULT=message_too_long; return 1; } ;;
+        dingtalk) [ "$(msf_byte_len "$_content")" -le 12000 ] || { DELIVER_RESULT=message_too_long; return 1; } ;;
+    esac
     if [ "$method" = sms ]; then
         [ -n "$SMS" ] && [ -x "$SMS" ] || { DELIVER_RESULT=source_unavailable; return 1; }
         # The local SMS adapter only supports one 70-unit UCS-2 part. Do not

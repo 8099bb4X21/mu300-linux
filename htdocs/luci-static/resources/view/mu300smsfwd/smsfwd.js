@@ -105,6 +105,8 @@ return view.extend({
   <div class="msf-field"><label for="msf-template_language">模板语言</label>
    <select id="msf-template_language"><option value="zh">简体中文</option><option value="en">English</option><option value="tr">Türkçe</option></select></div>
   <div class="mud-note">保存后用于转发标题、提示文字和电源通知；短信原文及设备备注保持不变。</div>
+  <div class="msf-field"><label for="msf-message_template">消息模板（留空用内置）· 占位符 {from} {text} {time} {phone} {sim} {device} {kind}</label><textarea rows="4" id="msf-message_template" spellcheck="false" placeholder="F50_[短信]&#10;{text}&#10;[{from}]&#10;{time}&#10;手机号：{phone}"></textarea></div>
+  <div class="mud-note">一个模板全通道通用，各通道按自己格式发送（钉钉/企微/邮件/本机短信）。Webhook 仍用下方的正文模板。{phone}=本机号，{text}=短信原文。企业微信正文上限 2048 字节、钉钉约 4000 字符，超限不发送。</div>
   <div class="msf-channel" data-method="webhook">
    <div class="msf-field"><label for="msf-webhook_url">HTTPS 地址</label><input id="msf-webhook_url" type="url" autocomplete="off" placeholder="https://example.com/hook"></div>
    <div class="msf-field"><label for="msf-preset">填入推送预设</label><select id="msf-preset"><option value="">自定义</option><option value="json">JSON Webhook</option><option value="bark">Bark</option><option value="pushplus">PushPlus</option><option value="serverchan">ServerChan</option><option value="telegram">Telegram</option><option value="wecom">企业微信</option><option value="dingtalk">钉钉 Webhook</option></select></div>
@@ -208,7 +210,7 @@ return view.extend({
 		var self = this;
 		[ 'enabled', 'power_forward_enabled', 'smtp_forward_device_info',
 			'dingtalk_forward_device_info', 'wecom_forward_device_info', 'sms_forward_device_info' ].forEach(function(k) { self.q(k).checked = !!c[k]; });
-		[ 'method', 'webhook_url', 'dingtalk_webhook', 'sms_to_phone', 'nickname' ].forEach(function(k) { self.q(k).value = c[k] || ''; });
+		[ 'method', 'webhook_url', 'dingtalk_webhook', 'sms_to_phone', 'nickname', 'message_template' ].forEach(function(k) { self.q(k).value = c[k] || ''; });
 		this.q('method').value = c.method || 'webhook';
 		this.q('webhook_method').value = c.webhook_method || 'POST';
 		this.q('webhook_content_type').value = c.webhook_content_type || 'application/json';
@@ -238,7 +240,7 @@ return view.extend({
 		[ 'method', 'template_language', 'webhook_url', 'dingtalk_webhook', 'dingtalk_secret', 'wecom_key', 'sms_to_phone',
 			'smtp_host', 'smtp_port', 'smtp_username', 'smtp_to', 'smtp_password', 'nickname' ].forEach(function(k) { p[k] = self.q(k).value.trim(); });
 		[ 'sms_to_phone' ].forEach(function(k) { p[k] = lines(p[k]).join('\n'); });
-		[ 'webhook_method', 'webhook_content_type', 'webhook_timeout', 'webhook_headers', 'webhook_body' ].forEach(function(k) { p[k] = self.q(k).value; });
+		[ 'webhook_method', 'webhook_content_type', 'webhook_timeout', 'webhook_headers', 'webhook_body', 'message_template' ].forEach(function(k) { p[k] = self.q(k).value; });
 		if (p.clear_smtp_password) {
 			p.smtp_host = ''; p.smtp_username = ''; p.smtp_to = ''; p.smtp_password = ''; p.smtp_port = '465';
 		}
@@ -263,6 +265,7 @@ return view.extend({
 			(p.method === 'wecom' && !hasWecom) ||
 			(p.method === 'sms' && !p.sms_to_phone) ||
 			(p.method === 'smtp' && !p.smtp_host))) return '请先配置当前转发渠道';
+		if ((p.message_template || '').length > 4096) return '消息模板过长（>4096）';
 		var total = ['whitelist', 'keywords', 'blacklist', 'regex'].reduce(function(n, k) { return n + (l[k] || '').length; }, 0);
 		if (total > 4 * 32768) return '名单内容过长';
 		return '';

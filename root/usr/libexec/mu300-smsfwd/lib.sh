@@ -114,3 +114,7 @@ msf_refresh_msisdn() {
     cat "$_cache" 2>/dev/null || true
     return 0
 }
+
+# msf_byte_len TEXT -> byte length (UTF-8). Used for channel hard limits
+# (WeCom text 2048 bytes; the local SMS 70-unit cap is a different measure).
+msf_byte_len() { printf '%s' "$1" | wc -c | tr -d ' '; }
