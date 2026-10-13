@@ -48,6 +48,9 @@ done
 # own: IPv6 安卓对齐 hotfix 独立文件（custom/net-v6-hotfix.sh）：上游修好后删那文件、
 # custom/net-v6/ 目录及下面这一行。
 /bin/sh -eu /in/custom/net-v6-hotfix.sh
+# own: Wi-Fi 热点开关 hotfix 独立文件（custom/wifi-hotfix.sh）：上游修好后删那文件、
+# 下面这一行（块A 空应答误判 / 块B 开关对等，头注有各自修好标志）。
+/bin/sh -eu /in/custom/wifi-hotfix.sh
 apk list --installed | sort > /etc/mu300/packages.txt
 R=/build/root; mkdir -p $R
 for e in /*; do
