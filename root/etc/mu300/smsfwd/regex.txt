@@ -1,9 +1,9 @@
 # mu300-smsfwd rewrite rules: one pattern===replacement per line, run in
-# order, global. '#' starts a comment; lines without === are skipped.
-# Pattern is Oniguruma (jq); replacement supports $1..$9 and \n.
-# Applied to the SMS body itself before it is placed in a human-readable
-# channel (DingTalk, SMTP, local SMS, WeCom). The generic webhook keeps the
-# raw body. Sender, time and device decorations, and test/power text, are
-# never rewritten.
+# order, global. '#' (even after blanks) starts a comment; lines without ===
+# are skipped. Pattern is Oniguruma (jq); replacement supports $1..$9 and \n.
+# Applied LAST to the fully rendered message (template first), so rules may
+# match template decorations like [短信]. The generic webhook keeps the raw
+# body; test/power text is never rewritten. A rule whose result is empty
+# leaves the message unchanged (same as the reference plugin).
 # Examples:
 # (验证|码|\d{4,8})===ABBCCC

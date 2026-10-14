@@ -97,6 +97,7 @@ return view.extend({
  <h3>旁挂转发状态</h3>
  <div class="mud-note">本包独立运行，安装时已停用内置短信转发；卸载后自动恢复。本机号取自 AT+CNUM，读不到时默认不转发。</div>
  <div class="msf-row"><span class="msf-state" id="msf-state">--</span><span class="mud-note" id="msf-msisdn">本机号：--</span></div>
+ <div class="msf-state on">新短信 → 白名单关键词命中【转发】 → 本机号不在白名单【拦截】 → 黑名单关键词命中【拦截】 → 套用消息模板 → 对整条消息正则改写 → 按当前渠道发出（历史不补发，失败不重试）。</div>
  <div class="mud-note" id="msf-last">暂无投递</div>
  <div class="mud-note" id="msf-lists-note"></div>
 </section>
@@ -110,7 +111,7 @@ return view.extend({
    <select id="msf-template_language"><option value="zh">简体中文</option><option value="en">English</option><option value="tr">Türkçe</option></select></div>
   <div class="mud-note">保存后用于转发标题、提示文字和电源通知；短信原文及设备备注保持不变。</div>
   <div class="msf-field"><label for="msf-message_template">消息模板（留空用内置）· 占位符 {from} {text} {time} {phone} {sim} {device} {kind}</label><textarea rows="4" id="msf-message_template" spellcheck="false" placeholder="F50_[短信]&#10;{text}&#10;[{from}]&#10;{time}&#10;手机号：{phone}"></textarea></div>
-  <div class="mud-note">占位符（含义）：<b>{from}</b> 发件人 · <b>{text}</b> 短信原文 · <b>{time}</b> 短信时间 · <b>{phone}</b> 本机号（收短信这张卡）· <b>{sim}</b> 卡槽（SIM1）· <b>{device}</b> 机型+备注 · <b>{kind}</b> 事件类型（sms）。未知占位符原样保留。</div>
+  <div class="mud-note">占位符（含义）：<b>{from}</b> 发件人 · <b>{text}</b> 短信原文 · <b>{time}</b> 短信时间（统一显示为 YYYY-MM-DD HH:MM:SS，模拟与真实一致） · <b>{phone}</b> 本机号（收短信这张卡）· <b>{sim}</b> 卡槽（SIM1）· <b>{device}</b> 机型+备注 · <b>{kind}</b> 事件类型（sms）。未知占位符原样保留。号码类占位符统一按白名单规则归一化（只去开头 +86）。执行顺序：先套模板，再对整条消息做正则改写（规则可匹配模板里的 [短信] 等装饰）。</div>
   <div class="mud-note">一个模板全通道通用，各通道按自己格式发送（钉钉/企微 text JSON、邮件 MIME、本机短信转 PDU）；Webhook 仍用下方正文模板。企业微信正文上限 2048 字节、钉钉约 4000 字符，超限不发送。</div>
   <div class="msf-channel" data-method="webhook">
    <div class="msf-field"><label for="msf-webhook_url">HTTPS 地址</label><input id="msf-webhook_url" type="url" autocomplete="off" placeholder="https://example.com/hook"></div>
@@ -200,7 +201,7 @@ return view.extend({
   <button class="mud-btn" id="msf-export">导出设置</button>
   <button class="mud-btn" id="msf-import">导入设置</button>
  </div>
- <div class="mud-note">导出为一个 JSON 文件（渠道/开关/名单，不含密码与密钥）；导入会覆盖渠道与名单设置，密钥类留空即保留设备上已有的。</div>
+ <div class="mud-note">导出为一个 JSON 文件（渠道/开关/名单，<b>含密码与密钥，请妥善保管</b>）；导入为合并：文件里为空或缺失的项保留设备当前值。</div>
  <div class="msf-pair" style="margin-top:12px">
   <div class="msf-field"><label for="msf-dry-num">模拟发件人</label><input id="msf-dry-num" value="+8619999999" autocomplete="off"></div>
   <div class="msf-field"><label for="msf-dry-text">模拟短信内容</label><input id="msf-dry-text" value="【测试】您的验证码是223366，5分钟内有效。" autocomplete="off"></div>
@@ -257,10 +258,8 @@ return view.extend({
 		this.paintMethod();
 	},
 	fillLists: function(l) {
-		[ 'whitelist', 'keywords', 'blacklist', 'regex' ].forEach(function(k) {
-			var el = document.querySelector('#msf-' + k);
-			if (el) el.value = l[k] || '';
-		});
+		var self = this;
+		[ 'whitelist', 'keywords', 'blacklist', 'regex' ].forEach(function(k) { self.q(k).value = (l && l[k]) || ''; });
 	},
 	payload: function() {
 		var self = this, p = {};
@@ -376,7 +375,7 @@ return view.extend({
 		this.q('save').onclick = function() {
 			var p = self.payload(), l = self.listsPayload(), error = self.validate(p, l);
 			if (error) { self.error(error); return; }
-			M.confirmBox('保存旁挂转发设置？', '开启后只处理新收到的短信；历史短信不会补发。', { okText: '保存' }).then(function(yes) {
+			M.choiceBox('保存旁挂转发设置？', '开启后只处理新收到的短信；历史短信不会补发。', [{ label: '保存', value: true }, { label: '取消', value: false }]).then(function(yes) {
 				if (!yes) return;
 				var btn = self.q('save'), toast = M.toast('正在保存…', { type: 'busy', timeout: 0 });
 				M.busy(btn, true); self.q('test').disabled = true; self.error('');
@@ -465,7 +464,7 @@ return view.extend({
 						if (!r.ok) throw new Error(r.error || '配置导入失败');
 						return L.resolveDefault(callListsSet(JSON.stringify(curl)), {}).then(function(r2) {
 							if (!r2.ok) throw new Error(r2.error || '名单导入失败');
-							M.toast('设置已导入（空项保留原值）', { type: 'success' });
+							M.toast('设置已导入，且已经保存', { type: 'success' });
 							return self.reload();
 						});
 					}).catch(function(e) {

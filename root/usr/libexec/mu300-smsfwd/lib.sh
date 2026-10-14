@@ -15,9 +15,18 @@
 # ever matches (safe default-deny) and rewriting is identity.
 MSF_JQ=${MSF_JQ:-jq}
 
-# Keep digits, last 11 (ignore a country code): 8618566098412 -> 18566098412.
+# Normalize a phone number for whitelist comparison: strip formatting, drop a
+# leading '+' sign, and remove ONLY a leading +86 country code. Every other
+# country code's digits are preserved, so +1/+44/... numbers never collide
+# with local ones. Examples: +8618566098412 -> 18566098412;
+# +14155552671 -> 1415552671; +44 20 7123 4567 -> 442071234567.
 msf_norm_phone() {
-    printf '%s' "$1" | tr -cd '0-9' | awk '{ if (length($0)>11) print substr($0, length($0)-10); else print }'
+    _n=$(printf '%s' "$1" | tr -d ' \t\r\n-().')
+    case "$_n" in
+        +86*) _n=${_n#+86} ;;
+        +*) _n=${_n#+} ;;
+    esac
+    printf '%s' "$_n" | tr -cd '0-9'
 }
 
 # msf_list_has FILE NORMALIZED -> 0 when present. Empty lines and # comments
@@ -26,7 +35,8 @@ msf_list_has() {
     [ -f "$1" ] || return 1
     [ -n "$2" ] || return 1
     while IFS= read -r _line || [ -n "$_line" ]; do
-        case "$_line" in ''|\#*) continue ;; esac
+        _nows=${_line#"${_line%%[![:space:]]*}"}
+        case "$_nows" in ''|\#*) continue ;; esac
         [ "$(msf_norm_phone "$_line")" = "$2" ] && return 0
     done < "$1"
     return 1
@@ -39,7 +49,8 @@ msf_rx_hit() {
     [ -f "$1" ] || return 1
     command -v "$MSF_JQ" >/dev/null 2>&1 || return 1
     while IFS= read -r _line || [ -n "$_line" ]; do
-        case "$_line" in ''|\#*) continue ;; esac
+        _nows=${_line#"${_line%%[![:space:]]*}"}
+        case "$_nows" in ''|\#*) continue ;; esac
         if printf '%s' "$2" | "$MSF_JQ" -Rsr --arg p "$_line" 'test($p)' 2>/dev/null | grep -q true; then
             return 0
         fi
@@ -71,7 +82,8 @@ msf_apply_rx() {
     if [ ! -f "$1" ] || [ ! -f "$2" ]; then printf '%s' "$_rx_text"; return 0; fi
     command -v "$MSF_JQ" >/dev/null 2>&1 || { printf '%s' "$_rx_text"; return 0; }
     while IFS= read -r _line || [ -n "$_line" ]; do
-        case "$_line" in ''|\#*) continue ;; esac
+        _nows=${_line#"${_line%%[![:space:]]*}"}
+        case "$_nows" in ''|\#*) continue ;; esac
         case "$_line" in *===*) ;; *) continue ;; esac
         _pat=${_line%%===*}; _rep=${_line#*===}
         [ -n "$_pat" ] || continue
@@ -118,3 +130,16 @@ msf_refresh_msisdn() {
 # msf_byte_len TEXT -> byte length (UTF-8). Used for channel hard limits
 # (WeCom text 2048 bytes; the local SMS 70-unit cap is a different measure).
 msf_byte_len() { printf '%s' "$1" | wc -c | tr -d ' '; }
+
+# msf_fmt_time STAMP -> "YYYY-MM-DD HH:MM:SS" for display. Accepts the ISO
+# form real direct SMS carry ("2026-10-14[ T]08:50:05[+08:00]") and the AT
+# form ("26/10/14,08:50:05[+32]", as also produced locally for dry runs).
+# Anything else passes through untouched. Display only: the offset is
+# dropped, not converted, and the raw value is kept for webhook/history.
+msf_fmt_time() {
+    _t=$1
+    _o=$(printf '%s' "$_t" | sed -n 's/^\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)[T ]\([0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\).*/\1 \2/p')
+    [ -n "$_o" ] || _o=$(printf '%s' "$_t" | sed -n 's/^\([0-9]\{2\}\)\/\([0-9]\{2\}\)\/\([0-9]\{2\}\),\([0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\).*/20\1-\2-\3 \4/p')
+    [ -n "$_o" ] || _o=$_t
+    printf '%s' "$_o"
+}

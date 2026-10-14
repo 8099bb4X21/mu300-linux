@@ -362,10 +362,10 @@ test_dryrun() {
     exec 8> "$BASE/state.lock"
     flock -n 8 || { reply_error forward_busy; return; }
     _payload=$(cat)
-    json_load "$_payload" 2>/dev/null || { reply_error invalid_config; return; }
+    [ ${#_payload} -le 16384 ] && json_load "$_payload" 2>/dev/null || { reply_error invalid_config; return; }
     json_get_var _num num
     json_get_var _txt text
-    [ -n "$_txt" ] || { reply_error invalid_config; return; }
+    [ -n "$_txt" ] && [ ${#_txt} -le 8192 ] || { reply_error invalid_config; return; }
     OWN_MSISDN=$(msf_refresh_msisdn "$MSISDN_CACHE" "$MSISDN_TTL")
     export OWN_MSISDN
     load_config || { reply_error invalid_config; return; }

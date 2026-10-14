@@ -2,11 +2,9 @@
 # mu300-smsfwd channel backend (sourced by ./forward, never executed).
 # Ported from the built-in forwarding: same four channels, same validation,
 # same state/result/history discipline. Differences: single shared profile,
-# no sender-number blacklist (lists live in separate text files), and the
-# SMS body itself passes through the regex rewriter (except test and power
-# kinds) for every human-readable channel; the generic webhook keeps the raw
-# body and stable keys. The WeCom channel follows the plugin: template, then
-# rewrite, then text post.
+# no sender-number blacklist (lists live in separate text files), and regex
+# rewrites the fully rendered message last (template first), except test and
+# power kinds; the generic webhook keeps the raw body and stable keys.
 #
 # Globals provided by the caller: BASE CONFIG STATE RESULT HISTORY POOL
 # RENDERER SMS MSF_RX MSF_RXJQ. Config values via load_config.
@@ -48,10 +46,10 @@ render_message_template() { # shared plain-text template; uses _from _text _date
     json_init
     json_add_string template "$message_template"
     json_add_object values
-    json_add_string from "${_from:-}"
+    json_add_string from "$(msf_norm_phone "${_from:-}")"
     json_add_string text "${_text:-}"
-    json_add_string time "${_date:-}"
-    json_add_string phone "${OWN_MSISDN:-}"
+    json_add_string time "$(msf_fmt_time "${_date:-}")"
+    json_add_string phone "$(msf_norm_phone "${OWN_MSISDN:-}")"
     json_add_string sim "SIM$((${MU300_SIM_SLOT:-0} + 1))"
     json_add_string device "${nickname:-$(cat /proc/sys/kernel/hostname 2>/dev/null)}"
     json_add_string kind "${_kind:-sms}"
@@ -363,13 +361,7 @@ deliver() { # kind, sender, body, date. Returns a finite result code in DELIVER_
     _kind=$1 _from=$2 _text=$3 _date=${4:-}; DELIVER_RESULT=delivery_failed
     HTTP_CODE=0
     [ "$enabled" = 1 ] || { DELIVER_RESULT=disabled; return 1; }
-    # Regex rewriting applies to the SMS body itself (kind=sms), before it is
-    # embedded in a human-readable channel. The generic webhook keeps the raw
-    # body. Test and power text are never rewritten.
-    if [ "$_kind" = sms ] && [ "$method" != webhook ]; then
-        _text=$(msf_apply_rx "$MSF_RX" "$MSF_RXJQ" "$_text")
-    fi
-    format_message "$_kind" "$_from" "$_text"
+    format_message "$_kind" "$(msf_norm_phone "$_from")" "$_text"
     # Webhooks keep stable JSON keys; only generated test
     # and power text is localized, just like the human-readable channels.
     [ "$_kind" != test ] || _text=$_content
@@ -390,6 +382,12 @@ deliver() { # kind, sender, body, date. Returns a finite result code in DELIVER_
         else _content="$_content
 
 $(device_info)"; fi
+    fi
+    # Regex runs LAST on the fully rendered message (template first), so rules
+    # may match template decorations like [短信]. Webhook/test/power are
+    # never rewritten.
+    if [ "$_kind" = sms ] && [ "$method" != webhook ]; then
+        _content=$(msf_apply_rx "$MSF_RX" "$MSF_RXJQ" "$_content")
     fi
     # Channel hard limits: WeCom text 2048 bytes (official), DingTalk text
     # about 4000 characters (capped here at 12000 bytes). The local SMS

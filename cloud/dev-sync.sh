@@ -7,7 +7,9 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 PKG=$(cd "$HERE/.." && pwd)
 HOST=${1:-root@192.168.77.1}
-SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8"
+# Dev-only default: skip host-key checking against a throwaway lab device.
+# Set MSF_SSH_OPTS="" (or your own -i/-o flags) to verify host keys as usual.
+SSH="ssh ${MSF_SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8}"
 $SSH "$HOST" 'mkdir -p /usr/libexec/mu300-smsfwd /usr/libexec/rpcd /usr/sbin /etc/init.d /usr/share/luci/menu.d /usr/share/rpcd/acl.d /www/luci-static/resources/view/mu300smsfwd'
 tar -C "$PKG/root" --exclude='./etc/mu300/smsfwd' -cf - . | $SSH "$HOST" 'tar -C / -xf -'
 tar -C "$PKG/htdocs" -cf - . | $SSH "$HOST" 'tar -C /www -xf -'

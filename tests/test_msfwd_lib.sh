@@ -28,6 +28,16 @@ expect_eq norm-plain 18566098412 "$(msf_norm_phone '18566098412')"
 expect_eq norm-noise 18566098412 "$(msf_norm_phone '+86 185-6609-8412')"
 expect_eq norm-short 10086 "$(msf_norm_phone '10086')"
 expect_eq norm-empty '' "$(msf_norm_phone '')"
+expect_eq norm-us-kept 14155552671 "$(msf_norm_phone '+14155552671')"
+expect_eq norm-uk-kept 442071234567 "$(msf_norm_phone '+44 20 7123 4567')"
+expect_eq norm-86-no-plus-kept 8618566098412 "$(msf_norm_phone '8618566098412')"
+
+# --- time display: one shape for real and simulated SMS ----------------------
+expect_eq fmt-iso '2026-10-14 08:50:05' "$(msf_fmt_time '2026-10-14 08:50:05+08:00')"
+expect_eq fmt-iso-T '2026-10-14 08:50:05' "$(msf_fmt_time '2026-10-14T08:50:05+08:00')"
+expect_eq fmt-at '2026-10-14 08:50:05' "$(msf_fmt_time '26/10/14,08:50:05+32')"
+expect_eq fmt-local '2026-10-14 08:50:05' "$(msf_fmt_time '26/10/14,08:50:05')"
+expect_eq fmt-passthrough 'tomorrow' "$(msf_fmt_time 'tomorrow')"
 
 # --- byte length (channel hard-limit helper) --------------------------------
 expect_eq bytelen-ascii 3 "$(msf_byte_len 'abc')"
@@ -43,6 +53,9 @@ expect_rc wl-missing-file 1 msf_list_has "$T/nope" 18566098412
 expect_rc own-in-wl 0 msf_own_in_wl "$T/wl" '+8618566098412'
 expect_rc own-not-in-wl 1 msf_own_in_wl "$T/wl" '+8617600000000'
 expect_rc own-empty 1 msf_own_in_wl "$T/wl" ''
+printf '+14155552671\n' > "$T/wl_us"
+expect_rc own-us-hit 0 msf_own_in_wl "$T/wl_us" '+14155552671'
+expect_rc own-us-no-collide 1 msf_own_in_wl "$T/wl_us" '+4155552671'
 
 if command -v "$MSF_JQ" >/dev/null 2>&1; then
     # --- keyword hit/miss, (?i) and comments --------------------------------
