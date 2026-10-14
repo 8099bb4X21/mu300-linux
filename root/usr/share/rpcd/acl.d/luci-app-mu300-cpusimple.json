@@ -1,0 +1,15 @@
+{
+ "luci-app-mu300-cpusimple": {
+  "description": "MU300 CPU 简易设置（模式 / cpuset / 频率）",
+  "read": {
+   "ubus": {
+    "mu300cpusimple": [ "get" ]
+   }
+  },
+  "write": {
+   "ubus": {
+    "mu300cpusimple": [ "get", "apply", "forget" ]
+   }
+  }
+ }
+}

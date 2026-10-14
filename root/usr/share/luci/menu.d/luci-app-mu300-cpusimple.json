@@ -1,0 +1,8 @@
+{
+	"admin/modem/cpusimple": {
+		"title": "CPU简易设置",
+		"order": 10,
+		"action": { "type": "view", "path": "mu300cpusimple/cpusimple" },
+		"depends": { "acl": [ "luci-app-mu300-cpusimple" ] }
+	}
+}

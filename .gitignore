@@ -1,0 +1,2 @@
+# Build outputs (local `cloud/build.sh` and CI place the APK here).
+work/

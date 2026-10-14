@@ -1,0 +1,63 @@
+name: CPUSIMPLE package build
+
+# Standalone luci-app-mu300-cpusimple APK (MU300 CPU modes: OpenWrt default /
+# Android default / little-save / balanced / performance). Independent branch:
+# push here builds the APK, Artifacts only, no Release. The firmware repo is
+# never touched.
+on:
+  push:
+    paths: ['Makefile', 'htdocs/**', 'root/**', 'cloud/**', 'tests/**', '.github/workflows/cpusimple-build.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax checks
+        run: |
+          set -eu
+          for f in \
+            root/usr/libexec/mu300-cpusimple/cpusimple \
+            root/usr/libexec/rpcd/mu300cpusimple \
+            root/etc/init.d/mu300-cpusimple \
+            cloud/build.sh \
+            cloud/build-inner.sh \
+            tests/test_cpusimple.sh; do
+            [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
+            sh -n "$f" || { echo "syntax error: $f" >&2; exit 1; }
+          done
+          echo "shell syntax OK"
+
+      - name: CPU mode regression test (dash and bash)
+        run: |
+          set -eu
+          for shbin in dash bash; do
+            command -v "$shbin" >/dev/null 2>&1 || continue
+            echo "== $shbin =="
+            "$shbin" tests/test_cpusimple.sh || exit 1
+          done
+
+      - name: Restore APK cache
+        uses: actions/cache@v4
+        with:
+          path: work/luci-app-mu300-cpusimple.apk*
+          key: cpusimple-apk-${{ hashFiles('Makefile', 'htdocs/**', 'root/**', 'cloud/**') }}
+
+      - name: Build APK (native x86 SDK, cache miss)
+        run: sh cloud/build.sh work/luci-app-mu300-cpusimple.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mu300-cpusimple-apk
+          path: work/luci-app-mu300-cpusimple.apk*
+
+      - name: Show APK artifact
+        run: |
+          ls -la work/
+          sha256sum work/luci-app-mu300-cpusimple.apk

@@ -1,0 +1,284 @@
+#!/bin/sh
+# mu300-cpusimple -- CPU mode control for MU300 (OpenWrt).
+#
+# Modes (see README):
+#   openwrt-default : no restriction, cpufreq restored to the boot baseline
+#   android-default : services confined to the little cores (cpuset 0-3),
+#                     little cluster capped at 1404 MHz, big clusters pinned low
+#   little-save     : like android-default but the little cluster is NOT capped
+#   balanced        : services on 0-3 + cpu7; policy4 (cpu4-6) pinned low,
+#                     policy0 and policy7 unlocked
+#   performance     : all cores usable, every cluster pinned to hardware max
+#
+# Frequency is applied through the built-in firmware mechanism
+# (/usr/libexec/unisoc-modem/cpu -> cpu.uc, /etc/unisoc-modem/cpu.json),
+# so this package never keeps a second copy of the frequency state.
+# Core confinement uses cgroup v2 cpuset on the procd "services" subtree.
+# Real core offlining is only used when the kernel exposes cpuN/online
+# (CONFIG_HOTPLUG_CPU); otherwise the hotplug switch is unavailable.
+set -u
+
+CPU_BIN=${MU300_CPU_BIN:-/usr/libexec/unisoc-modem/cpu}
+CGROUP=${MU300_CPUSIMPLE_CGROUP:-/sys/fs/cgroup}
+SERVICES="$CGROUP/services"
+CPUFREQ=${MU300_CPUSIMPLE_CPUFREQ:-/sys/devices/system/cpu/cpufreq}
+CPUDIR=${MU300_CPUSIMPLE_CPUDIR:-/sys/devices/system/cpu}
+CFG=${MU300_CPUSIMPLE_CFG:-/etc/mu300/cpusimple/config.json}
+RUN=${MU300_CPUSIMPLE_RUN:-/run/mu300-cpusimple-active}
+
+ANDROID_LITTLE_MAX=1404000
+BIG_CORES="4 5 6 7"
+PINNED_BIG="4 5 6"
+LITTLE_CPUS="0-3"
+MID_CPUS="0-3,7"
+ALL_CPUS="0-7"
+
+log() { logger -t mu300-cpusimple "$*" 2>/dev/null || true; }
+
+# Emit an error reply and stop.
+fail() { printf '{"ok":0,"error":"%s"}\n' "$1"; exit 1; }
+
+# jsonfilter field of the given JSON string; empty on miss.
+jfield() { printf '%s' "$1" | jsonfilter -e "$2" 2>/dev/null; }
+
+is_true() { [ "$1" = "true" ] || [ "$1" = "1" ]; }
+
+# --- sysfs helpers -----------------------------------------------------------
+
+readf() { cat "$1" 2>/dev/null | tr -d '\n'; }
+hw_min() { readf "$CPUFREQ/$1/cpuinfo_min_freq"; }
+hw_max() { readf "$CPUFREQ/$1/cpuinfo_max_freq"; }
+cpus_of() { readf "$CPUFREQ/$1/affected_cpus"; }
+
+hotplug_supported() { [ -e "$CPUDIR/cpu4/online" ]; }
+
+policies() {
+    for p in policy0 policy4 policy7; do
+        [ -d "$CPUFREQ/$p" ] || continue
+        printf '%s\n' "$p"
+    done
+}
+
+# --- frequency via the built-in cpu.uc ---------------------------------------
+
+# Build the cpu.uc "apply" payload for a mode. $1=mode $2=persist(true/false)
+freq_payload() {
+    case "$1" in
+        openwrt-default)
+            printf '{"scope":"frequency","reset":true}' ;;
+        android-default)
+            printf '{"scope":"frequency","persist":%s,"changes":[' "$2"
+            printf '{"id":"policy0","cpus":"%s","governor":"schedutil","min":%s,"max":%s}' \
+                "$(cpus_of policy0)" "$(hw_min policy0)" "$ANDROID_LITTLE_MAX"
+            printf ',{"id":"policy4","cpus":"%s","governor":"schedutil","min":%s,"max":%s}' \
+                "$(cpus_of policy4)" "$(hw_min policy4)" "$(hw_min policy4)"
+            printf ',{"id":"policy7","cpus":"%s","governor":"schedutil","min":%s,"max":%s}]}' \
+                "$(cpus_of policy7)" "$(hw_min policy7)" "$(hw_min policy7)"
+            ;;
+        little-save)
+            # Little cluster runs free; both big clusters pinned to their floor.
+            printf '{"scope":"frequency","persist":%s,"changes":[' "$2"
+            printf '{"id":"policy0","cpus":"%s","governor":"schedutil","min":%s,"max":%s}' \
+                "$(cpus_of policy0)" "$(hw_min policy0)" "$(hw_max policy0)"
+            printf ',{"id":"policy4","cpus":"%s","governor":"schedutil","min":%s,"max":%s}' \
+                "$(cpus_of policy4)" "$(hw_min policy4)" "$(hw_min policy4)"
+            printf ',{"id":"policy7","cpus":"%s","governor":"schedutil","min":%s,"max":%s}]}' \
+                "$(cpus_of policy7)" "$(hw_min policy7)" "$(hw_min policy7)"
+            ;;
+        balanced)
+            # policy0 and policy7 run free; policy4 (cpu4-6) pinned to its floor.
+            printf '{"scope":"frequency","persist":%s,"changes":[' "$2"
+            printf '{"id":"policy0","cpus":"%s","governor":"schedutil","min":%s,"max":%s}' \
+                "$(cpus_of policy0)" "$(hw_min policy0)" "$(hw_max policy0)"
+            printf ',{"id":"policy4","cpus":"%s","governor":"schedutil","min":%s,"max":%s}' \
+                "$(cpus_of policy4)" "$(hw_min policy4)" "$(hw_min policy4)"
+            printf ',{"id":"policy7","cpus":"%s","governor":"schedutil","min":%s,"max":%s}]}' \
+                "$(cpus_of policy7)" "$(hw_min policy7)" "$(hw_max policy7)"
+            ;;
+        performance)
+            printf '{"scope":"frequency","persist":%s,"changes":[' "$2"
+            printf '{"id":"policy0","cpus":"%s","governor":"performance","min":%s,"max":%s}' \
+                "$(cpus_of policy0)" "$(hw_max policy0)" "$(hw_max policy0)"
+            printf ',{"id":"policy4","cpus":"%s","governor":"performance","min":%s,"max":%s}' \
+                "$(cpus_of policy4)" "$(hw_max policy4)" "$(hw_max policy4)"
+            printf ',{"id":"policy7","cpus":"%s","governor":"performance","min":%s,"max":%s}]}' \
+                "$(cpus_of policy7)" "$(hw_max policy7)" "$(hw_max policy7)"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+apply_freq() {
+    _mode=$1 _persist=$2 _out=$(freq_payload "$_mode" "$_persist") || return 1
+    _res=$(printf '%s' "$_out" | "$CPU_BIN" apply 2>/dev/null) || { log "freq apply failed: $_out"; return 1; }
+    [ "$(jfield "$_res" '@.ok')" = "1" ] || { log "freq apply rejected: $_res"; return 1; }
+    # "OpenWrt default" must also drop a previously persisted override.
+    if [ "$_mode" = "openwrt-default" ] && is_true "$_persist"; then
+        "$CPU_BIN" forget >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# --- cpuset ------------------------------------------------------------------
+
+# Enable the cpuset controller on the services subtree (idempotent).
+enable_cpuset() {
+    grep -qw cpuset "$CGROUP/cgroup.subtree_control" 2>/dev/null && return 0
+    printf '+cpuset' > "$CGROUP/cgroup.subtree_control" 2>/dev/null || return 1
+    _n=0
+    while [ ! -e "$SERVICES/cpuset.cpus" ] && [ "$_n" -lt 20 ]; do sleep 0.05; _n=$((_n+1)); done
+    [ -e "$SERVICES/cpuset.cpus" ]
+}
+
+set_cpuset() {
+    enable_cpuset || return 1
+    printf '%s' "$1" > "$SERVICES/cpuset.cpus" 2>/dev/null || return 1
+    [ -e "$SERVICES/cpuset.mems" ] && printf '0' > "$SERVICES/cpuset.mems" 2>/dev/null || true
+    [ "$(readf "$SERVICES/cpuset.cpus.effective")" = "$1" ]
+}
+
+# --- hotplug -----------------------------------------------------------------
+
+set_hotplug() {
+    # $1=1 -> given cores online, $1=0 -> given cores offline ($2 defaults to all big cores)
+    _cores=${2:-$BIG_CORES}
+    hotplug_supported || return 0
+    for c in $_cores; do printf '%s' "$1" > "$CPUDIR/cpu$c/online" 2>/dev/null || true; done
+}
+
+# --- mode application --------------------------------------------------------
+
+# Apply cpuset + hotplug for a mode. $1=mode $2=hotplug(true/false)
+# With hotplug on, each mode sets an exact big-core online mask so that
+# switching modes can never leave a needed core offline.
+apply_cores() {
+    _mode=$1 _hot=$2
+    case "$_mode" in
+        android-default|little-save)
+            set_cpuset "$LITTLE_CPUS" || return 1
+            is_true "$_hot" && set_hotplug 0 "$BIG_CORES"
+            ;;
+        balanced)
+            set_cpuset "$MID_CPUS" || return 1
+            if is_true "$_hot"; then
+                set_hotplug 0 "$PINNED_BIG"
+                set_hotplug 1 "7"
+            fi
+            ;;
+        *)
+            set_cpuset "$ALL_CPUS" || return 1
+            is_true "$_hot" && set_hotplug 1 "$BIG_CORES"
+            ;;
+    esac
+    return 0
+}
+
+# Persist (or clear) the mode override.
+save_config() {
+    # $1=mode $2=hotplug(bool)
+    if [ "$1" = "openwrt-default" ]; then
+        rm -f "$CFG"
+        return 0
+    fi
+    mkdir -p "$(dirname "$CFG")"
+    printf '{"mode":"%s","hotplug":%s}\n' "$1" "$2" > "$CFG.new" && mv "$CFG.new" "$CFG"
+}
+
+# --- status ------------------------------------------------------------------
+
+state_json() {
+    _persisted=false _mode="" _hotreq=false
+    if [ -f "$CFG" ]; then
+        _raw=$(cat "$CFG" 2>/dev/null)
+        _m=$(jfield "$_raw" '@.mode')
+        if [ -n "$_m" ]; then
+            _persisted=true _mode=$_m
+            is_true "$(jfield "$_raw" '@.hotplug')" && _hotreq=true
+        fi
+    fi
+    _eff=$(readf "$SERVICES/cpuset.cpus.effective"); [ -n "$_eff" ] || _eff="$ALL_CPUS"
+    _hs=false; hotplug_supported && _hs=true
+    # active = last actually-applied mode (run file), else persisted, else default.
+    _active="openwrt-default"
+    if [ -f "$RUN" ]; then
+        _r=$(readf "$RUN")
+        case "$_r" in
+            openwrt-default|android-default|little-save|balanced|performance) _active=$_r ;;
+        esac
+    elif [ "$_persisted" = "true" ]; then
+        _active=$_mode
+    fi
+
+    printf '{"ok":1,"active":"%s","persisted":%s,"mode":"%s","hotplug_requested":%s,"hotplug_supported":%s,"cpus_effective":"%s","policies":[' \
+        "$_active" "$_persisted" "$_mode" "$_hotreq" "$_hs" "$_eff"
+    _first=1
+    for p in $(policies); do
+        [ "$_first" = "0" ] && printf ','
+        _first=0
+        printf '{"id":"%s","cpus":"%s","governor":"%s","min":%s,"max":%s,"current":%s,"hardware_min":%s,"hardware_max":%s}' \
+            "$p" "$(cpus_of "$p")" "$(readf "$CPUFREQ/$p/scaling_governor")" \
+            "$(readf "$CPUFREQ/$p/scaling_min_freq")" "$(readf "$CPUFREQ/$p/scaling_max_freq")" \
+            "$(readf "$CPUFREQ/$p/scaling_cur_freq")" "$(hw_min "$p")" "$(hw_max "$p")"
+    done
+    printf ']}\n'
+}
+
+# --- actions -----------------------------------------------------------------
+
+do_apply() {
+    _in=$(cat 2>/dev/null)
+    _mode=$(jfield "$_in" '@.mode')
+    _persist=$(jfield "$_in" '@.persist')
+    _hot=$(jfield "$_in" '@.hotplug')
+    case "$_mode" in
+        openwrt-default|android-default|little-save|balanced|performance) ;;
+        *) fail "未知模式" ;;
+    esac
+    is_true "$_persist" && _persist=true || _persist=false
+    is_true "$_hot" && _hot=true || _hot=false
+    # Hotplug is only honoured when the kernel actually supports it.
+    hotplug_supported || _hot=false
+
+    apply_freq "$_mode" "$_persist" || fail "频率设置失败"
+    apply_cores "$_mode" "$_hot" || fail "核心设置失败"
+    is_true "$_persist" && save_config "$_mode" "$_hot"
+    printf '%s' "$_mode" > "$RUN" 2>/dev/null || true
+
+    state_json
+}
+
+do_boot() {
+    # Frequency is replayed by the built-in S99unisoc-cpu (cpu.uc boot).
+    # Here we only restore the cpuset / hotplug part.
+    if [ ! -f "$CFG" ]; then
+        rm -f "$RUN"
+        return 0
+    fi
+    _raw=$(cat "$CFG" 2>/dev/null)
+    _mode=$(jfield "$_raw" '@.mode')
+    _hot=$(jfield "$_raw" '@.hotplug')
+    case "$_mode" in
+        android-default|little-save|balanced|performance)
+            apply_cores "$_mode" "$_hot" && printf '%s' "$_mode" > "$RUN" 2>/dev/null
+            ;;
+        *) rm -f "$RUN" ;;
+    esac
+    return 0
+}
+
+do_forget() {
+    rm -f "$CFG" "$RUN"
+    set_cpuset "$ALL_CPUS" 2>/dev/null || true
+    # Restore any hotplug-offlined cores (no-op when unsupported).
+    set_hotplug 1 "$BIG_CORES" 2>/dev/null || true
+    "$CPU_BIN" forget >/dev/null 2>&1 || true
+    state_json
+}
+
+case "${1:-get}" in
+    get)    state_json ;;
+    apply)  do_apply ;;
+    boot)   do_boot ;;
+    forget) do_forget ;;
+    *)      fail "未知操作" ;;
+esac

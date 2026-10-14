@@ -1,0 +1,44 @@
+#!/bin/sh
+# mu300cpusimple -- RPC object for luci-app-mu300-cpusimple.
+# Called by LuCI as: ubus call mu300cpusimple <method> '{...}'
+export PATH="$PATH:/usr/sbin:/usr/bin:/sbin:/bin"
+
+BIN=${CPUSIMPLE_BIN:-/usr/libexec/mu300-cpusimple/cpusimple}
+
+inp() {
+    _v=$(printf '%s' "$INPUT" | jsonfilter -e "$1" 2>/dev/null)
+    case $_v in ''|null) _v=${2-} ;; esac
+    printf '%s' "$_v"
+}
+
+do_list() {
+    cat <<EOF
+{
+	"get": { },
+	"apply": { "payload": "String" },
+	"forget": { }
+}
+EOF
+}
+
+case "${1:-}" in
+list)
+    do_list
+    ;;
+call)
+    INPUT=$(cat 2>/dev/null)
+    case ${2:-} in
+        get) "$BIN" get ;;
+        apply)
+            payload=$(inp '@.payload')
+            printf '%s' "$payload" | "$BIN" apply
+            ;;
+        forget) "$BIN" forget ;;
+        *) printf '{"ok":0,"error":"no such method"}\n' ;;
+    esac
+    ;;
+*)
+    echo "usage: $0 {list|call <method>}" >&2
+    exit 2
+    ;;
+esac

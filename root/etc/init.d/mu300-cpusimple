@@ -1,0 +1,13 @@
+#!/bin/sh /etc/rc.common
+# Replay the persisted CPU mode (cpuset / hotplug part) at boot.
+# The cpufreq part is replayed by the built-in /etc/init.d/unisoc-cpu.
+START=98
+STOP=89
+
+start() {
+	/usr/libexec/mu300-cpusimple/cpusimple boot | logger -t mu300-cpusimple
+}
+
+stop() {
+	:
+}

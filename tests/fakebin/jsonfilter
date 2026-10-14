@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+# Minimal jsonfilter stand-in for CI (supports only top-level "@.field").
+# Real OpenWrt jsonfilter prints raw strings / true/false / empty on miss.
+import sys, json
+expr = None
+args = sys.argv[1:]
+for i, a in enumerate(args):
+    if a == '-e' and i + 1 < len(args):
+        expr = args[i + 1]
+        break
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+v = data
+if expr:
+    for k in expr.lstrip('@.').split('.'):
+        v = v.get(k) if isinstance(v, dict) else None
+        if v is None:
+            break
+if v is True:
+    print('true')
+elif v is False:
+    print('false')
+elif v is None:
+    pass
+else:
+    print(v)

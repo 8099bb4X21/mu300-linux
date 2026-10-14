@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+# Fake built-in "/usr/libexec/unisoc-modem/cpu" for regression tests.
+# Emulates cpu.uc apply/reset/forget/boot on a fake sysfs tree.
+# Env: FAKE_CPUFREQ (fake cpufreq dir), FAKE_CPU_JSON (fake cpu.json path).
+import sys, os, json
+
+ROOT = os.environ.get('FAKE_CPUFREQ', '')
+JSON_PATH = os.environ.get('FAKE_CPU_JSON', '')
+
+def rd(p):
+    try:
+        with open(os.path.join(ROOT, p)) as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+def wr(p, v):
+    with open(os.path.join(ROOT, p), 'w') as f:
+        f.write(str(v))
+
+def words(s):
+    return s.split() if s.strip() else []
+
+def policy(pid):
+    return {
+        'id': pid,
+        'cpus': rd(pid + '/affected_cpus'),
+        'governors': words(rd(pid + '/scaling_available_governors')),
+        'hw_min': rd(pid + '/cpuinfo_min_freq'),
+        'hw_max': rd(pid + '/cpuinfo_max_freq'),
+        'freqs': [x for x in words(rd(pid + '/scaling_available_frequencies'))],
+    }
+
+def apply_changes(changes):
+    for c in changes:
+        p = policy(c.get('id', ''))
+        if not p['cpus']:
+            return False
+        if c.get('cpus') != p['cpus']:
+            return False
+        if c.get('governor') not in p['governors']:
+            return False
+        mn, mx = str(c.get('min')), str(c.get('max'))
+        try:
+            if int(mn) > int(mx):
+                return False
+        except ValueError:
+            return False
+        if int(mn) < int(p['hw_min']) or int(mx) > int(p['hw_max']):
+            return False
+        if p['freqs'] and (mn not in p['freqs'] or mx not in p['freqs']):
+            return False
+        wr(p['id'] + '/scaling_min_freq', mn)
+        wr(p['id'] + '/scaling_max_freq', mx)
+        wr(p['id'] + '/scaling_governor', c.get('governor'))
+    return True
+
+def baseline():
+    for pid in ('policy0', 'policy4', 'policy7'):
+        p = policy(pid)
+        if not p['cpus']:
+            continue
+        wr(pid + '/scaling_governor', 'schedutil')
+        wr(pid + '/scaling_min_freq', p['hw_min'])
+        wr(pid + '/scaling_max_freq', p['hw_max'])
+
+def load_saved():
+    try:
+        with open(JSON_PATH) as f:
+            return json.load(f)
+    except OSError:
+        return None
+
+def main():
+    action = sys.argv[1] if len(sys.argv) > 1 else 'get'
+    if action == 'get':
+        print('{"ok":1}')
+        return 0
+    if action == 'forget':
+        try:
+            os.unlink(JSON_PATH)
+        except OSError:
+            pass
+        print('{"ok":1}')
+        return 0
+    if action == 'boot':
+        saved = load_saved()
+        if saved and saved.get('frequency'):
+            if not apply_changes(saved['frequency'].get('changes', [])):
+                print('{"ok":0,"error":"CPU 配置无效"}')
+                return 1
+        print('{"ok":1}')
+        return 0
+    if action == 'apply':
+        try:
+            inp = json.load(sys.stdin)
+        except Exception:
+            print('{"ok":0,"error":"CPU 配置无效"}')
+            return 1
+        if not isinstance(inp, dict) or not isinstance(inp.get('persist'), bool):
+            # reset path sets persist itself; require explicit reset flag
+            if not inp.get('reset'):
+                print('{"ok":0,"error":"CPU 配置无效"}')
+                return 1
+        if inp.get('reset') is True:
+            baseline()
+            print('{"ok":1}')
+            return 0
+        changes = inp.get('changes')
+        if not isinstance(changes, list) or not changes or len(changes) > 32:
+            print('{"ok":0,"error":"CPU 配置无效"}')
+            return 1
+        if not apply_changes(changes):
+            print('{"ok":0,"error":"CPU 配置无效"}')
+            return 1
+        if inp.get('persist') is True:
+            os.makedirs(os.path.dirname(JSON_PATH), exist_ok=True)
+            with open(JSON_PATH, 'w') as f:
+                json.dump({'version': 2, 'frequency': {'changes': changes}}, f)
+        print('{"ok":1}')
+        return 0
+    print('{"ok":0,"error":"CPU 配置无效"}')
+    return 1
+
+sys.exit(main())
