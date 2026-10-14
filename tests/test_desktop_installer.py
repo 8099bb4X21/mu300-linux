@@ -420,7 +420,12 @@ desktop_free_loop
             result=installer.install(Mock(boot_openwrt=True),Path('/test/package'),{})
         self.assertEqual(result.state,'success')
         android.storage.assert_not_called()
-        self.assertIn('switch.sh',android.run.call_args.args[0])
+        self.assertEqual([c.args[0] for c in android.run.call_args_list],
+                         ['"$BB" sh "$P/android-bootchain.sh" check',
+                          '"$BB" sh "$P/switch.sh" --no-reboot'])
+        android.put.assert_not_called()
+        self.assertIn('only misc changed',result.message)
+        self.assertIn('default-boot settings are unchanged',result.next_step)
         android.flash.assert_not_called()
 
     def test_menu_warns_about_userdata_image_f2fs_risk(self):

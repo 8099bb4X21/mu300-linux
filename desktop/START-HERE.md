@@ -40,7 +40,7 @@ python3 -m pip install paramiko lz4
 | 4 — Reinstall internal system | 重装已有内置 OpenWrt | 清空原 OpenWrt 分区和配置，不重复缩容 userdata |
 | 5 — Resume after Android reset | 加密 data 缩容、重置 Android 后续装 | 写入已准备的分区，不重新执行缩容 |
 | 6 — Update OpenWrt | 保留配置更新正在运行的 OpenWrt | 替换系统和内核，完成后重启 |
-| 7 — Boot OpenWrt | Android 切回已经安装的 OpenWrt | 不重新安装；选择启动槽后需手动重启 |
+| 7 — Boot OpenWrt once | Android 临时启动已安装的 OpenWrt | 仅修改 misc；成功后手动重启，不改默认启动设置 |
 
 **菜单 2 是实验性功能：userdata 镜像模式可能破坏 Android 的 F2FS 文件系统。**
 一般选 TF 卡或独立内置分区。它只接受确认未加密、未经过加密映射的 userdata。
@@ -133,7 +133,9 @@ python3 OpenWrt-Installer.py --resume --transaction "/path/to/transaction.json"
 - **重装（4）**：设备运行 Android，仅覆盖已有 `mu300root` 和 Linux 启动镜像。
   原 OpenWrt 配置会清除，Android userdata 不重新缩容。
 - **切回 OpenWrt（7）**：设备运行 Android，检查另一槽的 Linux 启动镜像后选择它，
-  成功后按提示手动重启，不会重新安装或格式化存储。
+  仅修改并回读 misc 的 32 字节启动控制块，成功后按提示手动重启。
+  不挂载／修复 OpenWrt 分区，不改根选择文件、默认启动设置，不自动同步启动链。
+  启动后沿用原有默认启动策略；永久默认启动需在 OpenWrt 中另行设置。
 - **回 Android**：在网页系统切换入口选择 Android，再按提示重启。
 
 管理地址通常是 `http://192.168.77.1`，U30Air 为 `http://192.168.78.1`。

@@ -534,7 +534,8 @@ def install(args,root,manifest):
         header=a.read('dd if=/dev/block/by-name/boot_'+a.linux+' bs=1 skip=44 count=11 2>/dev/null')
         if header!=b'loglevel=5\0':raise ValueError('The other slot does not contain a MU300 Linux boot image')
         a.run('"$BB" sh "$P/switch.sh" --no-reboot')
-        return Outcome('success','OpenWrt selected / 已设置启动 OpenWrt。','Reboot the device manually / 请手动重启设备。')
+        return Outcome('success','OpenWrt trial selected; only misc changed / 已选择临时启动 OpenWrt，仅修改 misc。',
+                       'Reboot manually; existing default-boot settings are unchanged / 请手动重启；原默认启动设置保持不变。')
     s=a.storage()
     if args.tf:
         sd=a.shell('if [ -b /dev/block/mmcblk1p1 ]; then echo /dev/block/mmcblk1p1; elif [ -b /dev/block/mmcblk1 ]; then echo /dev/block/mmcblk1; fi').strip()
@@ -806,7 +807,7 @@ def main(argv=None):
         return Outcome('checked','Read-only device preflight passed / 设备只读预检通过。')
     if not any(getattr(args,n) for n in ('tf','data','part','reinstall_part','resume','update','boot_openwrt')):
         choices=('tf','data','part','reinstall_part','resume','update','boot_openwrt')
-        print('1 TF card / TF 卡\n2 Userdata image [EXPERIMENTAL] / userdata 镜像【实验性：可能损坏 Android F2FS】\n3 Independent internal partition / 独立内置分区\n4 Reinstall internal system / 重装独立分区\n5 Resume after Android reset / 重置后续装\n6 Update OpenWrt / 更新\n7 Boot OpenWrt / 启动 OpenWrt')
+        print('1 TF card / TF 卡\n2 Userdata image [EXPERIMENTAL] / userdata 镜像【实验性：可能损坏 Android F2FS】\n3 Independent internal partition / 独立内置分区\n4 Reinstall internal system / 重装独立分区\n5 Resume after Android reset / 重置后续装\n6 Update OpenWrt / 更新\n7 Boot OpenWrt once / 临时启动 OpenWrt（仅修改 misc）')
         selected=input('Choose / 选择 [1]: ').strip() or '1'
         if selected not in tuple(map(str,range(1,8))):raise ValueError('Invalid menu choice')
         setattr(args,choices[int(selected)-1],True)
