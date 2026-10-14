@@ -49,6 +49,10 @@ async function main() {
     Date.now = oldDate;
     // All newly emitted backend error messages are translated in both locales.
     let messages = ['已应用并核对模组状态','等待模组能力数据','正在确认设置结果…'];
+    messages.push('状态暂不可读，请选择开启或关闭','本次已应用',
+        '关闭后只停止下次开机回放，已保存的网络、IMS、VoLTE 和 VoNR 设置不会被删除。',
+        'IMS 为总开关，VoLTE 用于 4G 通话，VoNR 用于 5G SA 通话。设置按当前查看的 SIM 保存，并跟随“开机自动应用”。',
+        '关闭 IMS 不等于屏蔽全部来电和短信，传统网络业务仍可能到达。');
     for (const file of ['lock-apply.sh','lock-jobs.sh']) {
         const src=fs.readFileSync(path.join(root,'root/usr/libexec/unisoc-modem',file),'utf8');
         messages.push(...[...src.matchAll(/'([^'\n]*[\u3400-\u9fff][^'\n]*)'/g)]
@@ -65,7 +69,10 @@ async function main() {
     // modem in a browser test, but do check confirmation, SIM scope and busy.
     let selected=1, confirm, modal, requests=[], finishJob, failJob, notes=[];
     const elements=new Map();
-    const pageRoot={isConnected:true, querySelectorAll:()=>[], querySelector:selector=>{
+    const voices=['ims','volte','vonr'].flatMap(kind=>['on','off'].map(val=>({
+        dataset:{voice:kind,enabled:val},setAttribute(k,v){this[k]=v;}
+    })));
+    const pageRoot={isConnected:true, querySelectorAll:selector=>selector==='[data-voice]' ? voices : [], querySelector:selector=>{
         if(!elements.has(selector)) elements.set(selector, {
             classList:{toggle:()=>{}}, addEventListener:()=>{}, querySelectorAll:()=>[], children:[]
         });
@@ -82,6 +89,17 @@ async function main() {
     page.refresh=()=>Promise.resolve();
     page.note=(text,type)=>notes.push({text,type});
     page.wire(pageRoot);
+    for(const kind of ['ims','volte','vonr']) {
+        const btn=voices.find(b=>b.dataset.voice===kind&&b.dataset.enabled==='off');
+        btn.onclick();assert.equal(modal.options.danger,false);
+        confirm(false);await flush();assert.equal(requests.length,0);
+        btn.onclick();confirm(true);await flush();
+        assert.deepEqual(requests,[{kind,val:'off',slot:1}]);
+        assert.equal(btn.busy,true);
+        finishJob({...start,kind});await flush();
+        assert.equal(btn.busy,false);assert.equal(page._applying,false);
+        requests.length=0;notes.length=0;
+    }
     const reset=elements.get('#mud-lock-reset');
     lang='en'; reset.onclick();
     assert.equal(modal.title,'Clear all locks for SIM 2?');

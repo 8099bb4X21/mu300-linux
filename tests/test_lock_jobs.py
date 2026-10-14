@@ -38,21 +38,26 @@ p=Path(os.environ['STUBLOG']); f=p/'modem.json'; s=json.loads(f.read_text())
 cmd=sys.argv[-1]
 with (p/'commands').open('a') as log: log.write(cmd+'\\n')
 reads={'AT+SPTESTMODE?':('SPTESTMODE','tm'), 'AT+SP5GRAN?':('SP5GRAN','gran'),
+ 'AT+IMSEN?':('IMSEN','ims'), 'AT+CAVIMS?':('CAVIMS','volte'),
  'AT+SPENDC?':('ENDC','endc'), 'AT+SPLBAND=0':('SPLBAND','lte'),
  'AT+SPLBAND=3':('SPLBAND','nr'), 'AT+CFUN?':('CFUN','cfun')}
 if cmd in reads:
+ if cmd=='AT+IMSEN?' and s.get('no_ims_query'): print('ERROR'); sys.exit(1)
  if s.get('silent'): sys.exit(1)
  label,key=reads[cmd]; value=s.get('read_override',{}).get(key,s[key])
  if key=='endc' and value=='2': value=s.get('endc_off_reply','0')
  print('+'+label+': '+value); print('OK'); sys.exit(0)
 if cmd=='AT+SP5GCMDS="get nr support_band"':
  print('+SP5GCMDS: get nr support_band,6,41,78,1,8,28,5'); print('OK'); sys.exit(0)
+if cmd=='AT+SP5GCMDS="get nr synch_param",42':
+ print('+SP5GCMDS: "get nr synch_param",42,'+s['vonr']); print('OK'); sys.exit(0)
 if cmd in ('AT+SPFORCEFRQ=12,3','AT+SPFORCEFRQ=16,3'):
  tag=cmd.split('=')[1].split(',')[0]; cells=s.get('cell_read_override',{}).get(tag,s['cells'+tag])
  print('+SPFORCEFRQ: '+tag+',3'+(''.join(','+x for x in cells))); print('OK'); sys.exit(0)
 if s.get('reject'): print('+CME ERROR: 3'); sys.exit(0)
 if s.get('reject_restart') and cmd.startswith('AT+SFUN='): print('ERROR'); sys.exit(0)
 for prefix,key in [('AT+SPTESTMODE=','tm'),('AT+SP5GRAN=','gran'),('AT+SPENDC=','endc'),
+ ('AT+IMSEN=','ims'),('AT+CAVIMS=','volte'),('AT+SP5GCMDS="set nr param",45,','vonr'),
  ('AT+SPLBAND=1,','lte'),('AT+SPLBAND=2,','nr')]:
  if cmd.startswith(prefix) and not s.get('ignore'): s[key]=cmd[len(prefix):]
 if cmd.startswith('AT+SPTESTMODE=') and s.get('corrupt_mode_fields'): s['tm']=s['tm'].split(',')[0]+',134,0'
@@ -73,7 +78,8 @@ print('OK')
 
     def reset(self, **extra):
         state = dict(tm='134,128,1,0,0,0', gran='1', endc='1',
-            lte='0,0,0,0,0', nr='0,0,0,0', cfun='1', cells12=['1650,10'], cells16=[])
+            lte='0,0,0,0,0', nr='0,0,0,0', cfun='1', cells12=['1650,10'], cells16=[],
+            ims='1',volte='1',vonr='0')
         state.update(extra)
         self.modem.write_text(json.dumps(state))
         (self.tmp / 'commands').write_text('')
@@ -89,6 +95,105 @@ print('OK')
         for key, value in saved.items():
             (directory / key).write_text(value)
         return saved
+
+    def test_voice_switches_keep_separate_state_and_do_not_cycle_radio(self):
+        for shell in self.each_shell():
+            self.reset()
+            for kind, value in [('ims','off'), ('volte','off'), ('vonr','on')]:
+                result=self.apply(shell,kind,value)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual((self.state/kind).read_text(),value)
+            current=json.loads((self.run/'lock.json').read_text())
+            self.assertEqual(current['ims']['source'],'acknowledged')
+            self.assertIs(current['ims']['enabled'],False)
+            self.assertIs(current['volte']['enabled'],False)
+            self.assertIs(current['vonr']['enabled'],True)
+            trace=(self.tmp/'commands').read_text()
+            self.assertNotIn('SFUN',trace)
+            self.assertNotIn('ifup',trace)
+            self.assertNotIn('AT+CASIMS=',trace)
+
+    def test_voice_failures_never_save_and_ims_requires_ok(self):
+        for shell in self.each_shell():
+            for kind, value, fault in [('ims','off','reject'),('ims','off','omit_ok'),
+                                       ('volte','off','ignore'),('vonr','on','ignore')]:
+                self.reset(**{fault:True})
+                (self.state/kind).unlink(missing_ok=True)
+                result=self.apply(shell,kind,value)
+                self.assertNotEqual(result.returncode,0,(kind,fault))
+                self.assertFalse((self.state/kind).exists())
+                self.assertNotIn('SFUN',(self.tmp/'commands').read_text())
+
+    def test_voice_only_replay_is_early_once_and_never_restarts(self):
+        for shell in self.each_shell():
+            self.reset()
+            for kind,value in [('ims','off'),('volte','off'),('vonr','on')]:
+                (self.state/kind).write_text(value)
+            result=self.replay(shell,'early')
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue((self.tmp/'marker').exists())
+            trace=(self.tmp/'commands').read_text()
+            self.assertLess(trace.index('AT+CAVIMS=0'),trace.index('AT+IMSEN=0'))
+            self.assertNotIn('SFUN',trace)
+            self.assertNotIn('AT+IMSEN?',trace)
+            self.assertEqual(self.script(shell,self.lock,'replay','late',**self.extra).returncode,0)
+            self.assertEqual((self.tmp/'commands').read_text(),trace)
+
+    def test_unsupported_ims_read_does_not_hide_other_locks_or_write_receipt(self):
+        for shell in self.each_shell():
+            self.reset(no_ims_query=True)
+            result=self.apply(shell,'ims','off')
+            self.assertEqual(result.returncode,0,result.stderr)
+            result=self.script(shell,self.lock,'get','fresh',**self.extra)
+            current=json.loads(result.stdout)
+            self.assertIn('mode',current)
+            self.assertIs(current['ims']['enabled'],False)
+            self.assertEqual(current['ims']['source'],'acknowledged')
+            before=(self.tmp/'commands').read_text().count('AT+IMSEN?')
+            self.script(shell,self.lock,'get','fresh',**self.extra)
+            self.assertEqual((self.tmp/'commands').read_text().count('AT+IMSEN?'),before)
+
+    def test_secondary_voice_settings_do_not_write_primary_preferences(self):
+        for shell in self.each_shell():
+            self.reset()
+            second=self.state/'sim1';second.mkdir(exist_ok=True)
+            scoped=self.run/'sim1';scoped.mkdir(exist_ok=True)
+            (self.state/'ims').write_text('on')
+            result=self.script(shell,self.lock,'apply','ims','off',**dict(self.extra,
+                MU300_SIM_SLOT='1',MU300_STATE_DIR=second,MU300_DASH_DIR=scoped))
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual((second/'ims').read_text(),'off')
+            self.assertEqual((self.state/'ims').read_text(),'on')
+            self.assertTrue((scoped/'voice-ims').exists())
+            self.assertFalse((self.run/'voice-ims').exists())
+
+    def test_reset_keeps_voice_preferences(self):
+        for shell in self.each_shell():
+            self.reset(ims='0',volte='0',vonr='1')
+            for kind,val in [('ims','off'),('volte','off'),('vonr','on')]:
+                (self.state/kind).write_text(val)
+            result=self.apply(shell,'reset','auto')
+            self.assertEqual(result.returncode,0,result.stderr)
+            for kind,val in [('ims','off'),('volte','off'),('vonr','on')]:
+                self.assertEqual((self.state/kind).read_text(),val)
+            trace=(self.tmp/'commands').read_text()
+            self.assertNotIn('AT+IMSEN=',trace)
+            self.assertNotIn('AT+CAVIMS=',trace)
+
+    def test_voice_only_boot_worker_detects_all_three_settings(self):
+        for shell in self.each_shell():
+            for kind in ('ims','volte','vonr'):
+                with self.subTest(kind=kind):
+                    self.reset()
+                    path=self.state/kind;path.write_text('off')
+                    (self.tmp/'marker').unlink(missing_ok=True)
+                    env=dict(self.extra,UNISOC_AT_BIN=self.tmp/'fake-at',
+                        UNISOC_LOCK_BIN=self.lock,UNISOC_EARLY_PENDING=self.tmp/'pending')
+                    result=self.script(shell,LIB/'boot-replay',**env)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertTrue((self.tmp/'marker').exists())
+                    self.assertNotIn('SFUN',(self.tmp/'commands').read_text())
+                    path.unlink()
 
     def test_reset_clears_all_types_once_preserving_other_sim_and_identity(self):
         for shell in self.each_shell():

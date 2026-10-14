@@ -52,7 +52,20 @@ return view.extend({
   <div class="mud-ctl" style="margin-top:7px;max-width:340px">
     <button class="mud-btn" id="mud-lock-auto-apply">开机自动应用</button>
   </div>
-  <div class="mud-note">关闭后只停止下次开机回放，已保存的网络模式、EN-DC、频段和小区配置不会被删除。</div>
+  <div class="mud-note">关闭后只停止下次开机回放，已保存的网络、IMS、VoLTE 和 VoNR 设置不会被删除。</div>
+</div>
+
+<div class="mud-sec">
+  <h3>IMS · VoLTE · VoNR</h3>
+  <div class="mud-note">IMS 为总开关，VoLTE 用于 4G 通话，VoNR 用于 5G SA 通话。设置按当前查看的 SIM 保存，并跟随“开机自动应用”。</div>
+  ${['ims','volte','vonr'].map(function(kind) {
+    var name = {ims:'IMS',volte:'VoLTE',vonr:'VoNR'}[kind];
+    return '<div class="mud-r"><span class="mud-k">'+name+'</span><span class="mud-v" id="mud-lock-'+kind+'-state">--</span></div>'+
+      '<div class="mud-ctl" style="max-width:340px;margin:7px 0 12px;grid-template-columns:1fr 1fr">'+
+      '<button class="mud-btn" data-voice="'+kind+'" data-enabled="on">开启</button>'+
+      '<button class="mud-btn" data-voice="'+kind+'" data-enabled="off">关闭</button></div>';
+  }).join('')}
+  <div class="mud-note">关闭 IMS 不等于屏蔽全部来电和短信，传统网络业务仍可能到达。</div>
 </div>
 
 <div class="mud-sec">
@@ -178,6 +191,14 @@ return view.extend({
 					btn.textContent = on ? '开机自动应用' : '开机自动应用 ✓';
 				} });
 		};
+		root.querySelectorAll('[data-voice]').forEach(function(btn) {
+			btn.onclick = function() {
+				var kind = btn.dataset.voice, val = btn.dataset.enabled;
+				var name = {ims:'IMS',volte:'VoLTE',vonr:'VoNR'}[kind];
+				apply(kind, val, M.translate(val === 'on' ? '开启' : '关闭')+' '+name,
+					{btn:btn,noSfun:true});
+			};
+		});
 		this.Q('lock-refresh').onclick = function() {
 			var btn = this;
 			M.busy(btn, true);
@@ -456,6 +477,19 @@ return view.extend({
 		if (eb) { eb.className = 'mud-btn' + (l.endc === '1' ? ' on' : ''); eb.textContent = l.endc === '1' ? 'EN-DC' : 'EN-DC'; }
 		var ab = this.Q('lock-auto-apply'), autoApply = l.auto_apply !== 0;
 		if (ab) { ab.className = 'mud-btn' + (autoApply ? ' on' : ''); ab.textContent = M.translate(autoApply ? '开机自动应用 ✓' : '开机自动应用'); }
+		['ims','volte','vonr'].forEach(function(kind) {
+			var state = l[kind] || {}, known = typeof state.enabled === 'boolean';
+			var text = M.translate(known ? (state.enabled ? '已开启' : '已关闭') : '状态暂不可读，请选择开启或关闭');
+			if (state.source === 'acknowledged') text += ' · '+M.translate('本次已应用');
+			setR('lock-'+kind+'-state', text);
+			var box = self._root;
+			if (box) box.querySelectorAll('[data-voice="'+kind+'"]').forEach(function(btn) {
+				var selected = known && state.enabled === (btn.dataset.enabled === 'on');
+				btn.className = 'mud-btn'+(selected ? ' on' : '');
+				btn.setAttribute('aria-pressed', String(selected));
+				btn.disabled = !!self._applying || selected;
+			});
+		});
 
 		/* Never expose speculative selectable bands before backend capabilities. */
 		var caps = l.caps || {};
