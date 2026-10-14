@@ -556,7 +556,8 @@ call)
             ;;
         traffic_set)
             # Do not forward the browser session into the private service.
-            params=$(printf '%s' "$INPUT" | ucode -e 'import * as fs from "fs"; let i=json(fs.readfile("/dev/stdin")); print(sprintf("%J", {payload:i.payload,slot:int(i.slot || 0)}));' 2>/dev/null) || params='{}'
+            # Use the validated per-request SIM scope, not another copy of it.
+            params=$(printf '%s' "$INPUT" | ucode -e 'import * as fs from "fs"; let i=json(fs.readfile("/dev/stdin")); print(sprintf("%J", {payload:i.payload,slot:int(getenv("MU300_SIM_SLOT") || 0)}));' 2>/dev/null) || { printf '{"ok":0,"error":"invalid_config"}\n'; exit 0; }
             ubus -t 5 call unisoc.traffic set "$params" 2>/dev/null || printf '{"ok":0,"error":"traffic_unavailable"}\n'
             ;;
         traffic_clear)
