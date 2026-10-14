@@ -379,7 +379,7 @@ class ThermalGuard(ShellTest):
         z.mkdir(parents=True, exist_ok=True)
         (z / 'temp').write_text(f'{soc}\n')
         if trips:
-            (z / 'trip_point_0_temp').write_text('95000\n')
+            (z / 'trip_point_0_temp').write_text('85000\n')
         if battery is not None:
             b = self.root / 'sys/class/power_supply/battery'
             b.mkdir(parents=True, exist_ok=True)
@@ -423,6 +423,24 @@ class ThermalGuard(ShellTest):
             self.device('u30air')
             self.assertEqual(self.round(shell, 110000), ['poweroff', 'mu300-led alarm on'])   # mainline: critical
 
+    def test_guard_recovery_keeps_user_ceiling_and_external_changes(self):
+        for shell in self.each_shell():
+            shutil.rmtree(self.root, ignore_errors=True)
+            self.device('f50')
+            p=self.root/'sys/devices/system/cpu/cpufreq/policy0'
+            p.mkdir(parents=True)
+            (p/'scaling_available_frequencies').write_text('400000 800000 1200000\n')
+            (p/'scaling_max_freq').write_text('800000\n')
+            (p/'cpuinfo_max_freq').write_text('1200000\n')
+            self.round(shell,86000)
+            self.assertEqual((p/'scaling_max_freq').read_text().strip(),'400000')
+            self.round(shell,40000)
+            self.assertEqual((p/'scaling_max_freq').read_text().strip(),'800000')
+            self.round(shell,86000)
+            (p/'scaling_max_freq').write_text('1200000\n')
+            self.round(shell,40000)
+            self.assertEqual((p/'scaling_max_freq').read_text().strip(),'1200000')
+
     def test_mainline_native_cooling_keeps_emergency_and_user_caps(self):
         for shell in self.each_shell():
             shutil.rmtree(self.root, ignore_errors=True)
@@ -432,6 +450,7 @@ class ThermalGuard(ShellTest):
             z.mkdir(parents=True)
             (z / 'type').write_text('soc-thmzone\n')
             (z / 'mode').write_text('enabled\n')
+            (z / 'trip_point_0_type').write_text('passive\n')
             c = z.parent / 'cooling_device0'
             c.mkdir()
             (c / 'type').write_text('cpufreq-cpu0\n')
@@ -607,6 +626,7 @@ elif op.startswith('w'):
             self.assertEqual(self.writes(), [])
 
     def test_v50_uses_its_stock_reset_pin_and_read_only_discovery(self):
+        (self.root/'proc/device-tree/soc/ap-ahb/i2c@2270000/aw9523b_led@5b').mkdir(parents=True)
         node=self.root/'proc/device-tree/ntag_fm11_gpio';node.mkdir(parents=True)
         (node/'ntag-reset-gpio').write_bytes(bytes.fromhex('00000018000000bd00000000'))
         for shell in self.each_shell():

@@ -52,6 +52,7 @@ python3 "$TOP/boot/build-boot-image.py" --generic-ramdisk --modules "$UO/modules
     --ueventd-perms "$TOP/android-vendor/ueventd-perms.sh" --out "$W/b/ramdisk-generic.lz4" >/dev/null
 cp "$UO"/modules/*.ko "$W/b/modules/"
 for f in modules.builtin modules.builtin.modinfo; do [ ! -f "$UO/$f" ] || cp "$UO/$f" "$W/b/"; done
+cp "$UO/kernel.config" "$UO/modules.in-tree" "$UO/modules.sha256" "$UO/kernel.sha256" "$W/b/"
 echo "$krel" > "$W/b/kernel.release"
 # the devices this kernel runs on; mu300-update and the installers check it (FINDINGS 33c: mainline kernels from
 # before this file do not bring up the U30 Air's USB)

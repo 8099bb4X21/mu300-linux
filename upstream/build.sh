@@ -34,6 +34,10 @@ O=/src/out-$KV
 mkdir -p $O
 make O=$O ARCH=arm64 allnoconfig >/dev/null
 ./scripts/kconfig/merge_config.sh -m -O $O $O/.config /work/mu300-mainline.config >/dev/null
+# PR #228: NFSv4.1 is a separate prerequisite only on kernels exposing it.
+if grep -q '^config NFS_V4_1$' fs/nfs/Kconfig; then
+    scripts/config --file "$O/.config" --enable NFS_V4_1
+fi
 make O=$O ARCH=arm64 olddefconfig >/dev/null
 # options Kconfig did not take; ones known not to exist in this kernel are listed in config-ignored.txt, any
 # other one stops the build (a silently dropped option has cost a working feature before)

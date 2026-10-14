@@ -2,6 +2,7 @@
 # Build a Magisk-installable OpenWrt-on-TF package with Linux 6.18 or 7.2.
 # Usage: MU300_KERNEL=6.18|7.2 MU300_INPUTS=work tools/build-openwrt-tf-magisk.sh [OUT.zip]
 # The TF image includes the standalone LuCI package from openwrt/luci-app-mu300.
+umask 022
 set -eu
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 IN=${MU300_INPUTS:-$TOP/work}
@@ -164,6 +165,8 @@ sed -i "s/7\.2/$KERNEL/g" "$STAGE/module.prop"
 cp "$IN/busybox" "$STAGE/busybox"
 cp "$ROOTFS" "$STAGE/mu300-openwrt.tar.gz"
 cp "$BOOT" "$STAGE/boot-linux.img"
+mkdir -p "$STAGE/kernel-evidence"
+cp "$UO/kernel.config" "$UO/modules.in-tree" "$UO/kernel.sha256" "$UO/modules.sha256" "$STAGE/kernel-evidence/"
 (cd "$STAGE" && sha256sum boot-linux.img | cut -d' ' -f1 > boot-linux.sha256)
 python3 "$TOP/tools/tf-payload-manifest.py" "$STAGE"
 chmod 755 "$STAGE"/*.sh "$STAGE/busybox"

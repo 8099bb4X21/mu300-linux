@@ -114,11 +114,25 @@ t = open(sp).read()
 marker = 'MU300: only the non-removable eMMC'
 old = '\t/* ' + marker + ' is used */\n\tif (!of_property_read_bool(pdev->dev.of_node, "non-removable"))\n\t\treturn -ENODEV;\n'
 t = t.replace(old, '')
-# The stock F50 DT describes the removable slot's vendor EIC card-detect GPIO,
-# but that GPIO supplier can remain deferred under mainline.  Do not let that
-# keep the entire SD host deferred forever: only sdio_sd falls back to polling.
+# PR #184 maps all EIC banks so the stock card-detect GPIO uses interrupts.
+# A genuine GPIO deferral still has a TF-only fallback: re-run the full parse
+# without cd-gpios, rather than skipping bus modes/power sequence after it.
 parse_old = '\tret = mmc_of_parse(host->mmc);\n\tif (ret)\n\t\treturn ret;\n'
 parse_new = '''\tret = mmc_of_parse(host->mmc);
+\tif (ret == -EPROBE_DEFER &&
+\t    of_property_match_string(pdev->dev.of_node, "sprd,name", "sdio_sd") >= 0) {
+\t\tstruct property *cd = of_find_property(pdev->dev.of_node, "cd-gpios", NULL);
+\t\tif (cd && !of_remove_property(pdev->dev.of_node, cd)) {
+\t\t\tdev_warn(&pdev->dev, "MU300: CD GPIO deferred, polling removable TF slot\\n");
+\t\t\tret = mmc_of_parse(host->mmc);
+\t\t\thost->mmc->caps |= MMC_CAP_NEEDS_POLL;
+\t\t}
+\t}
+\tif (ret)
+\t\treturn dev_err_probe(&pdev->dev, ret, "MU300: mmc_of_parse failed\\n");
+'''
+# Migrate the earlier cached adaptation, which only masked the deferral.
+masked = '''\tret = mmc_of_parse(host->mmc);
 \tif (ret == -EPROBE_DEFER &&
 \t    of_property_read_bool(pdev->dev.of_node, "cd-gpios") &&
 \t    of_property_match_string(pdev->dev.of_node, "sprd,name", "sdio_sd") >= 0) {
@@ -129,7 +143,8 @@ parse_new = '''\tret = mmc_of_parse(host->mmc);
 \tif (ret)
 \t\treturn dev_err_probe(&pdev->dev, ret, "MU300: mmc_of_parse failed\\n");
 '''
-if 'MU300: CD GPIO deferred' not in t:
+t = t.replace(masked, parse_old)
+if 'of_remove_property(pdev->dev.of_node, cd)' not in t:
     if parse_old not in t:
         sys.exit('port: sdhci-sprd mmc_of_parse anchor changed')
     t = t.replace(parse_old, parse_new, 1)

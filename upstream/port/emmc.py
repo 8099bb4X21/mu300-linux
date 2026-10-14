@@ -6,6 +6,32 @@ import re
 
 def apply(kernel):
     kernel = Path(kernel)
+    # SDHCI core builds coherent ADMA descriptors immediately before ringing
+    # SDHCI_COMMAND. Coherent allocation does not order these stores against
+    # relaxed MMIO; likewise completion status must order subsequent DMA reads.
+    # Match the ordered accessors provided by the generic SDHCI helpers.
+    io = kernel / 'drivers/mmc/host/sdhci-sprd.c'
+    text = io.read_text()
+    start = text.index('static inline u32 sdhci_sprd_readl(')
+    end = text.index('static inline void sdhci_sprd_sd_clk_off(', start)
+    accessors = text[start:end]
+    marker = 'Shared SDHCI policy: order ADMA descriptors and DMA completion'
+    if marker not in accessors:
+        accessors = accessors.replace(
+            'return readl_relaxed(host->ioaddr + reg);',
+            '/* ' + marker + '. */\n\treturn readl(host->ioaddr + reg);',
+        )
+        for width in ('b', 'w', 'l'):
+            accessors = accessors.replace('write' + width + '_relaxed(', 'write' + width + '(')
+    required = ('return readl(host->ioaddr + reg);',
+                'writel(val, host->ioaddr + reg);',
+                'writew(val, host->ioaddr + reg);',
+                'writeb(val, host->ioaddr + reg);')
+    if (marker not in accessors or any(item not in accessors for item in required)
+            or re.search(r'write[bwl]_relaxed\(', accessors)):
+        raise ValueError('SDHCI MMIO accessor anchors changed')
+    io.write_text(text[:start] + accessors + text[end:])
+
     header = kernel / 'include/linux/mmc/host.h'
     text = header.read_text()
     if '#define MMC_CAP2_NO_REL_WR' not in text:

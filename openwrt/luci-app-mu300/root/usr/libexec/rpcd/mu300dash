@@ -455,6 +455,7 @@ do_list() {
 	"forward_status": { "profile": "String" },
 	"forward_set": { "payload": "String" },
 	"forward_test": { "profile": "String" },
+	"forward_log_clear": { },
 	"traffic_get": { "slot": "String" },
 	"traffic_set": { "payload": "String", "slot": "String" },
 	"traffic_clear": { "confirm": false, "slot": "String" },
@@ -536,6 +537,7 @@ call)
         cpu_apply) inp '@.payload' | "$DASH/cpu" apply ;;
         cpu_voltage_get) "$DASH/cpu-voltage" get ;;
         cpu_voltage_save) inp '@.payload' | "$DASH/cpu-voltage" save ;;
+        forward_log_clear) "$DASH/sms-forward" log-clear ;;
         forward_status) "$DASH/sms-forward" status "$(inp '@.profile' shared)" ;;
         forward_set)
             payload=$(inp '@.payload')

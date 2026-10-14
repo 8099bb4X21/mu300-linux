@@ -804,7 +804,8 @@ rollback_boot() {
 # keeps it from going idle while the update runs (two targets, one of them reachable from mainland China).
 keepalive_start() {
     have ping || return 0
-    ( while :; do ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 & ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; sleep 3; done ) &
+    # PR #217: children must not keep the upgrade lock after self-update/exit.
+    ( while :; do ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 & ping -c1 -W2 223.5.5.5 >/dev/null 2>&1; sleep 3; done ) 9>&- &
     KEEPALIVE=$!
 }
 keepalive_stop() { [ -n "${KEEPALIVE:-}" ] && kill "$KEEPALIVE" 2>/dev/null; KEEPALIVE=; }
