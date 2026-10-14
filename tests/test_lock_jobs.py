@@ -38,11 +38,11 @@ p=Path(os.environ['STUBLOG']); f=p/'modem.json'; s=json.loads(f.read_text())
 cmd=sys.argv[-1]
 with (p/'commands').open('a') as log: log.write(cmd+'\\n')
 reads={'AT+SPTESTMODE?':('SPTESTMODE','tm'), 'AT+SP5GRAN?':('SP5GRAN','gran'),
- 'AT+IMSEN?':('IMSEN','ims'), 'AT+CAVIMS?':('CAVIMS','volte'),
+ 'AT+CAVIMS?':('CAVIMS','volte'),
  'AT+SPENDC?':('ENDC','endc'), 'AT+SPLBAND=0':('SPLBAND','lte'),
  'AT+SPLBAND=3':('SPLBAND','nr'), 'AT+CFUN?':('CFUN','cfun')}
 if cmd in reads:
- if cmd=='AT+IMSEN?' and s.get('no_ims_query'): print('ERROR'); sys.exit(1)
+ if cmd=='AT+CAVIMS?' and s.get('no_voice_query'): print('ERROR'); sys.exit(1)
  if s.get('silent'): sys.exit(1)
  label,key=reads[cmd]; value=s.get('read_override',{}).get(key,s[key])
  if key=='endc' and value=='2': value=s.get('endc_off_reply','0')
@@ -57,7 +57,7 @@ if cmd in ('AT+SPFORCEFRQ=12,3','AT+SPFORCEFRQ=16,3'):
 if s.get('reject'): print('+CME ERROR: 3'); sys.exit(0)
 if s.get('reject_restart') and cmd.startswith('AT+SFUN='): print('ERROR'); sys.exit(0)
 for prefix,key in [('AT+SPTESTMODE=','tm'),('AT+SP5GRAN=','gran'),('AT+SPENDC=','endc'),
- ('AT+IMSEN=','ims'),('AT+CAVIMS=','volte'),('AT+SP5GCMDS="set nr param",45,','vonr'),
+ ('AT+CAVIMS=','volte'),('AT+SP5GCMDS="set nr param",45,','vonr'),
  ('AT+SPLBAND=1,','lte'),('AT+SPLBAND=2,','nr')]:
  if cmd.startswith(prefix) and not s.get('ignore'): s[key]=cmd[len(prefix):]
 if cmd.startswith('AT+SPTESTMODE=') and s.get('corrupt_mode_fields'): s['tm']=s['tm'].split(',')[0]+',134,0'
@@ -79,7 +79,7 @@ print('OK')
     def reset(self, **extra):
         state = dict(tm='134,128,1,0,0,0', gran='1', endc='1',
             lte='0,0,0,0,0', nr='0,0,0,0', cfun='1', cells12=['1650,10'], cells16=[],
-            ims='1',volte='1',vonr='0')
+            volte='1',vonr='0')
         state.update(extra)
         self.modem.write_text(json.dumps(state))
         (self.tmp / 'commands').write_text('')
@@ -96,26 +96,27 @@ print('OK')
             (directory / key).write_text(value)
         return saved
 
-    def test_voice_switches_keep_separate_state_and_do_not_cycle_radio(self):
+    def test_voice_switches_save_verified_state_and_do_not_cycle_radio(self):
         for shell in self.each_shell():
             self.reset()
-            for kind, value in [('ims','off'), ('volte','off'), ('vonr','on')]:
+            for kind, value in [('volte','off'), ('vonr','on')]:
                 result=self.apply(shell,kind,value)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual((self.state/kind).read_text(),value)
             current=json.loads((self.run/'lock.json').read_text())
-            self.assertEqual(current['ims']['source'],'acknowledged')
-            self.assertIs(current['ims']['enabled'],False)
+            self.assertNotIn('ims',current)
             self.assertIs(current['volte']['enabled'],False)
+            self.assertEqual(current['volte']['source'],'modem')
             self.assertIs(current['vonr']['enabled'],True)
             trace=(self.tmp/'commands').read_text()
             self.assertNotIn('SFUN',trace)
             self.assertNotIn('ifup',trace)
+            self.assertNotIn('AT+IMSEN',trace)
             self.assertNotIn('AT+CASIMS=',trace)
 
-    def test_voice_failures_never_save_and_ims_requires_ok(self):
+    def test_voice_rejection_or_readback_mismatch_never_save(self):
         for shell in self.each_shell():
-            for kind, value, fault in [('ims','off','reject'),('ims','off','omit_ok'),
+            for kind, value, fault in [('volte','off','reject'),
                                        ('volte','off','ignore'),('vonr','on','ignore')]:
                 self.reset(**{fault:True})
                 (self.state/kind).unlink(missing_ok=True)
@@ -133,39 +134,59 @@ print('OK')
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertTrue((self.tmp/'marker').exists())
             trace=(self.tmp/'commands').read_text()
-            self.assertLess(trace.index('AT+CAVIMS=0'),trace.index('AT+IMSEN=0'))
+            self.assertEqual(trace.count('AT+CAVIMS=0'),1)
             self.assertNotIn('SFUN',trace)
-            self.assertNotIn('AT+IMSEN?',trace)
+            self.assertNotIn('AT+IMSEN',trace)
             self.assertEqual(self.script(shell,self.lock,'replay','late',**self.extra).returncode,0)
             self.assertEqual((self.tmp/'commands').read_text(),trace)
 
-    def test_unsupported_ims_read_does_not_hide_other_locks_or_write_receipt(self):
+    def test_failed_fresh_voice_query_never_falls_back_to_write_receipt(self):
         for shell in self.each_shell():
-            self.reset(no_ims_query=True)
-            result=self.apply(shell,'ims','off')
+            self.reset()
+            result=self.apply(shell,'volte','off')
             self.assertEqual(result.returncode,0,result.stderr)
+            self.reset(no_voice_query=True)
             result=self.script(shell,self.lock,'get','fresh',**self.extra)
             current=json.loads(result.stdout)
             self.assertIn('mode',current)
-            self.assertIs(current['ims']['enabled'],False)
-            self.assertEqual(current['ims']['source'],'acknowledged')
-            before=(self.tmp/'commands').read_text().count('AT+IMSEN?')
-            self.script(shell,self.lock,'get','fresh',**self.extra)
-            self.assertEqual((self.tmp/'commands').read_text().count('AT+IMSEN?'),before)
+            self.assertNotIn('ims',current)
+            self.assertIsNone(current['volte']['enabled'])
+            self.assertEqual(current['volte']['source'],'unknown')
+            self.assertIs(current['vonr']['enabled'],False)
+
+    def test_removed_ims_is_rejected_and_old_preference_is_ignored(self):
+        for shell in self.each_shell():
+            self.reset()
+            (self.state/'ims').write_text('off')
+            result=self.apply(shell,'ims','off')
+            self.assertNotEqual(result.returncode,0)
+            result=self.replay(shell,'early')
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual((self.tmp/'commands').read_text(),'')
+
+    def test_native_cavims_read_does_not_assume_saved_preference_is_live(self):
+        for shell in self.each_shell():
+            self.reset()
+            (self.state/'volte').write_text('off')
+            result=self.script(shell,self.lock,'get','fresh',**self.extra)
+            current=json.loads(result.stdout)
+            self.assertIs(current['volte']['enabled'],True)
+            self.assertEqual(current['volte']['saved'],'off')
+            self.assertEqual((self.tmp/'commands').read_text().count('AT+CAVIMS?'),1)
 
     def test_secondary_voice_settings_do_not_write_primary_preferences(self):
         for shell in self.each_shell():
             self.reset()
             second=self.state/'sim1';second.mkdir(exist_ok=True)
             scoped=self.run/'sim1';scoped.mkdir(exist_ok=True)
-            (self.state/'ims').write_text('on')
-            result=self.script(shell,self.lock,'apply','ims','off',**dict(self.extra,
+            (self.state/'volte').write_text('on')
+            result=self.script(shell,self.lock,'apply','volte','off',**dict(self.extra,
                 MU300_SIM_SLOT='1',MU300_STATE_DIR=second,MU300_DASH_DIR=scoped))
             self.assertEqual(result.returncode,0,result.stderr)
-            self.assertEqual((second/'ims').read_text(),'off')
-            self.assertEqual((self.state/'ims').read_text(),'on')
-            self.assertTrue((scoped/'voice-ims').exists())
-            self.assertFalse((self.run/'voice-ims').exists())
+            self.assertEqual((second/'volte').read_text(),'off')
+            self.assertEqual((self.state/'volte').read_text(),'on')
+            self.assertTrue((scoped/'voice-volte').exists())
+            self.assertFalse((self.run/'voice-volte').exists())
 
     def test_reset_keeps_voice_preferences(self):
         for shell in self.each_shell():
@@ -180,9 +201,9 @@ print('OK')
             self.assertNotIn('AT+IMSEN=',trace)
             self.assertNotIn('AT+CAVIMS=',trace)
 
-    def test_voice_only_boot_worker_detects_all_three_settings(self):
+    def test_voice_only_boot_worker_detects_retained_settings(self):
         for shell in self.each_shell():
-            for kind in ('ims','volte','vonr'):
+            for kind in ('volte','vonr'):
                 with self.subTest(kind=kind):
                     self.reset()
                     path=self.state/kind;path.write_text('off')

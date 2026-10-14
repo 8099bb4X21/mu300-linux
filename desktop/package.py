@@ -60,6 +60,7 @@ unset MU300_DEPLOY_ROOT
     (assets/'repair').mkdir(); mod.prepare(Path(repair),assets/'repair')
     (stage/'docs').mkdir()
     shutil.copyfile(TOP/'desktop/README.md',stage/'docs/DESKTOP-INSTALL.md')
+    shutil.copyfile(TOP/'desktop/START-HERE.md',stage/'START-HERE.md')
     shutil.copyfile(TOP/'desktop/installer.py',stage/'OpenWrt-Installer.py')
     # Python source runs from the archive root, so resolve its support files there.
     if exe:

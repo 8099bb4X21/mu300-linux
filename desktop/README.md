@@ -1,3 +1,5 @@
+User instructions: open **START-HERE.md** at the package root, then run **OpenWrt-Installer.exe** or **OpenWrt-Installer.py**. This document describes technical details.
+
 # MU300 desktop deployment
 
 The same ZIP has two entry points. Installing it in Magisk runs the original
@@ -10,16 +12,16 @@ the build machine's proprietary firmware and Android runtime. It is removed
 after upload, including when upload fails. TF deployment uses the original
 archive directly.
 
-Only `OpenWrt-Installer.exe`, `OpenWrt-Installer.py`, `module.prop` and the
+`OpenWrt-Installer.exe`, `OpenWrt-Installer.py`, `START-HERE.md`, `module.prop` and the
 Magisk `customize.sh` entry are top-level files. Original deployment files live
-in `payload/`, shortcut scripts in `launchers/`, instructions in `docs/`, and
+in `payload/`, shortcut scripts in `launchers/`, the user guide at the root, technical notes in `docs/`, and
 desktop helpers and ADB in `desktop/` and `tools/`.
 
 | Launcher (.cmd for Windows, .sh for Linux/macOS) | Action |
 | --- | --- |
 | start-installer | Choose a method |
 | install-to-tf-card | Original TF worker; format the first TF partition, or the whole unpartitioned card |
-| install-to-userdata-image | Plaintext userdata image with configurable GiB size |
+| install-to-userdata-image | EXPERIMENTAL plaintext userdata image; may damage Android F2FS |
 | install-to-internal-storage | Independent `mu300root`; use unallocated eMMC first, otherwise offline userdata shrink |
 | reinstall-internal-system | Erase and reinstall only existing `mu300root` |
 | resume-internal-install | Continue after encrypted-data preparation and Android reset |
@@ -94,7 +96,8 @@ Only when no suitable gap fits the selected size is userdata shrink considered.
 Plaintext F2FS/ext4 uses the preserving workflow: verify a complete image with
 this device's runtime, stage it, boot a desktop-only initramfs, check and shrink
 the unmounted filesystem, change GPT, write/read back the root, and expand ext4
-to the full partition. The initial 2 GiB image is not the installed capacity.
+to the full partition by default. The initial 2 GiB image is not the installed capacity.
+The first offline boot may take several minutes or longer, then reboots once into OpenWrt; keep power connected.
 Offline operations print a two-second stage/elapsed heartbeat; copying also
 reports bytes. Progress is exposed during that boot at
 `http://192.168.77.1:8089/progress.txt` (U30Air: `192.168.78.1`).

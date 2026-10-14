@@ -718,12 +718,10 @@ var DASH_I18N = {
 	'已执行': ['Done', 'Tamamlandı'],
 	'失败': ['Failed', 'Başarısız'],
 	'未知错误': ['Unknown error', 'Bilinmeyen hata'],
-	'状态暂不可读，请选择开启或关闭': ['State unavailable; choose on or off', 'Durum okunamıyor; açın veya kapatın'],
-	'本次已应用': ['Applied this boot', 'Bu açılışta uygulandı'],
-	'关闭后只停止下次开机回放，已保存的网络、IMS、VoLTE 和 VoNR 设置不会被删除。': ['Turning this off only disables boot replay; saved network, IMS, VoLTE and VoNR settings are kept.', 'Kapatmak yalnızca açılışta uygulamayı durdurur; ağ, IMS, VoLTE ve VoNR ayarları korunur.'],
-	'IMS 为总开关，VoLTE 用于 4G 通话，VoNR 用于 5G SA 通话。设置按当前查看的 SIM 保存，并跟随“开机自动应用”。': ['IMS is the master switch; VoLTE handles 4G calls and VoNR handles 5G SA calls. Settings are saved per viewed SIM and follow Apply at boot.', 'IMS ana anahtardır; VoLTE 4G, VoNR 5G SA aramaları içindir. Ayarlar görüntülenen SIM için kaydedilir ve açılışta uygulama ayarını izler.'],
-	'关闭 IMS 不等于屏蔽全部来电和短信，传统网络业务仍可能到达。': ['Disabling IMS does not block every call or SMS; traditional network services may still arrive.', 'IMS kapatıldığında tüm aramalar ve SMS engellenmez; geleneksel şebeke hizmetleri ulaşabilir.'],
-	'IMS 设置没有获得明确确认，未保存': ['IMS setting was not acknowledged; not saved', 'IMS ayarı onaylanmadı; kaydedilmedi'],
+	'状态暂不可读，请刷新后重试': ['State unavailable; refresh and retry', 'Durum okunamıyor; yenileyip tekrar deneyin'],
+	'关闭后只停止下次开机回放，已保存的网络、VoLTE 和 VoNR 设置不会被删除。': ['Turning this off only disables boot replay; saved network, VoLTE and VoNR settings are kept.', 'Kapatmak yalnızca açılışta uygulamayı durdurur; ağ, VoLTE ve VoNR ayarları korunur.'],
+	'VoLTE 用于 4G 通话，VoNR 用于 5G SA 通话。设置按当前查看的 SIM 保存，并跟随“开机自动应用”。': ['VoLTE handles 4G calls and VoNR handles 5G SA calls. Settings are saved per viewed SIM and follow Apply at boot.', 'VoLTE 4G, VoNR 5G SA aramaları içindir. Ayarlar görüntülenen SIM için kaydedilir ve açılışta uygulama ayarını izler.'],
+	'关闭 VoLTE 或 VoNR 不等于屏蔽全部来电和短信，传统网络业务仍可能到达。': ['Disabling VoLTE or VoNR does not block every call or SMS; traditional network services may still arrive.', 'VoLTE veya VoNR kapatıldığında tüm aramalar ve SMS engellenmez; geleneksel şebeke hizmetleri ulaşabilir.'],
 	'调用失败': ['Request failed', 'İstek başarısız'],
 	'正在断开数据连接': ['Disconnecting data', 'Veri bağlantısı kesiliyor'],
 	'正在拨号': ['Connecting data', 'Veri bağlantısı kuruluyor'],
@@ -1180,6 +1178,16 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-freq .mud-k{flex:0 0 2.4em}
 .mud-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.82rem;cursor:pointer;user-select:none}
 .mud-btn:active{transform:scale(.97)}
+.mud-voice-row{align-items:center;gap:12px;padding:8px 0}
+.mud-voice-row .mud-v{flex:1;text-align:right;min-width:0;overflow-wrap:anywhere}
+.mud-btn.mud-voice-switch{flex:0 0 48px;min-height:36px;padding:6px;border:0;border-radius:18px;background:transparent;color:var(--text,#222)}
+.mud-voice-switch:focus-visible{outline:2px solid var(--brand,var(--primary,#2f7bf6));outline-offset:2px}
+.mud-voice-track{position:relative;display:block;width:36px;height:22px;flex:0 0 36px;border-radius:12px;background:var(--muted,#777);transition:background .18s}
+.mud-voice-track:after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .18s}
+.mud-voice-switch.on .mud-voice-track{background:var(--brand,var(--primary,#2f7bf6))}
+.mud-voice-switch.on .mud-voice-track:after{transform:translateX(14px)}
+@media(prefers-reduced-motion:reduce){.mud-voice-track,.mud-voice-track:after{transition:none}}
+
 .mud-btn.on{background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
 .mud-btn.warn{border-color:color-mix(in oklab,var(--danger,#E25555) 55%,transparent);color:var(--danger,#E25555)}
 .mud-btn[disabled]{opacity:.4;pointer-events:none}

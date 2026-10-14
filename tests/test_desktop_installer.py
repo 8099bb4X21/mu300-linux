@@ -390,7 +390,12 @@ desktop_free_loop
             manifest=package.assemble(stage,tools,'7.2')
             self.assertEqual({n:package.sha(stage/manifest['magisk_layout'][n]) for n in original},original)
             self.assertEqual([p.relative_to(stage).as_posix() for p in stage.rglob('*.tar.gz')],['payload/mu300-openwrt.tar.gz'])
-            self.assertEqual({p.name for p in stage.iterdir() if p.is_file()}, {'OpenWrt-Installer.py','customize.sh','module.prop'})
+            self.assertEqual({p.name for p in stage.iterdir() if p.is_file()}, {'OpenWrt-Installer.py','START-HERE.md','customize.sh','module.prop'})
+            guide=(stage/'START-HERE.md').read_text(encoding='utf-8')
+            self.assertIn('START-HERE.md',manifest['desktop'])
+            self.assertIn('OpenWrt-Installer.exe',guide)
+            self.assertIn('OpenWrt-Installer.py',guide)
+            self.assertIn('EXPERIMENTAL',guide)
             self.assertTrue((stage/'launchers/start-installer.cmd').is_file())
             self.assertTrue((stage/'docs/DESKTOP-INSTALL.md').is_file())
             self.assertEqual(installer.payload_file(stage,'boot-linux.img'),stage/'payload/boot-linux.img')
@@ -406,5 +411,27 @@ desktop_free_loop
             self.assertEqual(result.returncode,0,result.stderr)
             (stage/'desktop/configure.sh').write_text('tampered')
             with self.assertRaises(ValueError):installer.verify(stage)
+
+    def test_switch_boot_does_not_require_userdata_or_root_image_detection(self):
+        android=Mock(model='V50',slot='a',linux='b',bb='/tmp/busybox')
+        android.storage.side_effect=AssertionError('Switching must not depend on userdata geometry/encryption')
+        android.read.return_value=b'loglevel=5\0'
+        with patch.object(installer,'Android',return_value=android), patch.object(installer,'module'):
+            result=installer.install(Mock(boot_openwrt=True),Path('/test/package'),{})
+        self.assertEqual(result.state,'success')
+        android.storage.assert_not_called()
+        self.assertIn('switch.sh',android.run.call_args.args[0])
+        android.flash.assert_not_called()
+
+    def test_menu_warns_about_userdata_image_f2fs_risk(self):
+        with patch.object(installer,'package_root',return_value=Path('/test/package')), \
+             patch.object(installer,'verify',return_value={'kernel':'7.2'}), \
+             patch('builtins.input',return_value='2'), \
+             patch.object(installer,'install',return_value=installer.Outcome('checked','test')) as install, \
+             patch.object(installer.sys,'stdout',io.StringIO()) as output:
+            installer.main([])
+        self.assertTrue(install.call_args.args[0].data)
+        self.assertIn('EXPERIMENTAL',output.getvalue())
+        self.assertIn('Android F2FS',output.getvalue())
 
 if __name__=='__main__':unittest.main()

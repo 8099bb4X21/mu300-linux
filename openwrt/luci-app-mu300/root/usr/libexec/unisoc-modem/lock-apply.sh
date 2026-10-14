@@ -4,7 +4,7 @@ fail_apply() { printf '%s\n' "$1" >&2; return 1; }
 
 validate_apply() {
     local kind=$1 val=$2 cap encoded pair fr pc
-    case "$kind:$val" in ims:on|ims:off|volte:on|volte:off|vonr:on|vonr:off) return 0 ;; esac
+    case "$kind:$val" in volte:on|volte:off|vonr:on|vonr:off) return 0 ;; esac
     case "$kind:$val" in
         mode:auto|mode:4g|mode:sa|mode:nsa|endc:on|endc:off|auto_apply:on|auto_apply:off|reset:auto) return 0 ;;
         cell:auto|cell:off|cell:off-nr|cell:off-lte) return 0 ;;
@@ -65,7 +65,7 @@ voice_receipt() {
     [ -r "$RUNDIR/voice-$1" ] || return 1
     read -r bid bit source < "$RUNDIR/voice-$1" 2>/dev/null || return 1
     [ "$bid" = "$current" ] || return 1
-    case "$bit:$source" in 0:modem|1:modem|0:acknowledged|1:acknowledged) printf '%s %s\n' "$bit" "$source" ;; *) return 1 ;; esac
+    case "$bit:$source" in 0:modem|1:modem) printf '%s %s\n' "$bit" "$source" ;; *) return 1 ;; esac
 }
 
 voice_record() {
@@ -75,21 +75,14 @@ voice_record() {
 }
 
 voice_read() {
-    local kind=$1 timeout=${2:-4} cmd prefix reply raw bid status=0
+    local kind=$1 timeout=${2:-4} cmd prefix reply raw status=0
     case $kind in
-        ims)
-            bid=$(cat /proc/sys/kernel/random/boot_id) || return 1
-            [ "$(cat "$RUNDIR/voice-ims-unsupported" 2>/dev/null)" != "$bid" ] || return 1
-            cmd='AT+IMSEN?'; prefix=IMSEN ;;
         volte) cmd='AT+CAVIMS?'; prefix=CAVIMS ;;
         vonr) cmd='AT+SP5GCMDS="get nr synch_param",42'; prefix=SP5GCMDS ;;
         *) return 1 ;;
     esac
     reply=$(lock_at "$cmd" "$timeout") || status=$?
     reply=$(printf '%s\n' "$reply" | tr -d '\r')
-    if [ "$kind" = ims ] && printf '%s\n' "$reply" | grep -Eq '^(ERROR|\+CME ERROR: *4)$'; then
-        printf '%s\n' "$bid" > "$RUNDIR/voice-ims-unsupported"
-    fi
     [ "$status" = 0 ] && [ "$(printf '%s\n' "$reply" | sed '/^[[:space:]]*$/d' | tail -n1)" = OK ] || return 1
     raw=$(printf '%s\n' "$reply" | sed -n "s/^+$prefix: *//p" | head -n1 | tr -d ' \t"')
     if [ "$kind" = vonr ]; then
@@ -102,7 +95,6 @@ voice_set() {
     local kind=$1 val=$2 timeout=${3:-6} bit cmd reply status=0 got source
     case $val in on) bit=1 ;; off) bit=0 ;; *) return 1 ;; esac
     case $kind in
-        ims) cmd="AT+IMSEN=$bit" ;;
         volte) cmd="AT+CAVIMS=$bit" ;;
         vonr) cmd="AT+SP5GCMDS=\"set nr param\",45,$bit" ;;
         *) return 1 ;;
@@ -112,47 +104,36 @@ voice_set() {
     if printf '%s\n' "$reply" | grep -Eq '^(ERROR|\+CME ERROR|\+CMS ERROR)(:|$)'; then
         fail_apply '模组拒绝了设置'; return 1
     fi
-    if [ "$kind" = ims ]; then
-        # Stock RIL's IMS master switch. Do not substitute CAVIMS or treat
-        # missing OK as success on a CP without an IMSEN read command.
-        [ "$status" = 0 ] && [ "$(printf '%s\n' "$reply" | sed '/^[[:space:]]*$/d' | tail -n1)" = OK ] ||
-            { fail_apply 'IMS 设置没有获得明确确认，未保存'; return 1; }
-        source=acknowledged
-    else
-        got=$(voice_read "$kind" "$timeout") && [ "$got" = "$bit" ] ||
-            { fail_apply '模组回读与请求设置不一致，未保存'; return 1; }
-        source=modem
-    fi
+    got=$(voice_read "$kind" "$timeout") && [ "$got" = "$bit" ] ||
+        { fail_apply '模组回读与请求设置不一致，未保存'; return 1; }
+    source=modem
     voice_record "$kind" "$bit" "$source"
 }
 
 voice_matches() {
     local kind=$1 val=$2 got
     case $val in on) val=1 ;; off) val=0 ;; *) return 1 ;; esac
-    if [ "$kind" = ims ]; then
-        got=$(voice_receipt ims) || return 1
-        got=${got%% *}
-    else
-        got=$(voice_read "$kind" 2) || return 1
-    fi
+    got=$(voice_read "$kind" 2) || return 1
     [ "$got" = "$val" ]
 }
 
 voice_json() {
-    local kind=$1 refresh=${2:-0} got source=unknown enabled=null saved native=0
+    local kind=$1 refresh=${2:-0} got source=unknown enabled=null saved
     # A getter must not overwrite a write receipt mid-operation. The apply
     # worker's existing refresh reads the receipt it just verified instead.
     if [ "$refresh" = 1 ] && [ ! -d "$APPLY_DIR" ]; then
         if got=$(voice_read "$kind"); then
-            source=modem; native=1
+            source=modem
             [ "$got" = 1 ] && enabled=true || enabled=false
         fi
     fi
     # Observations never overwrite a write receipt; only an accepted setter
     # can publish one. This also protects early replay from concurrent getters.
-    if [ "$native" = 0 ] && got=$(voice_receipt "$kind"); then
-        source=${got#* }; got=${got%% *}
-        [ "$got" = 1 ] && enabled=true || enabled=false
+    if [ "$refresh" != 1 ] || [ -d "$APPLY_DIR" ]; then
+        if got=$(voice_receipt "$kind"); then
+            source=${got#* }; got=${got%% *}
+            [ "$got" = 1 ] && enabled=true || enabled=false
+        fi
     fi
     saved=$(cat "$STATE_DIR/$kind" 2>/dev/null)
     printf '{"enabled":%s,"source":"%s","saved":%s}' "$enabled" "$source" "$(qs "$saved")"
@@ -286,7 +267,7 @@ do_apply() {
         return $?
     fi
     case $kind in
-        ims|volte|vonr)
+        volte|vonr)
             voice_set "$kind" "$val" || return 1
             save_state "$kind" "$val" || { fail_apply '设置保存失败'; return 1; }
             say "applied $kind=$val for SIM ${MU300_SIM_SLOT:-0}"

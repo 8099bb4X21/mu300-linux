@@ -27,9 +27,11 @@ def verify(path):
         if shared not in manifest['magisk'] or 'desktop/files/rootfs.tar.gz' in manifest['desktop']:
             raise ValueError('expected one shared rootfs archive')
         if manifest.get('format')==2:
-            allowed={'OpenWrt-Installer.exe','OpenWrt-Installer.py','module.prop','customize.sh'}
+            allowed={'OpenWrt-Installer.exe','OpenWrt-Installer.py','START-HERE.md','module.prop','customize.sh'}
             if {p.name for p in stage.iterdir() if p.is_file()}-allowed:
                 raise ValueError('unexpected top-level file')
+            if not (stage/'START-HERE.md').is_file():
+                raise ValueError('missing root user guide START-HERE.md')
         subprocess.run([sys.executable,str(stage/'OpenWrt-Installer.py'),'--check-boot'],check=True)
         subprocess.run([sys.executable,str(stage/'OpenWrt-Installer.py'),'--check-rootfs'],check=True)
         if sys.platform=='win32' and (stage/'OpenWrt-Installer.exe').exists():

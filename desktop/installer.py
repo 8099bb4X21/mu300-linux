@@ -524,7 +524,7 @@ def check_boot(root):
         print('Desktop boot build verified:',mode,'Android slot',slot,'(no device writes)')
 
 def install(args,root,manifest):
-    a=Android(args);s=a.storage();m=module(root)
+    a=Android(args);m=module(root)
     print('Device / 设备:',a.model,'Android',a.slot,'Linux',a.linux)
     if args.boot_openwrt:
         for n in ('busybox','android-bootchain.sh','switch.sh'):
@@ -535,6 +535,7 @@ def install(args,root,manifest):
         if header!=b'loglevel=5\0':raise ValueError('The other slot does not contain a MU300 Linux boot image')
         a.run('"$BB" sh "$P/switch.sh" --no-reboot')
         return Outcome('success','OpenWrt selected / 已设置启动 OpenWrt。','Reboot the device manually / 请手动重启设备。')
+    s=a.storage()
     if args.tf:
         sd=a.shell('if [ -b /dev/block/mmcblk1p1 ]; then echo /dev/block/mmcblk1p1; elif [ -b /dev/block/mmcblk1 ]; then echo /dev/block/mmcblk1; fi').strip()
         if not sd:raise ValueError('No TF card found; choose an internal-storage method instead')
@@ -607,6 +608,8 @@ def install(args,root,manifest):
     is_encrypted=encrypted({'state':s['STATE'],'type':s['TYPE']},s['SOURCE'],s['EXT'] if s['EXT']=='53ef' else s['MAGIC'])
     if args.data and is_encrypted:raise ValueError('Encrypted userdata cannot host a bootable image. Choose independent-partition installation.')
     if args.data:
+        print("EXPERIMENTAL / 实验性功能：userdata 镜像模式可能破坏 Android 的 F2FS 文件系统。\n"
+              "This mode may damage Android's F2FS filesystem. Prefer TF or an independent internal partition.")
         maximum=(s['FREE']//1024-1024-256)
         print(f'Available / 可用: {s["FREE"]/1048576:.2f} GiB; image maximum {maximum/1024:.2f} GiB')
         size=image_size(args.size or input('Image size GiB / 镜像大小 [4]: ') or '4',maximum)
@@ -636,9 +639,10 @@ def install(args,root,manifest):
         a.flash(boot(root,m,'prepare',live,a.slot,prepare=request),m.boot_control(live,a.slot))
         print('Saved resume transaction / 续装记录:',backup/'transaction.json')
         print('Rebooting to offline partition preparation and stock recovery. Complete Android setup, USB debugging and su; then run resume-internal-install / 重置后重新启用 USB 调试和 root，运行续装入口。')
+        print('First boot resizes offline and can take several minutes. Keep power connected; it reboots after resizing. / 首次开机离线缩容通常需数分钟，请勿断电；缩容完成后自动重启，原厂恢复出厂可能另有重启。')
         a.reboot()
         return Outcome('pending','Preparation written; offline resize/reset is starting / 准备阶段已写入，设备将离线缩容并重置 Android。',
-                       'Finish Android setup, enable USB debugging and root, then choose 5 to resume / 完成 Android 初始化，启用 USB 调试和 root，再选 5 续装。')
+                       'Allow several minutes for offline resizing and its automatic reboot. Finish Android setup, enable USB debugging and root, then choose 5 to resume / 等待数分钟离线缩容及自动重启，完成 Android 初始化，启用 USB 调试和 root，再选 5 续装。')
     # Use a small, fully verified initial image; offline resize fills ALL space.
     a.prepare_payload(root)
     a.put(settings(args,2048,'part-stage',manifest['kernel']),'desktop-settings.env')
@@ -647,9 +651,10 @@ def install(args,root,manifest):
     identity=':'.join(map(str,(s['CID'],s['NODE'],s['START'],s['SIZE'],target)))
     a.flash(boot(root,m,'install-part',live,a.slot,identity=identity),m.boot_control(live,a.slot))
     print('Offline shrink/install starts after reboot; progress at http://192.168.77.1:8089/progress.txt (U30Air: .78.1). / 重启后开始离线安装。')
+    print('First boot may take several minutes or longer; do not interrupt power. After installation it reboots once into OpenWrt. / 首次开机缩容安装通常需数分钟，数据多或闪存慢时更久；完成后自动重启一次进入 OpenWrt，请勿中断。')
     a.reboot()
     return Outcome('pending','Payload verified; offline shrink/install is starting / 载荷校验通过，设备将离线缩容并安装。',
-                   'Wait for the device to finish and boot OpenWrt / 等待设备完成安装并启动 OpenWrt。')
+                   'Allow several minutes or longer; it automatically reboots once into OpenWrt. Keep power connected / 首次缩容安装通常需数分钟或更久，完成后自动重启一次进入 OpenWrt，请保持供电。')
 
 def direct_write(a,root,m,manifest,s,sectors,record=None,r=None):
     node=s['ROOT']
@@ -758,7 +763,9 @@ fi''').strip().splitlines()
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     actions=p.add_mutually_exclusive_group()
-    for n in ('tf','data','part','reinstall-part','resume','update','boot-openwrt','check','check-boot','check-rootfs','check-resume','probe'):actions.add_argument('--'+n,action='store_true')
+    for n in ('tf','data','part','reinstall-part','resume','update','boot-openwrt','check','check-boot','check-rootfs','check-resume','probe'):
+        help_text = 'EXPERIMENTAL userdata image: may damage Android F2FS; unencrypted data only' if n=='data' else None
+        actions.add_argument('--'+n,action='store_true',help=help_text)
     pause=p.add_mutually_exclusive_group()
     pause.add_argument('--pause',action='store_true',help='wait for Enter after the result, including redirected input')
     pause.add_argument('--no-pause',action='store_true',help='exit immediately after the result (automation)')
@@ -799,7 +806,7 @@ def main(argv=None):
         return Outcome('checked','Read-only device preflight passed / 设备只读预检通过。')
     if not any(getattr(args,n) for n in ('tf','data','part','reinstall_part','resume','update','boot_openwrt')):
         choices=('tf','data','part','reinstall_part','resume','update','boot_openwrt')
-        print('1 TF card / TF 卡\n2 Userdata image / userdata 镜像\n3 Independent internal partition / 独立内置分区\n4 Reinstall internal system / 重装独立分区\n5 Resume after Android reset / 重置后续装\n6 Update OpenWrt / 更新\n7 Boot OpenWrt / 启动 OpenWrt')
+        print('1 TF card / TF 卡\n2 Userdata image [EXPERIMENTAL] / userdata 镜像【实验性：可能损坏 Android F2FS】\n3 Independent internal partition / 独立内置分区\n4 Reinstall internal system / 重装独立分区\n5 Resume after Android reset / 重置后续装\n6 Update OpenWrt / 更新\n7 Boot OpenWrt / 启动 OpenWrt')
         selected=input('Choose / 选择 [1]: ').strip() or '1'
         if selected not in tuple(map(str,range(1,8))):raise ValueError('Invalid menu choice')
         setattr(args,choices[int(selected)-1],True)
