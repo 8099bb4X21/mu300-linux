@@ -385,6 +385,12 @@ start_test() {
 }
 run_daemon() {
     ensure_base || exit 1
+    # The feed jq is noregex (no Oniguruma) and would silently neuter every
+    # keyword/regex rule. DEPENDS pulls jq-full, but warn loudly if the PATH
+    # jq still cannot do regex, instead of failing silently like before.
+    if ! printf 'x' | "${MSF_JQ:-jq}" -Rsr --arg p 'x' 'test($p)' 2>/dev/null | grep -q true; then
+        echo 'mu300-smsfwd: the jq on PATH has no Oniguruma support; keyword and regex rules are inert (needs jq-full)' >&2
+    fi
     # procd owns the process. A second manual start exits without stealing work.
     exec 9> "$BASE/daemon.lock"
     flock -n 9 || exit 0

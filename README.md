@@ -91,7 +91,8 @@ apk del mu300-smsfwd
 
 安装时自动停用内置 `unisoc-sms-forward` 服务并启用本包服务；
 卸载时自动恢复内置服务。用户配置（见下）在升级/重装时保留
-（`conffiles`）。依赖 `jq`（正则）等由 `apk` 从官方源自动安装。
+（`conffiles`）。依赖 `jq-full`（**不是 `jq`**：官方源的 `jq` 是 noregex
+变体，没有 Oniguruma，正则/关键词会全部静默失效）等由 `apk` 自动安装。
 
 ## 文件与配置
 

@@ -18,7 +18,9 @@ define Package/mu300-smsfwd
   # by file copy, not registered in the apk database, so depending on it
   # would make this package uninstallable. The LuCI page reuses its
   # mu300.common helpers at runtime; postinst warns if they are absent.
-  DEPENDS:=+luci-base +rpcd +jq +jshn +jsonfilter +curl +ca-bundle +openssl-util +msmtp +ucode +ucode-mod-fs
+  DEPENDS:=+luci-base +rpcd +jq-full +jshn +jsonfilter +curl +ca-bundle +openssl-util +msmtp +ucode +ucode-mod-fs
+  # NOTE: jq-full, not jq. The feed jq is the noregex variant (no Oniguruma),
+  # which silently disables every keyword/regex rule. jq-full PROVIDES jq.
 endef
 
 define Package/mu300-smsfwd/description
