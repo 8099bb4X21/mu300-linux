@@ -4,7 +4,9 @@ set -eo pipefail
 KV=${KV:-6.18.54}
 [ "$(uname -m)" = aarch64 ] || export CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
 # where Image, DTB and modules.builtin go: /work/out for 6.18, OUTDIR=out-7.2 keeps another kernel next to it
-OUT=/work/${OUTDIR:-out}
+# WSL builds need a case-sensitive output for xt_RATEEST/xt_rateest modules.
+# MU300_OUT_DIR may point at a Linux-native bind mount instead of /work on NTFS.
+OUT=${MU300_OUT_DIR:-/work/${OUTDIR:-out}}
 # the kernel source, fetched once into the volume and checked against kernel.org's checksum list
 if [ ! -d /src/linux-$KV ]; then
     base=https://cdn.kernel.org/pub/linux/kernel/v${KV%%.*}.x
