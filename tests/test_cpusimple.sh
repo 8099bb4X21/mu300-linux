@@ -73,11 +73,12 @@ export FAKE_CPUFREQ=$T/cpufreq
 export FAKE_CPU_JSON=$T/etc/unisoc-modem/cpu.json
 
 rd() { cat "$T/cpufreq/$1/$2" 2>/dev/null; }
-apply() { printf '%s' "$1" | "$BIN" apply 2>/dev/null; }
+# NOTE: product stderr is intentionally NOT suppressed so CI shows real errors.
+apply() { printf '%s' "$1" | "$BIN" apply; }
 okof() { printf '%s' "$1" | jsonfilter -e '@.ok' 2>/dev/null; }
 
 # --- 1. get on a clean tree ----------------------------------------------------
-g=$("$BIN" get 2>/dev/null)
+g=$("$BIN" get)
 expect "get ok" "$(okof "$g")" "1"
 expect "get cpus" "$(printf '%s' "$g" | jsonfilter -e '@.cpus_effective')" "0-7"
 expect "get hotplug unsupported" "$(printf '%s' "$g" | jsonfilter -e '@.hotplug_supported')" "false"
@@ -115,8 +116,8 @@ expect "default-persist cpu.json gone" "$([ -f "$FAKE_CPU_JSON" ] && echo yes ||
 
 # --- 5. invalid inputs ------------------------------------------------------------
 expect "bad mode" "$(okof "$(apply '{"mode":"nope","persist":false}')" )" "0"
-expect "bad json" "$(okof "$(printf 'not json' | "$BIN" apply 2>/dev/null)")" "0"
-expect "empty" "$(okof "$(printf '' | "$BIN" apply 2>/dev/null)")" "0"
+expect "bad json" "$(okof "$(printf 'not json' | "$BIN" apply)")" "0"
+expect "empty" "$(okof "$(printf '' | "$BIN" apply)")" "0"
 
 # --- 6. hotplug requested but unsupported -> forced off, still ok -------------------
 r=$(apply '{"mode":"android-default","persist":false,"hotplug":true}')
@@ -127,12 +128,12 @@ expect "hotplug-unsupported cpuset" "$(cat "$T/cgroup/services/cpuset.cpus.effec
 apply '{"mode":"balanced","persist":true,"hotplug":false}' >/dev/null
 printf '0-7' > "$T/cgroup/services/cpuset.cpus"
 rm -f "$T/run-active"
-"$BIN" boot >/dev/null 2>&1
+"$BIN" boot >/dev/null
 expect "boot restores cpuset" "$(cat "$T/cgroup/services/cpuset.cpus.effective")" "0-3,7"
-expect "boot active" "$("$BIN" get 2>/dev/null | jsonfilter -e '@.active')" "balanced"
+expect "boot active" "$("$BIN" get | jsonfilter -e '@.active')" "balanced"
 
 # --- 8. forget ----------------------------------------------------------------------
-r=$("$BIN" forget 2>/dev/null)
+r=$("$BIN" forget)
 expect "forget ok" "$(okof "$r")" "1"
 expect "forget active" "$(printf '%s' "$r" | jsonfilter -e '@.active')" "openwrt-default"
 expect "forget cfg gone" "$([ -f "$MU300_CPUSIMPLE_CFG" ] && echo yes || echo no)" "no"
@@ -141,7 +142,7 @@ expect "forget cpu.json gone" "$([ -f "$FAKE_CPU_JSON" ] && echo yes || echo no)
 
 # --- 9. hotplug-capable kernel --------------------------------------------------------
 for c in 4 5 6 7; do mkdir -p "$T/cpu/cpu$c"; printf '1' > "$T/cpu/cpu$c/online"; done
-g=$("$BIN" get 2>/dev/null)
+g=$("$BIN" get)
 expect "hotplug detected" "$(printf '%s' "$g" | jsonfilter -e '@.hotplug_supported')" "true"
 apply '{"mode":"android-default","persist":false,"hotplug":true}' >/dev/null
 for c in 4 5 6 7; do expect "offline cpu$c" "$(cat "$T/cpu/cpu$c/online")" "0"; done
