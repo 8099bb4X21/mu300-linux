@@ -331,6 +331,14 @@ show_msisdn() {
     json_add_string msisdn "${OWN_MSISDN:-}"
     json_dump
 }
+show_deviceinfo() { # rendered device strings, exactly as appended to messages
+    load_config || { reply_error invalid_config; return; }
+    template_strings
+    json_init
+    json_add_string full "$(device_info)"
+    json_add_string sms "$(device_info_sms)"
+    json_dump
+}
 test_send() {
     ensure_base || exit 1
     if [ "${2:-}" != locked ]; then
@@ -420,6 +428,7 @@ case "${1:-}" in
     dump) dump_config ;;
     lists-set) lists_set ;;
     msisdn) show_msisdn ;;
+    deviceinfo) show_deviceinfo ;;
     test-run) test_send "$@" ;;
     test-dryrun) test_dryrun ;;
     test-start) start_test ;;

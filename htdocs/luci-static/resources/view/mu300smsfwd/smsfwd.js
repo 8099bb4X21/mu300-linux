@@ -31,6 +31,7 @@ var callTest = rpc.declare({ object: 'mu300smsfwd', method: 'test', expect: { ''
 var callListsGet = rpc.declare({ object: 'mu300smsfwd', method: 'lists_get', expect: { '': {} } });
 var callListsSet = rpc.declare({ object: 'mu300smsfwd', method: 'lists_set', params: [ 'payload' ], expect: { '': {} } });
 var callDump = rpc.declare({ object: 'mu300smsfwd', method: 'dump', expect: { '': {} } });
+var callDeviceInfo = rpc.declare({ object: 'mu300smsfwd', method: 'deviceinfo', expect: { '': {} } });
 var callTestDryrun = rpc.declare({ object: 'mu300smsfwd', method: 'test_dryrun', params: [ 'num', 'text' ], expect: { '': {} } });
 function result(code) { return M.translate(RESULTS[code] || '暂无投递'); }
 function lines(value) { return String(value || '').split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean); }
@@ -129,12 +130,18 @@ return view.extend({
    <div class="msf-field"><label for="msf-dingtalk_webhook">机器人 Webhook 地址</label><input id="msf-dingtalk_webhook" type="url" autocomplete="off" placeholder="https://oapi.dingtalk.com/robot/send?..."></div>
    <div class="msf-field"><label for="msf-dingtalk_secret">加签密钥 · 留空保留</label><input id="msf-dingtalk_secret" type="password" autocomplete="new-password"></div>
    <label class="msf-toggle"><input id="msf-clear_dingtalk_secret" type="checkbox">清除加签密钥</label>
+   <div class="mud-note">勾选后再点保存，会清除你保存的加签密钥。</div>
    <label class="msf-toggle"><input id="msf-dingtalk_forward_device_info" type="checkbox">附带设备信息</label>
+   <div class="mud-note">勾选后在正文末尾追加设备信息。当前设备信息如下：</div>
+   <div class="mud-note" id="msf-devinfo-dingtalk"></div>
   </div>
   <div class="msf-channel" data-method="wecom">
    <div class="msf-field"><label for="msf-wecom_key">群机器人 Key · 留空保留</label><input id="msf-wecom_key" type="password" autocomplete="new-password" placeholder="send?key= 后面的那串"></div>
    <label class="msf-toggle"><input id="msf-clear_wecom_key" type="checkbox">清除 Key</label>
+   <div class="mud-note">勾选后再点保存，会清除你保存的 Key。</div>
    <label class="msf-toggle"><input id="msf-wecom_forward_device_info" type="checkbox">附带设备信息</label>
+   <div class="mud-note">勾选后在正文末尾追加设备信息。当前设备信息如下：</div>
+   <div class="mud-note" id="msf-devinfo-wecom"></div>
    <div class="mud-note">只发文本消息（最长 2048 字节），服务端返回 errcode 0 才算成功；每分钟最多 20 条。</div>
   </div>
   <div class="msf-channel" data-method="smtp">
@@ -146,12 +153,17 @@ return view.extend({
    <div class="msf-field"><label for="msf-smtp_to">收件邮箱</label><input id="msf-smtp_to" type="email" autocomplete="off"></div>
    <div class="msf-field"><label for="msf-smtp_password">授权码 / 密码 · 留空保留</label><input id="msf-smtp_password" type="password" autocomplete="new-password"></div>
    <label class="msf-toggle"><input id="msf-clear_smtp_password" type="checkbox">清除邮件配置</label>
+   <div class="mud-note">勾选后再点保存，会清除你保存的邮件配置（含密码）。</div>
    <label class="msf-toggle"><input id="msf-smtp_forward_device_info" type="checkbox">附带设备信息</label>
+   <div class="mud-note">勾选后在正文末尾追加设备信息。当前设备信息如下：</div>
+   <div class="mud-note" id="msf-devinfo-smtp"></div>
    <div class="mud-note">使用邮箱提供的 SMTP 授权码；始终验证 TLS 证书。</div>
   </div>
   <div class="msf-channel" data-method="sms">
    <div class="msf-field"><label for="msf-sms_to_phone">短信接收号码 · 每行一个，最多 3 个</label><textarea id="msf-sms_to_phone" placeholder="+8613800000000"></textarea></div>
    <label class="msf-toggle"><input id="msf-sms_forward_device_info" type="checkbox">附带设备信息</label>
+   <div class="mud-note">勾选后在正文末尾追加设备信息（短信渠道只加短的一行）。当前如下：</div>
+   <div class="mud-note" id="msf-devinfo-sms"></div>
    <div class="mud-note">经本机 SIM 转发，可能产生短信费用；每条最多 70 个 UCS-2 单元，不限制每日转发条数。</div>
   </div>
  </section>
@@ -342,6 +354,12 @@ return view.extend({
 	wire: function() {
 		var self = this;
 		this.msisdn = this.data.msisdn || '';
+		L.resolveDefault(callDeviceInfo(), {}).then(function(d) {
+			if (!self.root.isConnected) return;
+			var full = (d && d.full) || '', sms = (d && d.sms) || '';
+			['dingtalk', 'wecom', 'smtp'].forEach(function(k) { var el = self.q('devinfo-' + k); if (el) el.textContent = full; });
+			var se = self.q('devinfo-sms'); if (se) se.textContent = sms;
+		});
 		this.q('webhook_method').onchange = function() { self.paintMethod(); };
 		this.q('preset').onchange = function() {
 			var p = preset(this.value); if (!p) return;

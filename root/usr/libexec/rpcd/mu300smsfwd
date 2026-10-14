@@ -25,6 +25,7 @@ do_list() {
 	"lists_get": { },
 	"lists_set": { "payload": "String" },
 	"dump": { },
+	"deviceinfo": { },
 	"test_dryrun": { "num": "String", "text": "String" },
 	"msisdn": { }
 }
@@ -53,6 +54,7 @@ call)
             printf '%s' "$payload" | "$FWD" lists-set
             ;;
         msisdn) "$FWD" msisdn ;;
+        deviceinfo) "$FWD" deviceinfo ;;
         *) printf '{"ok":0,"error":"no such method"}\n' ;;
     esac
     ;;
