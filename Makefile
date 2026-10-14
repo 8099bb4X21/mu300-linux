@@ -71,14 +71,15 @@ endef
 define Package/mu300-smsfwd/postrm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
-	if [ "$$1" = remove ]; then
-		/etc/init.d/mu300-smsfwd stop 2>/dev/null || true
-		/etc/init.d/mu300-smsfwd disable 2>/dev/null || true
-		[ -x /etc/init.d/unisoc-sms-forward ] && {
-			/etc/init.d/unisoc-sms-forward enable 2>/dev/null || true
-			/etc/init.d/unisoc-sms-forward start 2>/dev/null || true
-		}
-	fi
+	/etc/init.d/mu300-smsfwd stop 2>/dev/null || true
+	/etc/init.d/mu300-smsfwd disable 2>/dev/null || true
+	# apk-tools v3 does not call post-deinstall with the opkg-style "remove"
+	# argument, so restore the built-in service unconditionally. On an upgrade
+	# the new version's postinst disables it again right after.
+	[ -x /etc/init.d/unisoc-sms-forward ] && {
+		/etc/init.d/unisoc-sms-forward enable 2>/dev/null || true
+		/etc/init.d/unisoc-sms-forward start 2>/dev/null || true
+	}
 	rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null
 	/etc/init.d/rpcd restart 2>/dev/null || true
 }
