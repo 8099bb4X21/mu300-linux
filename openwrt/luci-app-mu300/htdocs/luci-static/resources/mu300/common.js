@@ -166,8 +166,8 @@ var DASH_I18N = {
 	'清除 SIM %s 的全部锁定？': ['Clear all locks for SIM %s?', 'SIM %s için tüm kilitler temizlensin mi?'],
 	'确认清除': ['Confirm clearing', 'Temizlemeyi onayla'],
 	'按当前查看 SIM 恢复自动模式和频段、解除小区锁定并开启 EN-DC；只删除当前卡的已保存锁定，保留两张卡的开机自动应用开关。': ['Restore automatic mode and bands, remove cell locks and enable EN-DC through the viewed SIM. Only its saved locks are deleted; both SIMs retain their apply-at-startup preferences.', 'Görüntülenen SIM üzerinden otomatik mod ve bantları geri yükle, hücre kilitlerini kaldır ve EN-DC’yi aç. Yalnızca bu SIM’in kayıtlı kilitleri silinir; her iki SIM’in açılışta uygulama tercihleri korunur.'],
-	'注意：部分模组的频段或小区锁定由双卡共享（F50 的 NR 频段已确认共享），清除也会影响另一张卡。另一张卡的保存配置不会删除，其开机回放可能再次改变共享设置。清除会短暂中断蜂窝连接；全部回读通过后才删除当前卡的保存项。': ['Note: some modems share band or cell locks between SIMs (NR bands are confirmed shared on F50), so clearing also affects the other SIM. Its saved settings remain and may change shared settings again at boot. Cellular service briefly disconnects; only the selected SIM’s saved locks are deleted after all readbacks pass.', 'Not: bazı modemlerde bant veya hücre kilitleri SIM’ler arasında ortaktır (F50’de NR bantlarının ortak olduğu doğrulandı); temizleme diğer SIM’i de etkiler. Diğer SIM’in kayıtlı ayarları korunur ve açılışta ortak ayarları yeniden değiştirebilir. Hücresel bağlantı kısa süre kesilir; yalnızca seçili SIM’in kayıtlı kilitleri tüm geri okumalar doğrulanınca silinir.'],
-	'恢复自动模式和频段、解除 LTE/NR 小区锁定并开启 EN-DC。双卡共享的模组设置也会影响另一张卡（F50 的 NR 频段共享）。只清除当前卡的保存项，保留另一张卡配置和开机自动应用开关；另一张卡的回放可能重新改变共享设置。蜂窝会短暂断开；全部回读通过才算成功。': ['Restore automatic mode and bands, remove LTE/NR cell locks and enable EN-DC. Shared modem settings also affect the other SIM (F50 shares NR bands). Delete only the selected SIM’s saved locks; keep the other SIM’s settings and startup preferences. Its replay may change shared settings again. Cellular service briefly disconnects; success requires all readbacks to pass.', 'Otomatik mod ve bantları geri yükle, LTE/NR hücre kilitlerini kaldır ve EN-DC’yi aç. Ortak modem ayarları diğer SIM’i de etkiler (F50’de NR bantları ortaktır). Yalnızca seçili SIM’in kayıtlı kilitlerini sil; diğer SIM’in ayarlarını ve açılış tercihlerini koru. Diğer SIM’in ayarları yeniden uygulanınca ortak ayarlar değişebilir. Hücresel bağlantı kısa süre kesilir; başarı için tüm geri okumalar doğrulanmalıdır.'],
+	'注意：部分模组的频段或小区锁定由双卡共享（F50 的 NR 频段已确认共享），清除也会影响另一张卡。另一张卡的保存配置不会删除，其开机回放可能再次改变共享设置。清除会短暂中断蜂窝连接；频段以指令确认成功为准，其他设置回读通过后才删除当前卡的保存项。': ['Note: some modems share band or cell locks between SIMs (NR bands are confirmed shared on F50), so clearing also affects the other SIM. Its saved settings remain and may change shared settings again at boot. Cellular service briefly disconnects; band commands require acknowledgement; the selected SIM’s saved locks are deleted after the other settings pass readback.', 'Not: bazı modemlerde bant veya hücre kilitleri SIM’ler arasında ortaktır (F50’de NR bantlarının ortak olduğu doğrulandı); temizleme diğer SIM’i de etkiler. Diğer SIM’in kayıtlı ayarları korunur ve açılışta ortak ayarları yeniden değiştirebilir. Hücresel bağlantı kısa süre kesilir; bant komutlarının onayı gerekir; yalnızca seçili SIM’in kayıtlı kilitleri diğer ayarların geri okumaları doğrulanınca silinir.'],
+	'恢复自动模式和频段、解除 LTE/NR 小区锁定并开启 EN-DC。双卡共享的模组设置也会影响另一张卡（F50 的 NR 频段共享）。只清除当前卡的保存项，保留另一张卡配置和开机自动应用开关；另一张卡的回放可能重新改变共享设置。蜂窝会短暂断开；频段不要求回读一致，其他设置仍需回读确认。': ['Restore automatic mode and bands, remove LTE/NR cell locks and enable EN-DC. Shared modem settings also affect the other SIM (F50 shares NR bands). Delete only the selected SIM’s saved locks; keep the other SIM’s settings and startup preferences. Its replay may change shared settings again. Cellular service briefly disconnects; band masks need not match readback; other settings still require confirmation.', 'Otomatik mod ve bantları geri yükle, LTE/NR hücre kilitlerini kaldır ve EN-DC’yi aç. Ortak modem ayarları diğer SIM’i de etkiler (F50’de NR bantları ortaktır). Yalnızca seçili SIM’in kayıtlı kilitlerini sil; diğer SIM’in ayarlarını ve açılış tercihlerini koru. Diğer SIM’in ayarları yeniden uygulanınca ortak ayarlar değişebilir. Hücresel bağlantı kısa süre kesilir; bant maskelerinin geri okumayla eşleşmesi gerekmez; diğer ayarlar yine doğrulanır.'],
 	'查看卡槽已改变，请重新确认操作': ['The viewed SIM slot changed; confirm the operation again', 'Görüntülenen SIM yuvası değişti; işlemi yeniden onaylayın'],
 	'当前 SIM 的全部锁定已清除，已核对并清理保存配置': ['All locks for the selected SIM were cleared, verified, and removed from saved settings', 'Seçili SIM’in tüm kilitleri temizlendi, doğrulandı ve kayıtlı ayarlardan kaldırıldı'],
 	'清除未完成，部分设置可能已生效；已保存锁定未删除，请刷新后重试': ['Clearing was incomplete; some settings may have changed. Saved locks were not deleted. Refresh and retry.', 'Temizleme tamamlanmadı; bazı ayarlar değişmiş olabilir. Kayıtlı kilitler silinmedi. Yenileyip tekrar deneyin.'],
@@ -230,6 +230,7 @@ var DASH_I18N = {
 	'所选频段无法用当前模组指令编码': ['Selected bands cannot be encoded by this modem command', 'Seçilen bantlar bu modem komutuyla kodlanamıyor'],
 	'无效的小区参数': ['Invalid cell parameters', 'Geçersiz hücre parametreleri'],
 	'无效的网络设置': ['Invalid network setting', 'Geçersiz ağ ayarı'],
+	'频段设置未确认，请重试': ['Band setting was not acknowledged; retry', 'Bant ayarı onaylanmadı; tekrar deneyin'],
 	'模组拒绝了设置': ['The modem rejected the setting', 'Modem ayarı reddetti'],
 	'设置保存失败': ['Could not save settings', 'Ayarlar kaydedilemedi'],
 	'无法读取当前 SIM 模式，未发送设置': ['Cannot read the current SIM mode; no settings sent', 'Mevcut SIM modu okunamıyor; ayar gönderilmedi'],
@@ -833,6 +834,7 @@ var DASH_I18N = {
 	'正在确认 EN-DC 状态': ['Confirming EN-DC status', 'EN-DC durumu doğrulanıyor'],
 	'正在确认开机自动应用': ['Confirming startup setting', 'Başlangıç ayarı doğrulanıyor'],
 	'正在直读调制解调器（最多几秒）': ['Reading modem directly (a few seconds at most)', 'Modem doğrudan okunuyor (en fazla birkaç saniye)'],
+	'频段设置已应用，实际频段以模组回读为准': ['Band setting applied; actual bands are shown by modem readback', 'Bant ayarı uygulandı; gerçek bantlar modem geri okumasında gösterilir'],
 	'已刷新': ['Refreshed', 'Yenilendi'],
 	'刷新失败': ['Refresh failed', 'Yenileme başarısız'],
 	'暂无驻网数据': ['No serving-network data', 'Bağlı olunan ağ verisi yok'],
@@ -1188,7 +1190,7 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-voice-switch.on .mud-voice-track:after{transform:translateX(14px)}
 @media(prefers-reduced-motion:reduce){.mud-voice-track,.mud-voice-track:after{transition:none}}
 
-.mud-btn.on{background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
+.mud-btn.on:not(.mud-voice-switch){background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
 .mud-btn.warn{border-color:color-mix(in oklab,var(--danger,#E25555) 55%,transparent);color:var(--danger,#E25555)}
 .mud-btn[disabled]{opacity:.4;pointer-events:none}
 .mud-ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:7px}

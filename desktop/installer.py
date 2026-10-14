@@ -708,16 +708,46 @@ def ssh_exec(c,command,timeout=1800):
     if rc:raise RuntimeError('Remote operation failed, exit '+str(rc))
     return b''.join(parts).decode(errors='replace')
 
+def ssh_read_exact(c,command,size):
+    # SSH transports binary data directly. Keep diagnostic stderr separate;
+    # minimal OpenWrt images need not provide od/hexdump or another encoder.
+    _,out,err=c.exec_command(command,timeout=30)
+    data=out.read();detail=err.read().decode(errors='replace').strip()
+    rc=out.channel.recv_exit_status()
+    if rc:raise RuntimeError('Cannot read boot control / 无法读取启动控制信息: '+(detail or 'exit '+str(rc)))
+    if len(data)!=size:
+        raise ValueError(f'Incomplete boot control / 启动控制信息读取不完整: expected {size} bytes, got {len(data)}')
+    return data
+
+
+def ssh_upload(c,path,destination):
+    # Dropbear installations often have no SFTP subsystem. Use the same SSH
+    # exec transport as commands; the caller verifies the staged file hash.
+    channel=c.get_transport().open_session()
+    try:
+        channel.settimeout(120)
+        channel.exec_command('umask 077; cat > '+shlex.quote(destination))
+        size=path.stat().st_size;sent=0;last=0
+        with path.open('rb') as stream:
+            while data:=stream.read(262144):
+                channel.sendall(data);sent+=len(data)
+                if time.monotonic()-last>=1:
+                    print(f'\r  {path.name}: {sent>>20}/{size>>20} MiB',end='',flush=True)
+                    last=time.monotonic()
+        channel.shutdown_write()
+        detail=channel.makefile_stderr().read().decode(errors='replace').strip()
+        rc=channel.recv_exit_status()
+        print()
+        if rc:raise RuntimeError('SSH upload failed / SSH 上传失败: '+(detail or 'exit '+str(rc)))
+    finally:channel.close()
+
+
 def update(args,root):
     import paramiko
-    c=paramiko.SSHClient();known=Path.home()/'.mu300-desktop-known-hosts'
-    if known.exists():c.load_host_keys(str(known))
-    class NewKey(paramiko.MissingHostKeyPolicy):
-        def missing_host_key(self,client,hostname,key):
-            print('SSH host key:',hostname,key.get_name(),hashlib.sha256(key.asbytes()).hexdigest())
-            confirm('Trust this device key / 信任此设备密钥？')
-            client.get_host_keys().add(hostname,key.get_name(),key);client.save_host_keys(str(known))
-    c.set_missing_host_key_policy(NewKey())
+    c=paramiko.SSHClient()
+    # Several physical devices share the USB management address. Accept the
+    # key for this connection without loading or saving a persistent IP pin.
+    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     host=args.host or input('Device IP / 设备 IP [192.168.77.1]: ').strip() or '192.168.77.1'
     c.connect(host,username='root',password=os.environ.get('MU300_SSH_PASSWORD') or getpass.getpass('SSH root password: '),timeout=15,look_for_keys=False,allow_agent=False)
     try:
@@ -735,28 +765,27 @@ fi''').strip().splitlines()
         family=json.loads((root/'desktop/manifest.json').read_text())['kernel']
         running=ssh_exec(c,'uname -r').strip()
         if not running.startswith(family+'.'):raise ValueError('Kernel family mismatch: running '+running+', package '+family)
-        livehex=ssh_exec(c,f'dd if={info[2]} bs=1 skip=2048 count=32 2>/dev/null | od -An -tx1 -v | tr -d " \\n"').strip()
-        live=bytes.fromhex(livehex);slot='b' if info[1]=='a' else 'a';m=module(root)
+        live=ssh_read_exact(c,f'dd if={info[2]} bs=1 skip=2048 count=32',32)
+        slot='b' if info[1]=='a' else 'a';m=module(root)
         newboot=boot(root,m,mode,live,slot);bc=m.boot_control(live,slot)
         confirm('Update OpenWrt while preserving settings and disk size; then reboot / 保留配置及容量更新，完成后重启。')
         # Stage on the Linux filesystem: sufficient space for a new root + old
         # root and upload, without consuming all tmpfs/RAM on a 256 MiB unit.
         p='/mnt/mu300-disk/.mu300-desktop-'+secrets.token_hex(6)
         ssh_exec(c,'mkdir -m 700 '+p)
-        sftp=c.open_sftp()
         def send(local,name):
-            sftp.put(str(local),p+'/'+name)
+            ssh_upload(c,local,p+'/'+name)
             got=ssh_exec(c,'sha256sum '+p+'/'+name).split()[0]
             if got!=digest(local):raise ValueError('SSH upload checksum: '+name)
         with payload_rootfs(root) as archive:
             send(archive,'mu300-openwrt-rootfs.tar.gz')
         for name in ('local-update.sh','mu300-update-library.sh'):send(root/'desktop'/name,name)
+        send(payload_file(root,'busybox'),'busybox')
         for name in ('rootfs-critical.sha256','rootfs.requirements'):send(payload_file(root,name),name)
         with tempfile.TemporaryDirectory() as t:
             for name,data in (('boot-desktop.img',newboot),('misc-linux.bin',bc)):
                 f=Path(t)/name;f.write_bytes(data);send(f,name)
-        sftp.close()
-        ssh_exec(c,'sh '+p+'/local-update.sh '+p)
+        ssh_exec(c,'chmod 700 '+p+'/busybox && sh '+p+'/local-update.sh '+p)
     finally:c.close()
     return Outcome('success','Update verified; device is rebooting / 更新校验完成，设备正在重启。',
                    'Wait for OpenWrt to start / 等待 OpenWrt 启动。')

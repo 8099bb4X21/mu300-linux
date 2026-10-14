@@ -201,6 +201,7 @@ grep -q "device_no_dfs(config);" $R/usr/share/ucode/wifi/hostapd.uc || { echo "w
 if [ -d /in/luci-plugin ]; then
     cp -a /in/luci-plugin/root/. $R/
     cp -a /in/luci-plugin/htdocs/. $R/www/
+    ucode $R/usr/libexec/unisoc-modem/disable-channel-analysis $R
     chmod 0755 $R/etc/init.d/unisoc-cpu
     chmod 0600 $R/etc/config/unisoc_apn
     chmod 0755 $R/etc/init.d/unisoc-modem-ui $R/etc/init.d/unisoc-sms-forward $R/etc/init.d/unisoc-traffic $R/etc/hotplug.d/net/90-unisoc-usb-host $R/etc/hotplug.d/iface/90-unisoc-usb-host $R/usr/libexec/rpcd/mu300dash $R/usr/libexec/unisoc-modem/*

@@ -47,6 +47,19 @@ write_setting() {
     fi
 }
 
+# Band masks may legitimately read back differently. Their own final OK is
+# mandatory because equality readback is deliberately not an acceptance test.
+write_band_setting() {
+    local reply status=0
+    reply=$(lock_at "$1" "${2:-6}") || status=$?
+    reply=$(printf '%s\n' "$reply" | tr -d '\r')
+    if printf '%s\n' "$reply" | grep -Eq '^(ERROR|\+CME ERROR|\+CMS ERROR)(:|$)'; then
+        fail_apply '模组拒绝了设置'; return 1
+    fi
+    [ "$status" = 0 ] && [ "$(printf '%s\n' "$reply" | sed '/^[[:space:]]*$/d' | tail -n1)" = OK ] ||
+        { fail_apply '频段设置未确认，请重试'; return 1; }
+}
+
 restart_write() {
     if [ "${INTERACTIVE_APPLY:-0}" = 1 ]; then
         write_setting "$1" "$2" || restart_failed=1
@@ -155,17 +168,10 @@ verify_apply() {
             [ "$(printf '%s' "$raw" | cut -d, -f1-3)" = "$m0,$m1,$prim" ] &&
                 [ "$(read_field 'AT+SP5GRAN?' SP5GRAN)" = "$gran" ] ;;
         endc) endc_matches "$val" "$(read_field 'AT+SPENDC?' ENDC)" ;;
-        lte)
-            raw=$(read_field 'AT+SPLBAND=0' SPLBAND)
-            printf '%s\n' "$raw" | grep -Eq '^[0-9]+(,[0-9]+){4}$' || return 1
-            got=$(canonical_bands "$(lte_bands "$raw")")
-            [ "$got" = "$val" ] || { [ -z "$val" ] && [ "$got" = "$(canonical_bands "$LTE_SUP")" ]; } ;;
-        nr)
-            raw=$(read_field 'AT+SPLBAND=3' SPLBAND)
-            printf '%s\n' "$raw" | grep -Eq '^[0-9]+,0,[0-9]+(,[0-9]+)?$' || return 1
-            nr3=$(printf '%s\n' "$raw" | awk -F, '{print $1","$3","(NF>=4?$4:0)}')
-            got=$(canonical_bands "$(nr_bands "$nr3")")
-            [ "$got" = "$val" ] || { [ -z "$val" ] && [ "$got" = "$(canonical_bands "$(nr_sup)")" ]; } ;;
+        lte|nr)
+            # Readback remains available to the UI, but may be a normalized
+            # subset and is not compared with the requested band list.
+            return 0 ;;
         cell)
             got=$(read_cells lte) || return 1
             [ "$got" = "$want_lte" ] || return 1
@@ -190,7 +196,7 @@ finish_reset_state() {
 
 verify_reset() {
     local kind val
-    for kind in mode endc lte nr cell; do
+    for kind in mode endc cell; do
         case "$kind" in mode) val=auto ;; endc) val=on ;; *) val= ;; esac
         verify_apply || return 1
     done
@@ -200,8 +206,8 @@ reset_modem_settings() {
     write_setting 'AT+SP5GRAN=1' &&
     write_setting "AT+SPTESTMODE=134,$m1,$prim" &&
     write_setting 'AT+SPENDC=1' &&
-    write_setting 'AT+SPLBAND=1,0,0,0,0,0' &&
-    write_setting 'AT+SPLBAND=2,0,0,0,0' &&
+    write_band_setting 'AT+SPLBAND=1,0,0,0,0,0' &&
+    write_band_setting 'AT+SPLBAND=2,0,0,0,0' &&
     write_setting 'AT+SPFORCEFRQ=12,4' &&
     write_setting 'AT+SPFORCEFRQ=16,4'
 }
@@ -288,10 +294,10 @@ do_apply() {
             write_setting "AT+SPENDC=$v" || return 1 ;;
         lte)
             val=$(canonical_bands "$val")
-            write_setting "AT+SPLBAND=1,$(lte_masks "$val")" || return 1 ;;
+            write_band_setting "AT+SPLBAND=1,$(lte_masks "$val")" || return 1 ;;
         nr)
             val=$(canonical_bands "$val")
-            write_setting "AT+SPLBAND=2,$(nr_masks "$val" | awk -F, '{print $1",0,"$2","$3}')" || return 1 ;;
+            write_band_setting "AT+SPLBAND=2,$(nr_masks "$val" | awk -F, '{print $1",0,"$2","$3}')" || return 1 ;;
         cell)
             want_lte=$(read_cells lte) && want_nr=$(read_cells nr) ||
                 { fail_apply '无法读取当前小区锁定，未发送设置'; return 1; }
@@ -337,7 +343,7 @@ do_apply() {
     save_state "$kind" "$val" || { fail_apply '设置保存失败'; return 1; }
     say "verified apply $kind=$val"
     # One refresh, not the previous ten rounds that never terminated for auto.
-    # The task outcome is based on the targeted fresh verification above.
+    # Band outcome is based on its command acknowledgement; other fields verify.
     "$0" get fresh >/dev/null 2>&1
     return 0
 }

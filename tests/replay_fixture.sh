@@ -52,7 +52,7 @@ before=$(wc -l < "$REPLAY_FIXTURE/commands")
 "$LIB/boot-replay"
 "$LIB/lock" replay late
 [ "$(wc -l < "$REPLAY_FIXTURE/commands")" = "$before" ]
-for fault in reject ignore silent restart drift; do
+for fault in reject ignore silent restart; do
     reset_modem
     if REPLAY_TEST_FAULT=$fault "$LIB/lock" replay late; then
         echo "unexpected replay success: $fault" >&2; exit 1
@@ -60,6 +60,12 @@ for fault in reject ignore silent restart drift; do
     [ ! -e "$UNISOC_REPLAY_MARKER" ]
     case $fault in reject|ignore|silent) ! grep -q SFUN "$REPLAY_FIXTURE/commands" ;; esac
 done
+# A modem may change band masks during activation without rejecting them.
+reset_modem
+REPLAY_TEST_FAULT=drift "$LIB/lock" replay late
+[ -e "$UNISOC_REPLAY_MARKER" ]
+[ "$(cat "$REPLAY_FIXTURE/modem/lte")" = '0,0,0,0,0' ]
+
 # Empty cell unlock by itself must trigger the generic fallback.
 rm "$REPLAY_FIXTURE/state/mode" "$REPLAY_FIXTURE/state/endc" "$REPLAY_FIXTURE/state/lte" "$REPLAY_FIXTURE/state/nr"
 printf '' > "$REPLAY_FIXTURE/state/cell"

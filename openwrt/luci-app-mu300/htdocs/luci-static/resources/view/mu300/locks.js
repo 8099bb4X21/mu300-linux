@@ -110,7 +110,7 @@ return view.extend({
   <div class="mud-ctl" style="margin-top:10px;max-width:400px">
     <button class="mud-btn warn" id="mud-lock-reset">清除当前 SIM 全部锁定</button>
   </div>
-  <div class="mud-note">注意：部分模组的频段或小区锁定由双卡共享（F50 的 NR 频段已确认共享），清除也会影响另一张卡。另一张卡的保存配置不会删除，其开机回放可能再次改变共享设置。清除会短暂中断蜂窝连接；全部回读通过后才删除当前卡的保存项。</div>
+  <div class="mud-note">注意：部分模组的频段或小区锁定由双卡共享（F50 的 NR 频段已确认共享），清除也会影响另一张卡。另一张卡的保存配置不会删除，其开机回放可能再次改变共享设置。清除会短暂中断蜂窝连接；频段以指令确认成功为准，其他设置回读通过后才删除当前卡的保存项。</div>
 </div>`;
 		M.localize(root);
 		this.wire(root);
@@ -261,7 +261,7 @@ return view.extend({
 			apply('reset', 'auto', '清除当前 SIM 全部锁定', {
 				btn: this, okText: '确认清除',
 				title: M.translate('清除 SIM %s 的全部锁定？').replace('%s', Number(M.selectedSlot()) + 1),
-				message: '恢复自动模式和频段、解除 LTE/NR 小区锁定并开启 EN-DC。双卡共享的模组设置也会影响另一张卡（F50 的 NR 频段共享）。只清除当前卡的保存项，保留另一张卡配置和开机自动应用开关；另一张卡的回放可能重新改变共享设置。蜂窝会短暂断开；全部回读通过才算成功。'
+				message: '恢复自动模式和频段、解除 LTE/NR 小区锁定并开启 EN-DC。双卡共享的模组设置也会影响另一张卡（F50 的 NR 频段共享）。只清除当前卡的保存项，保留另一张卡配置和开机自动应用开关；另一张卡的回放可能重新改变共享设置。蜂窝会短暂断开；频段不要求回读一致，其他设置仍需回读确认。'
 			});
 		};
 
@@ -438,7 +438,8 @@ return view.extend({
 		}).then(function() {
 			if (self._disposed) return;
 			self.note(operation.kind === 'auto_apply' ? '开机自动应用设置已保存' :
-				operation.kind === 'reset' ? '当前 SIM 的全部锁定已清除，已核对并清理保存配置' : '已应用并核对模组状态', 'success');
+				operation.kind === 'reset' ? '当前 SIM 的全部锁定已清除，已核对并清理保存配置' :
+				(operation.kind === 'lte' || operation.kind === 'nr') ? '频段设置已应用，实际频段以模组回读为准' : '已应用并核对模组状态', 'success');
 			return self.refresh();
 		}).catch(function(error) {
 			if (self._disposed) return;
