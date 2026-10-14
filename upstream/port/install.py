@@ -137,6 +137,9 @@ if 'MU300: CD GPIO deferred' not in t:
 # which gives data CRC errors on HS400ES writes while reads work)
 t = t.replace('#define  SDHCI_SPRD_DLL_PHASE_INTERNAL\t0x3', '#define  SDHCI_SPRD_DLL_PHASE_INTERNAL\t0x2 /* MU300 r11p3 */')
 open(sp, 'w').write(t)
+# Shared durability policy; migrate cached keep-awake trees back to runtime PM.
+from emmc import apply as apply_emmc_policy
+apply_emmc_policy(tree)
 # thermal: UMS9620 on-die sensors (vendor sprd_thermal_r5p0), calibration from eFuse
 append_once('drivers/thermal/Makefile', 'sprd_thermal_r5p0.o', 'obj-$(CONFIG_SPRD_THERMAL_R5P0) += sprd_thermal_r5p0.o\n')
 append_once('drivers/thermal/Kconfig', 'SPRD_THERMAL_R5P0', '''
@@ -222,6 +225,8 @@ print('port installed')
 # LEDs of the ZTE U30 Air: its white ones on PMIC LDOs (leds-zte-ldo.c), and its red on the PMIC's keypad backlight
 # sink (leds-sc27xx-kpled.c)
 LED_DRIVERS = (
+    ('LEDS_AW9523B', 'leds-aw9523b', 'AW9523B LED groups (ZTE V50)',
+     'LEDS_CLASS && I2C && OF', 'The V50/MU3351 RGB controller with its original Android DT binding.'),
     ('LEDS_ZTE_LDO', 'leds-zte-ldo', 'LEDs on PMIC LDOs (ZTE U30 Air)', 'LEDS_CLASS && REGULATOR && OF',
      "The ZTE U30 Air's white LEDs, powered by three PMIC LDOs."),
     ('LEDS_SC27XX_KPLED', 'leds-sc27xx-kpled', 'Spreadtrum/Unisoc PMIC keypad backlight',

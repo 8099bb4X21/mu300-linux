@@ -131,6 +131,10 @@ return view.extend({
   </div>
 </div>
 
+<div class="mud-card mud-boot-notice" id="mud-boot-notice" hidden style="padding:1rem;margin-bottom:1rem;gap:.75rem;align-items:center;flex-wrap:wrap">
+  <div style="flex:1;min-width:12rem"><b>当前为临时启动 OpenWrt</b><div>是否将 OpenWrt 设为默认启动？不会立即重启或断网。</div></div>
+  <button class="mud-btn" id="mud-btn-default">设为默认启动</button>
+</div>
 <div class="mud-card mud-body">
 
 <div class="mud-sec">
@@ -319,6 +323,11 @@ return view.extend({
 		q('btn-reboot').onclick = function() {
 			return confirmAction(this, '重启整个设备', '所有连接会断开。',
 				{ danger: true }, 'reboot', null);
+		};
+		q('btn-default').onclick = function() {
+			return confirmAction(this, '设为默认启动',
+				'以后开机默认进入 OpenWrt；启动失败仍保留 Android 回退。现在不会重启。',
+				{ okText: '确定' }, 'os', 'linux-default');
 		};
 		q('btn-android').onclick = function() {
 			return confirmAction(this, '切换到 Android 系统',
@@ -601,6 +610,15 @@ return view.extend({
 		M.set('fwos', i.fw || '--');
 		M.set('modem', (i.modem && i.modem.alive ? '在线' : '无应答') + (i.modem && i.modem.atd ? '' : ' · AT 适配器不可用'));
 		var androidBtn = M.v('btn-android');
+		var boot = i.boot || {}, notice = M.v('boot-notice'), setDefault = M.v('btn-default');
+		if (notice) {
+			notice.hidden = boot.temporary !== true;
+			notice.style.display = notice.hidden ? 'none' : 'flex';
+		}
+		if (setDefault) {
+			setDefault.disabled = !boot.can_set_default || !!this._quickPending;
+			setDefault.title = boot.can_set_default ? '' : M.translate('当前启动镜像不支持设置默认启动');
+		}
 		if (androidBtn) androidBtn.style.display = i.capabilities && i.capabilities.dualboot ? '' : 'none';
 
 		var b;

@@ -19,7 +19,7 @@ p=Path(os.environ['STUBLOG']);f=p/'radio.json';s=json.loads(f.read_text());cmd=s
 with (p/'commands').open('a') as log:log.write(cmd+'\\n')
 slot=int(re.search(r'SPACTCARD=(\\d)',cmd)[1])
 if cmd.endswith('+CFUN?'):print('+CFUN: '+str(s['cfun'][slot]))
-elif cmd.endswith('+CPIN?'):print('+CPIN: READY')
+elif cmd.endswith('+CPIN?'):print('+CPIN: READY' if slot in s.get('present',[0,1]) else '+CME ERROR: 10')
 elif cmd.endswith('+SPTESTMODE?'):print('+SPTESTMODE: 134,128,1,20,3,1')
 elif cmd.endswith('+SPSWDATA?'):print('+SPSWDATA: '+str(s['data']))
 elif cmd.endswith('+SPSWDATA'):s['data']=slot
@@ -64,3 +64,28 @@ f.write_text(json.dumps(s));print('OK')
             self.assertNotEqual(r.returncode,0)
             self.assertEqual((self.tmp/'commands').read_text(),'')
             ready.write_text(str(os.getpid()))
+
+    def test_empty_slot_does_not_block_the_inserted_card(self):
+        for shell in self.each_shell():
+            self.reset([0,0])
+            (self.tmp/'radio.json').write_text(json.dumps(dict(cfun=[0,0],data=0,present=[1])))
+            r=self.script(shell,SCRIPT,**self.extra)
+            self.assertEqual(r.returncode,0,r.stderr)
+            self.assertEqual(json.loads((self.tmp/'radio.json').read_text())['cfun'],[0,1])
+            writes=[s for s in (self.tmp/'commands').read_text().splitlines() if not s.endswith('?')]
+            self.assertEqual(writes,['AT+SPACTCARD=1;+SFUN=2','AT+SPACTCARD=1;+SPTESTMODEM=134,128',
+                                     'AT+SPACTCARD=1;+SPSWDATA','AT+SPACTCARD=1;+SFUN=4'])
+
+    def test_only_sim0_and_already_active_sim1(self):
+        for shell in self.each_shell():
+            self.reset([0,0])
+            (self.tmp/'radio.json').write_text(json.dumps(dict(cfun=[0,0],data=0,present=[0])))
+            r=self.script(shell,SCRIPT,**dict(self.extra,MU300_SIM_SLOT='0'))
+            self.assertEqual(r.returncode,0,r.stderr)
+            self.assertEqual(json.loads((self.tmp/'radio.json').read_text())['cfun'],[1,0])
+            self.assertNotIn('AT+SPACTCARD=1;+SFUN',(self.tmp/'commands').read_text())
+            (self.tmp/'radio.json').write_text(json.dumps(dict(cfun=[0,1],data=1,present=[1])))
+            (self.tmp/'commands').write_text('')
+            r=self.script(shell,SCRIPT,**self.extra)
+            self.assertEqual(r.returncode,0,r.stderr)
+            self.assertNotIn('SFUN=',(self.tmp/'commands').read_text())

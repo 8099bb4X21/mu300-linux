@@ -6,6 +6,7 @@ from helpers import TOP, ShellTest
 
 F50 = '324950664950           device usb:1 product:MU300 model:F50 device:MU300 transport_id:1'
 U30 = '323960377386           device usb:2 product:U30Air model:U30_Air device:U30Air transport_id:2'
+V50 = 'v50-test              device usb:4 product:MU3351 model:V50 device:MU3351 transport_id:5'
 TABLET = 'd16d93c5               device usb:3 product:nabu_global model:21051182G device:nabu transport_id:3'
 OFFLINE = '192.168.31.1:55555     offline product:MU5358 model:MU5358 device:MU5358 transport_id:4'
 
@@ -23,7 +24,7 @@ class SelectDevice(ShellTest):
 
     def test_one_device_that_is_the_target(self):
         for shell in self.each_shell():
-            for dev, serial in ((F50, '324950664950'), (U30, '323960377386')):
+            for dev, serial in ((F50, '324950664950'), (U30, '323960377386'), (V50, 'v50-test')):
                 out = self.run_select(shell, [dev])
                 self.assertNotIn('ASKED', out)
                 self.assertIn(f'serial={serial}', out)
@@ -56,6 +57,32 @@ class SelectDevice(ShellTest):
             out = self.run_select(shell, [TABLET], mode='quiet')
             self.assertNotIn('ASKED', out)
             self.assertIn('rc=1 serial=none', out)
+            out = self.run_select(shell, [TABLET, V50], mode='quiet')
+            self.assertNotIn('ASKED', out)
+            self.assertIn('rc=0 serial=v50-test', out)
+
+    def test_model_prefix_is_not_a_supported_target(self):
+        for shell in self.each_shell():
+            out=self.run_select(shell,[V50.replace('model:V50','model:V500').replace('MU3351','MU33510')],mode='quiet')
+            self.assertIn('rc=1 serial=none',out)
+
+
+class AndroidProfile(ShellTest):
+    def test_f50_v50_and_u30air_match_the_desktop_installer(self):
+        import runpy
+        desktop=runpy.run_path(str(TOP/'desktop/installer.py'))
+        cases=[('F50','MU300','ums9620','f50'),('V50','MU3351','ums9620','v50'),
+               ('V50','MU3351','other',None),('V50','MU300','ums9620',None),
+               ('F50','MU3351','ums9620',None),('U30_Air','U30Air','ums9620','u30air')]
+        for model,device,platform,want in cases:
+            if want is None:
+                with self.assertRaises(ValueError):desktop['android_profile'](model+'\n'+device,platform)
+            else:self.assertEqual(desktop['android_profile'](model+'\n'+device,platform),want)
+            for shell in self.each_shell():
+                result=self.sh(shell,f'. "{TOP}/tools/android-profile.sh"; mu300_android_profile "$MODEL" "$DEVICE" "$PLATFORM"',
+                               MODEL=model,DEVICE=device,PLATFORM=platform)
+                if want is None:self.assertEqual(result.returncode,2,result.stderr)
+                else:self.assertEqual((result.returncode,result.stdout.strip()),(0,want),result.stderr)
 
 
 if __name__ == '__main__':

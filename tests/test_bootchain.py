@@ -105,6 +105,19 @@ class Fixture(ShellTest):
 
 
 class Check(Fixture):
+    def test_v50_platform_guard_and_read_only_plan(self):
+        for shell in self.each_shell():
+            self.device(model='V50',product='MU3351',differ=('teecfg',))
+            with self.props.open('a') as f:f.write('ro.board.platform=ums9620\n')
+            before=self.snapshot()
+            result=self.run_bc(shell,'check')
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertIn('BOOTCHAIN-PLAN a b teecfg',result.stdout)
+            self.assertEqual(self.snapshot(),before)
+            self.props.write_text(self.props.read_text().replace('ums9620','ums9230'))
+            self.assertNotEqual(self.run_bc(shell,'check').returncode,0)
+            self.assertEqual(self.snapshot(),before)
+
     def test_identical(self):
         for shell in self.each_shell():
             before = self.snapshot()

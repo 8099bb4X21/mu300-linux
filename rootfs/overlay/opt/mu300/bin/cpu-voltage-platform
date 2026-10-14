@@ -8,7 +8,6 @@ ko=/lib/modules/$(uname -r)/sprd-cpufreq-v2-driver.ko
 helper=/usr/libexec/unisoc-modem/cpu-voltage
 supported() {
     tr '\000' '\n' </sys/firmware/devicetree/base/compatible | grep -qx 'sprd,ums9620' || return 1
-    expected=ff4782690fd805ff54fe34853ef8ee5c7e51c3259e20077c55373b50a4b259c2
     for slot in a b; do
         part=/dev/disk/by-partlabel/sml_$slot
         [ -b "$part" ] || part=/dev/block/by-name/sml_$slot
@@ -25,7 +24,14 @@ supported() {
         real=$(readlink -f "$part") || return 1
         [ "$(cat "/sys/class/block/${real##*/}/size")" = 2048 ] || return 1
         hash=$(sha256sum "$part") || return 1
-        [ "${hash%% *}" = "$expected" ] || return 1
+        # V50 has the same verified executable and DVFS tables as F50; only
+        # 512 bytes in the authentication trailer differ. Keep an exact hash
+        # allowlist, never infer voltage support from the SoC name alone.
+        case ${hash%% *} in
+            ff4782690fd805ff54fe34853ef8ee5c7e51c3259e20077c55373b50a4b259c2|\
+            5b3183f17af9b416e71dea61e578c61824e4e1df43737a1179032f4b20466b2b) ;;
+            *) return 1 ;;
+        esac
     done
 }
 case ${1:-load} in

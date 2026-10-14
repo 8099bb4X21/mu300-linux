@@ -30,6 +30,8 @@ wait_and_exec() {
 }
 
 start_service() {
+	# Do not migrate NR3 ownership after daemons have opened the SIPC ttys.
+	[ ! -x /opt/mu300/bin/mu300-platform-config ] || /opt/mu300/bin/mu300-platform-config
 	# Optional plugin handshake: reserve nr1's first-command window for the
 	# platform radio-on path. The generic worker waits for this marker to clear.
 	[ ! -x /usr/libexec/unisoc-modem/lock ] || : > /run/unisoc-modem-early-hook-pending

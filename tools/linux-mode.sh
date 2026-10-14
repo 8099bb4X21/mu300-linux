@@ -55,7 +55,7 @@ select_device() {  # select_device [quiet]: quiet never asks, it only picks what
     [ -n "${ANDROID_SERIAL:-}" ] && return 0
     _sd_all=$(adb devices -l 2>/dev/null | awk 'NR > 1 && $2 == "device"')
     [ -n "$_sd_all" ] || return 0
-    _sd_f50=$(printf '%s\n' "$_sd_all" | grep -E 'model:F50|product:MU300|device:MU300|device:U30Air' | awk '{print $1}')
+    _sd_f50=$(printf '%s\n' "$_sd_all" | grep -E '(model:F50|product:MU300|device:MU300|device:U30Air|model:V50|product:MU3351|device:MU3351)([[:space:]]|$)' | awk '{print $1}')
     _sd_one=
     [ -n "$_sd_f50" ] && [ "$(printf '%s\n' "$_sd_f50" | wc -l | tr -d ' ')" = 1 ] && _sd_one=$_sd_f50
     # the only adb device, and an F50/U30 Air: nothing to ask
@@ -69,7 +69,7 @@ select_device() {  # select_device [quiet]: quiet never asks, it only picks what
     fi
     # Otherwise always ask: a phone or tablet next to the device is what the installer must never write to, and
     # picking one by itself is how it got close (the F50 was in Linux, a tablet was the only one in Android)
-    echo "  $(t 'which adb device is the F50 or U30 Air?')"
+    echo "  $(t 'which adb device is the F50, V50 or U30 Air?')"
     printf '%s\n' "$_sd_all" | awk '{ m = ""; for (i = 3; i <= NF; i++) if ($i ~ /^model:/) m = substr($i, 7); printf "    %d) %s %s\n", NR, $1, m }'
     _sd_def=1
     [ -n "$_sd_one" ] && _sd_def=$(printf '%s\n' "$_sd_all" | awk -v s="$_sd_one" '$1 == s {print NR}')
@@ -81,7 +81,7 @@ select_device() {  # select_device [quiet]: quiet never asks, it only picks what
 
 # call before anything else that needs adb
 # is one of the adb devices an F50/U30 Air?
-target_attached() { adb devices -l 2>/dev/null | awk 'NR > 1 && $2 == "device"' | grep -q -E 'model:F50|product:MU300|device:MU300|device:U30Air'; }
+target_attached() { adb devices -l 2>/dev/null | awk 'NR > 1 && $2 == "device"' | grep -q -E '(model:F50|product:MU300|device:MU300|device:U30Air|model:V50|product:MU3351|device:MU3351)([[:space:]]|$)'; }
 
 require_android() {
     # The device in Linux, and only a phone or tablet in Android: that is not the one to install to - offer to

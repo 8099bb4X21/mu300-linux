@@ -5,13 +5,14 @@ import shutil
 import time
 import unittest
 
-from helpers import BIN, ShellTest
+from helpers import BIN, TOP, ShellTest
 
 
 class Device(ShellTest):
     def root(self, device=None, dt_u30=False):
         r = self.tmp / 'root'
         (r / 'run' / 'mu300').mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(r / 'proc/device-tree', ignore_errors=True)
         if device is not None:
             (r / 'run' / 'mu300' / 'device').write_text(device + '\n')
         if dt_u30:
@@ -20,7 +21,7 @@ class Device(ShellTest):
 
     def test_mu300_device(self):
         cases = [(None, False, 'f50'), (None, True, 'u30air'), ('u30air', False, 'u30air'),
-                 ('f50', True, 'f50')]  # what init wrote wins over the device tree
+                 ('f50', True, 'u30air')]  # hardware wins over a stale boot label
         for device, dt, want in cases:
             r = self.root(device, dt)
             for shell in self.each_shell():
@@ -29,11 +30,44 @@ class Device(ShellTest):
             (r / 'run' / 'mu300' / 'device').unlink(missing_ok=True)
 
     def test_lan_ip(self):
-        for device, want in (('f50', '192.168.77.1'), ('u30air', '192.168.78.1'), ('', '192.168.77.1')):
+        for device, want in (('f50', '192.168.77.1'), ('v50', '192.168.77.1'), ('u30air', '192.168.78.1'), ('', '192.168.77.1')):
             r = self.root(device)
             for shell in self.each_shell():
                 out = self.script(shell, BIN / 'mu300-lan-ip', MU300_SYSROOT=r, MU300_BIN=BIN).stdout.strip()
                 self.assertEqual(out, want, device)
+
+    def test_live_tree_overrides_labels_in_both_directions(self):
+        for tree in ('soc/soc:ap-ahb/i2c@2270000/aw9523b_led@5b',
+                     'soc/ap-ahb/i2c@2270000/aw9523b_led@5b', ''):
+            r=self.root('v50' if not tree else 'f50')
+            (r/'proc/device-tree'/tree).mkdir(parents=True)
+            for shell in self.each_shell():
+                self.assertEqual(self.script(shell,BIN/'mu300-device',MU300_SYSROOT=r).stdout.strip(),
+                                 'v50' if tree else 'f50')
+
+    def test_unknown_runtime_label_never_becomes_a_board(self):
+        r=self.root('other-board')
+        for shell in self.each_shell():
+            self.assertEqual(self.script(shell,BIN/'mu300-device',MU300_SYSROOT=r).stdout.strip(),'f50')
+
+    def test_initramfs_and_runtime_agree_despite_a_stale_label(self):
+        source=(TOP/'boot/init').read_text()
+        fragment=source[source.index('if [ -d /proc/device-tree/charger_policy_service ]; then'):
+                        source.index('# its modules only')]
+        for tree,want in [('charger_policy_service','u30air'),
+                          ('soc/soc:ap-ahb/i2c@2270000/aw9523b_led@5b','v50'),
+                          ('soc/ap-ahb/i2c@2270000/aw9523b_led@5b','v50'),('', 'f50')]:
+            r=self.root('f50' if want!='f50' else 'v50')
+            (r/'proc/device-tree'/tree).mkdir(parents=True)
+            (r/'etc').mkdir(exist_ok=True)
+            (r/'etc/mu300-device').write_text('f50\n' if want!='f50' else 'v50\n')
+            code=fragment.replace('/proc/device-tree',str(r/'proc/device-tree')).replace('/etc/mu300-device',str(r/'etc/mu300-device'))
+            for shell in self.each_shell():
+                init=self.sh(shell,code+'\nprintf "%s\\n" "$DEVICE"')
+                runtime=self.script(shell,BIN/'mu300-device',MU300_SYSROOT=r)
+                self.assertEqual(init.returncode,0,init.stderr)
+                self.assertEqual(init.stdout.strip(),want)
+                self.assertEqual(runtime.stdout.strip(),want)
 
 
 class Led(ShellTest):
@@ -456,7 +490,7 @@ elif op.startswith('w'):
         self.stub('i2ctransfer', 'exec python3 "$STUBLOG/eeprom.py" "$@"')
         # libgpiod 2: holds the line until killed
         self.stub('gpioset', '[ "$1" = --help ] && { echo "  -c, --chip"; exit 0; }; '
-                             '[ "$*" = "-c gpiochip4 190=0" ] || exit 1; touch "$STUBLOG/held"; '
+                             '[ "$*" = "-c gpiochip4 ${TEST_NFC_PIN:-190}=0" ] || exit 1; touch "$STUBLOG/held"; '
                              'trap \'rm -f "$STUBLOG/held"; exit 0\' TERM; while :; do sleep 0.05; done')
         self.conf = self.tmp / 'hotspot.conf'
         self.conf.write_text('SSID=U30 AIR\nPSK=secret pass!\nBAND=5\n')
@@ -468,7 +502,7 @@ elif op.startswith('w'):
     def nfc(self, shell, *args, device='u30air'):
         (self.root / 'run/mu300/device').write_text(device + '\n')
         return self.script(shell, BIN / 'mu300-nfc', *args, MU300_SYSROOT=self.root, MU300_BIN=BIN,
-                           MU300_HOTSPOT_CONF=self.conf)
+                           MU300_HOTSPOT_CONF=self.conf, TEST_NFC_PIN='189' if device=='v50' else '190')
 
     def writes(self):
         w = self.tmp / 'writes'
@@ -562,7 +596,7 @@ elif op.startswith('w'):
             self.blank()
             r = self.nfc(shell, 'wifi', device='f50')
             self.assertEqual(r.returncode, 1)
-            self.assertIn('only the U30 Air', r.stderr)
+            self.assertIn('no supported NFC tag', r.stderr)
             self.assertEqual(self.nfc(shell, 'blink').returncode, 2)
             self.assertEqual(self.nfc(shell, 'url').returncode, 1)
             # no capability container: not written
@@ -571,6 +605,30 @@ elif op.startswith('w'):
             self.assertEqual(r.returncode, 1)
             self.assertIn('capability container', r.stderr)
             self.assertEqual(self.writes(), [])
+
+    def test_v50_uses_its_stock_reset_pin_and_read_only_discovery(self):
+        node=self.root/'proc/device-tree/ntag_fm11_gpio';node.mkdir(parents=True)
+        (node/'ntag-reset-gpio').write_bytes(bytes.fromhex('00000018000000bd00000000'))
+        for shell in self.each_shell():
+            self.blank()
+            r=self.nfc(shell,'supported',device='v50')
+            self.assertEqual(r.returncode,0,r.stderr)
+            self.assertFalse((self.tmp/'held').exists());self.assertEqual(self.writes(),[])
+            r=self.nfc(shell,'wifi',device='v50')
+            self.assertEqual((r.returncode,r.stdout.strip()),(0,'wifi: U30 AIR (with its password)'),r.stderr)
+            self.assertFalse((self.tmp/'held').exists())
+
+    def test_v50_unknown_reset_binding_is_rejected_without_touching_the_tag(self):
+        node=self.root/'proc/device-tree/ntag_fm11_gpio';node.mkdir(parents=True)
+        prop=node/'ntag-reset-gpio'
+        for value in (None,bytes(8),bytes.fromhex('00000018000000be00000000')):
+            prop.unlink(missing_ok=True)
+            if value is not None:prop.write_bytes(value)
+            for shell in self.each_shell():
+                self.blank()
+                r=self.nfc(shell,'wifi',device='v50')
+                self.assertEqual(r.returncode,1,r.stderr)
+                self.assertFalse((self.tmp/'held').exists());self.assertEqual(self.writes(),[])
 
 
 class Ttl(ShellTest):

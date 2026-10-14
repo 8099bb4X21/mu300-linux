@@ -30,6 +30,16 @@ LEDS=$R/sys/class/leds
 STATE=$R/run/mu300/led
 DEVICE=$(${MU300_BIN:-/opt/mu300/bin}/mu300-device)
 
+# V50's controller is owned by led-status. The old compatibility calls must
+# not overwrite its RGB state or write the unrelated PMIC channels.
+if [ "$DEVICE" = v50 ]; then
+    case ${1:-}:${2:-} in
+        alarm:on) exec /opt/mu300/bin/led-status thermal ;;
+        alarm:off) exec /opt/mu300/bin/led-status refresh ;;
+        *) exit 0 ;;
+    esac
+fi
+
 case $DEVICE in
     u30air) POWER=sc27xx:green DATA=net_blue DATA5G=zte-ldo0 NODATA=keyboard-backlight WIFI5=zte-ldo2 WIFI24=zte-ldo1
             DEFAULT_TIMEOUT=60 ;;

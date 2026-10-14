@@ -195,3 +195,7 @@ Python 3 is not installed; installing it for this user	Python 3 kurulu değil; b
 {1} failed	{1} başarısız oldu
 waiting for Android to finish starting	Android'in açılmasını bitirmesi bekleniyor
 which adb device is the F50 or U30 Air?	hangi adb cihazı F50 ya da U30 Air?
+which adb device is the F50, V50 or U30 Air?	hangi adb cihazı F50, V50 ya da U30 Air?
+This does not look like a ZTE F50/MU300, V50 or U30 Air. Continue anyway? (yes/no)	Bu cihaz ZTE F50/MU300, V50 veya U30 Air gibi görünmüyor. Yine de devam edilsin mi? (yes/no)
+V50 requires product V50 / MU3351 on ums9620; refusing installation.	V50 için ums9620 platformunda V50 / MU3351 ürün eşleşmesi gerekir; kurulum reddedildi.
+V50 requires a compatible mainline kernel (6.18 or 7.2); the legacy 5.4 build is not supported.	V50 uyumlu bir ana hat çekirdeği (6.18 veya 7.2) gerektirir; eski 5.4 derlemesi desteklenmez.

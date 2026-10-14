@@ -6,6 +6,10 @@ export PATH="$PATH:/opt/mu300/busybox-bin"
 
 service_triggers() {
 	procd_add_reload_trigger system
+	# Config events, not a polling loop. NFC sync keeps custom text/URL tags.
+	if /opt/mu300/bin/mu300-nfc supported >/dev/null 2>&1; then
+		procd_add_config_trigger "config.change" wireless /opt/mu300/bin/mu300-nfc sync
+	fi
 }
 
 reload_service() {

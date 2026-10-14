@@ -104,7 +104,8 @@ this_device() { "${MU300_BIN:-/opt/mu300/bin}/mu300-device"; }
 # their devices in ./devices; one without it is from before the U30 Air and runs on the F50 only (see boot_update).
 bundle_runs_here() {
     _me=$(this_device)
-    [ "$_me" = f50 ] && return 0
+    # Only F50 predates the manifest. V50 needs its AW9523B-capable bundle.
+    [ "$_me" != f50 ] || return 0
     grep -qx './devices' "$2" || return 1
     untar -xzf "$1" -C "$3" ./devices && grep -qw "$_me" "$3/devices"
 }
