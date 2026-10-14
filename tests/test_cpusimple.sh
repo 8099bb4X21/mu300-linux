@@ -15,6 +15,17 @@ expect() {
         echo "FAIL: $1 (got [$2] want [$3])"
     fi
 }
+# Every backend reply must be parseable JSON (offline clusters must not
+# produce bare empty numbers). Returns 0 when valid.
+valid_json() { printf '%s' "$1" | python3 -c 'import sys,json; json.load(sys.stdin)' 2>/dev/null; }
+expect_valid() {
+    if valid_json "$2"; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "FAIL: $1 (invalid JSON)"
+    fi
+}
 
 command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
 if command -v jsonfilter >/dev/null 2>&1; then
@@ -45,6 +56,8 @@ mkpol() { # id cpus hwmin hwmax "freqs"
 mkpol policy0 "0 1 2 3" 614400 2002000 "614400 768000 936000 1105000 1228800 1404000 1560000 1703000 1846000 2002000"
 mkpol policy4 "4 5 6" 768000 2301000 "768000 1157000 1228800 1326000 1536000 1703000 1755000 2054000 2171000 2301000"
 mkpol policy7 "7" 614400 2210000 "614400 768000 936000 1105000 1228800 1378000 1536000 1703000 1872000 2041000 2210000"
+# Pristine copy to restore fake policy files after offline-unreadable tests.
+cp -r "$T/cpufreq" "$T/cpufreq.pristine"
 
 mkdir -p "$T/cgroup/services" "$T/cpu" "$T/etc/mu300/cpusimple" "$T/etc/unisoc-modem"
 : > "$T/cgroup/cgroup.subtree_control"
@@ -87,6 +100,7 @@ expect "get hotplug unsupported" "$(printf '%s' "$g" | jsonfilter -e '@.hotplug_
 check_mode() { # mode exp_p0min exp_p0max exp_p4max exp_p7max exp_cpuset exp_gov
     r=$(apply "{\"mode\":\"$1\",\"persist\":false,\"hotplug\":false}")
     expect "$1 ok" "$(okof "$r")" "1"
+    expect_valid "$1 json" "$r"
     expect "$1 active" "$(printf '%s' "$r" | jsonfilter -e '@.active')" "$1"
     expect "$1 p0min" "$(rd policy0 scaling_min_freq)" "$2"
     expect "$1 p0max" "$(rd policy0 scaling_max_freq)" "$3"
@@ -151,6 +165,30 @@ for c in 4 5 6; do expect "balanced offline cpu$c" "$(cat "$T/cpu/cpu$c/online")
 expect "balanced keeps cpu7" "$(cat "$T/cpu/cpu7/online")" "1"
 apply '{"mode":"performance","persist":false,"hotplug":true}' >/dev/null
 for c in 4 5 6 7; do expect "online cpu$c" "$(cat "$T/cpu/cpu$c/online")" "1"; done
+
+# --- 10. offline clusters unreadable -> get stays valid JSON with nulls ---------------
+# Emulate kernel "Resource busy" by removing fake policy files of offlined clusters.
+apply '{"mode":"android-default","persist":false,"hotplug":true}' >/dev/null
+for p in policy4 policy7; do
+    rm -f "$T/cpufreq/$p/scaling_min_freq" "$T/cpufreq/$p/scaling_max_freq" \
+        "$T/cpufreq/$p/scaling_cur_freq" "$T/cpufreq/$p/scaling_governor" \
+        "$T/cpufreq/$p/affected_cpus" "$T/cpufreq/$p/cpuinfo_min_freq" \
+        "$T/cpufreq/$p/cpuinfo_max_freq" "$T/cpufreq/$p/scaling_available_frequencies" \
+        "$T/cpufreq/$p/scaling_available_governors"
+done
+g=$("$BIN" get)
+expect_valid "offline get json" "$g"
+expect "offline null" "$(printf '%s' "$g" | python3 -c 'import sys,json; d=json.load(sys.stdin); print([p["min"] for p in d["policies"] if p["id"]=="policy4"][0] is None)')" "True"
+# Restore readability (kernel restores nodes once onlined).
+for p in policy4 policy7; do cp "$T/cpufreq.pristine/$p/"* "$T/cpufreq/$p/"; done
+
+# --- 11. any apply recovers previously-offlined cores (pre-online) ----------------------
+apply '{"mode":"little-save","persist":false,"hotplug":true}' >/dev/null
+expect "stuck offline cpu4" "$(cat "$T/cpu/cpu4/online")" "0"
+r=$(apply '{"mode":"performance","persist":false,"hotplug":false}')
+expect "recover ok" "$(okof "$r")" "1"
+expect_valid "recover json" "$r"
+for c in 4 5 6 7; do expect "recover online cpu$c" "$(cat "$T/cpu/cpu$c/online")" "1"; done
 
 echo "pass=$pass fail=$fail"
 [ "$fail" = "0" ]

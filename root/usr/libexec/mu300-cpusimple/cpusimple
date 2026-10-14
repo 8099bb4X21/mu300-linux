@@ -46,6 +46,8 @@ is_true() { [ "$1" = "true" ] || [ "$1" = "1" ]; }
 # --- sysfs helpers -----------------------------------------------------------
 
 readf() { cat "$1" 2>/dev/null | tr -d '\n'; }
+# Print a sysfs integer, or JSON null when unreadable (e.g. cluster offline).
+jnum() { _v=$(readf "$1"); case "$_v" in ''|*[!0-9]*) printf 'null';; *) printf '%s' "$_v";; esac; }
 hw_min() { readf "$CPUFREQ/$1/cpuinfo_min_freq"; }
 hw_max() { readf "$CPUFREQ/$1/cpuinfo_max_freq"; }
 cpus_of() { readf "$CPUFREQ/$1/affected_cpus"; }
@@ -198,6 +200,7 @@ state_json() {
     fi
     _eff=$(readf "$SERVICES/cpuset.cpus.effective"); [ -n "$_eff" ] || _eff="$ALL_CPUS"
     _hs=false; hotplug_supported && _hs=true
+    _online=$(readf "$CPUDIR/online"); [ -n "$_online" ] || _online="$ALL_CPUS"
     # active = last actually-applied mode (run file), else persisted, else default.
     _active="openwrt-default"
     if [ -f "$RUN" ]; then
@@ -209,16 +212,16 @@ state_json() {
         _active=$_mode
     fi
 
-    printf '{"ok":1,"active":"%s","persisted":%s,"mode":"%s","hotplug_requested":%s,"hotplug_supported":%s,"cpus_effective":"%s","policies":[' \
-        "$_active" "$_persisted" "$_mode" "$_hotreq" "$_hs" "$_eff"
+    printf '{"ok":1,"active":"%s","persisted":%s,"mode":"%s","hotplug_requested":%s,"hotplug_supported":%s,"cpus_effective":"%s","online_cpus":"%s","policies":[' \
+        "$_active" "$_persisted" "$_mode" "$_hotreq" "$_hs" "$_eff" "$_online"
     _first=1
     for p in $(policies); do
         [ "$_first" = "0" ] && printf ','
         _first=0
         printf '{"id":"%s","cpus":"%s","governor":"%s","min":%s,"max":%s,"current":%s,"hardware_min":%s,"hardware_max":%s}' \
             "$p" "$(cpus_of "$p")" "$(readf "$CPUFREQ/$p/scaling_governor")" \
-            "$(readf "$CPUFREQ/$p/scaling_min_freq")" "$(readf "$CPUFREQ/$p/scaling_max_freq")" \
-            "$(readf "$CPUFREQ/$p/scaling_cur_freq")" "$(hw_min "$p")" "$(hw_max "$p")"
+            "$(jnum "$CPUFREQ/$p/scaling_min_freq")" "$(jnum "$CPUFREQ/$p/scaling_max_freq")" \
+            "$(jnum "$CPUFREQ/$p/scaling_cur_freq")" "$(jnum "$CPUFREQ/$p/cpuinfo_min_freq")" "$(jnum "$CPUFREQ/$p/cpuinfo_max_freq")"
     done
     printf ']}\n'
 }
@@ -239,6 +242,10 @@ do_apply() {
     # Hotplug is only honoured when the kernel actually supports it.
     hotplug_supported || _hot=false
 
+    # Bring all big cores online first (if supported) so policy nodes are
+    # writable, cpuset.effective is complete, and any prior offline state is
+    # recovered. The mode's offline mask is applied last in apply_cores.
+    set_hotplug 1 "$BIG_CORES"
     apply_freq "$_mode" "$_persist" || fail "频率设置失败"
     apply_cores "$_mode" "$_hot" || fail "核心设置失败"
     is_true "$_persist" && save_config "$_mode" "$_hot"

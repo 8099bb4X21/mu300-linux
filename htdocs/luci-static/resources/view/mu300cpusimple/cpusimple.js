@@ -43,7 +43,7 @@ var MODES = [
 		id: 'performance', name: '性能模式',
 		cores: '8 核（CPU 0–7）',
 		freq: '三簇全部锁到硬件最高频（2002 / 2301 / 2210 MHz）',
-		impact: '性能最高、响应最快；发热与功耗最大，长时间高负载需注意散热。',
+		impact: '性能最高、响应最快；发热与功耗最大，长时间高负载需注意散热。本机满载可能断网掉线（机器固有），慎用。',
 		tag: '性能'
 	}
 ];
@@ -170,13 +170,15 @@ return view.extend({
 		s.innerHTML = M.translate('当前生效模式：') + '<b>' + active + '</b>' +
 			' · ' + M.translate('已存默认：') + '<b>' + saved + '</b>' +
 			' · ' + M.translate('服务可用核：') + '<b>' + (d.cpus_effective || '0-7') + '</b>' +
+			' · ' + M.translate('实际在线核：') + '<b>' + (d.online_cpus || '0-7') + '</b>' +
 			' · ' + M.translate('热插拔：') + '<b>' + (d.hotplug_supported ? M.translate('支持') : M.translate('不支持')) + '</b>';
 		var f = this.q('cs-freq');
 		f.replaceChildren();
 		(d.policies || []).forEach(function(p) {
 			var row = document.createElement('div');
-			row.innerHTML = '<span>CPU ' + p.cpus.trim().replace(/\s+/g, ',') + '</span><b>' +
-				fmtMHz(p.current) + ' / ' + fmtMHz(p.max) + ' · ' + p.governor + '</b>';
+			var title = p.cpus ? 'CPU ' + p.cpus.trim().replace(/\s+/g, ',') : p.id;
+			row.innerHTML = '<span>' + title + '</span><b>' +
+				fmtMHz(p.current) + ' / ' + fmtMHz(p.max) + ' · ' + (p.governor || '--') + '</b>';
 			f.appendChild(row);
 		});
 	},
