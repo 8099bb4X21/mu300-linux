@@ -51,7 +51,7 @@ define Package/luci-app-mu300-cpusimple/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
 	[ -x /usr/libexec/unisoc-modem/cpu ] || echo "mu300-cpusimple: built-in cpu.uc not found; frequency control will fail" >&2
-	[ -x /www/luci-static/resources/mu300/common.js ] || echo "mu300-cpusimple: luci-app-mu300 helpers not found; the LuCI page needs them" >&2
+	[ -f /www/luci-static/resources/mu300/common.js ] || echo "mu300-cpusimple: luci-app-mu300 helpers not found; the LuCI page needs them" >&2
 	/etc/init.d/mu300-cpusimple enable 2>/dev/null || true
 	/etc/init.d/rpcd restart 2>/dev/null || true
 	rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null
