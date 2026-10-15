@@ -125,8 +125,8 @@ def main():
                     help='modules built for another device of this family (u30air=out/u30air): they go to '
                          'linux-modules/NAME/ with boot/module-order-NAME.txt, and init loads them in place of the '
                          'ones of the same name when it runs on that device')
-    ap.add_argument('--device', help='the device this image is for (f50, u30air): written to /etc/mu300-device, '
-                                     'which init trusts over its own guess from the device tree')
+    ap.add_argument('--device', choices=['f50', 'v50', 'u30air'],
+                    help='fallback board identity in /etc/mu300-device; the live device tree takes priority')
     ap.add_argument('--root-target', choices=['sd'],
                     help='TF-only device segment: never probe an internal eMMC root when TF fails')
     ap.add_argument('--trial-guard', type=int, metavar='SECONDS',

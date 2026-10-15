@@ -16,6 +16,7 @@
 #   IMPORT_HOTSPOT=0|1 copy Android's hotspot SSID/passphrase into each system
 #   KERNEL=5.4|6.18|7.2  the kernel in the new boot image; mu300-update keeps installing that one (boot/kernel)
 set -e
+umask 022
 T=${MU300_INSTALL_TMP:-/data/local/tmp}
 P=${MU300_PAYLOAD_DIR:-$T}
 . "$P/mu300-install.env"

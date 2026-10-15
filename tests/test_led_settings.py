@@ -15,6 +15,33 @@ DEFAULTS = TOP / 'openwrt/overlay/etc/uci-defaults/90-mu300'
 
 
 class LedSettings(unittest.TestCase):
+    def test_v50_without_physical_groups_never_drives_unrelated_lamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);leds=base/'leds';run=base/'run';run.mkdir()
+            bindir=base/'bin';bindir.mkdir()
+            for name, maximum in [('aw_led',120),('red',120),('green',80),('blue',120),
+                                  ('sc27xx:red',255),('sc27xx:green',255),('sc27xx:blue',255)]:
+                node=leds/name;node.mkdir(parents=True)
+                (node/'brightness').write_text('7\n' if name.startswith('sc27xx:') else '0\n')
+                (node/'max_brightness').write_text(str(maximum)+'\n')
+                (node/'trigger').write_text('none\n')
+            for name,body in [('mu300-device','echo v50'),('uci','exit 0')]:
+                p=bindir/name;p.write_text('#!/bin/sh\n'+body+'\n');p.chmod(0o755)
+            env=dict(os.environ,PATH=f'{bindir}:{os.environ["PATH"]}',
+                     MU300_LED_SYSFS_ROOT=str(leds),MU300_LED_RUN_DIR=str(run))
+            def apply(state,expected):
+                p=subprocess.run(['sh',str(LED),state],env=env,capture_output=True,text=True)
+                self.assertEqual(p.returncode,0,p.stderr)
+                actual=tuple((leds/n/'brightness').read_text().strip() for n in ('red','green','blue'))
+                self.assertEqual(actual,expected)
+                for n in ('red','green','blue'):
+                    self.assertEqual((leds/('sc27xx:'+n)/'brightness').read_text(),'7\n')
+                self.assertFalse((leds/'white').exists())
+            apply('online-4g',('0','0','0'))
+            apply('online-5g',('0','0','0'))
+            apply('offline',('0','0','0'))
+            apply('wifi-on',('0','0','0'))
+
     def test_signal_and_wifi_brightness_are_independent_and_persistent(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -136,6 +163,11 @@ for (const [locale, title, signal, wifi] of [
     const actual = page.render([{ 'keyboard-backlight': { max_brightness: 127, triggers: [] } }, []]);
     const realWifi = actual.sections[0].options.find(o => o.key === 'wifi_brightness');
     if (realWifi.datatype !== 'range(0,127)' || realWifi.default !== '127') throw Error('hardware maximum');
+    const v50 = page.render([{ aw_led: {triggers: []}, red: {triggers: []}, green: {triggers: []}, blue: {triggers: []} }, []]);
+    if (v50.sections[0].options.some(o => o.key === 'wifi' || o.key === 'wifi_brightness')) throw Error('V50 has no verified independent Wi-Fi lamp');
+    const adapted = page.render([{ 'v50:net1:white': { max_brightness: 80, triggers: [] } }, []]);
+    if (!adapted.sections[0].options.some(o => o.key === 'signal2') ||
+        !adapted.sections[0].options.some(o => o.key === 'wifi')) throw Error('V50 physical lamps missing');
 }
 '''
         result = subprocess.run(['node', '-', str(UI)], input=harness, capture_output=True,

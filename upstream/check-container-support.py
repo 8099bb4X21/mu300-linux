@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import re
+import runpy
 import tarfile
 from pathlib import Path
 
@@ -37,6 +38,38 @@ MODULES = {
     'IPVTAP': 'ipvtap', 'GENEVE': 'geneve',
 }
 
+# PR #228: optional features must ship their dependency modules too.
+MODULES.update({
+    'VIRTIO_PCI': 'virtio_pci',
+    'VIRTIO_NET': 'virtio_net',
+    'VIRTIO_BLK': 'virtio_blk',
+    'VIRTIO_CONSOLE': 'virtio_console',
+    'HW_RANDOM_VIRTIO': 'virtio_rng',
+    'VIRTIO_BALLOON': 'virtio_balloon',
+    'VIRTIO_INPUT': 'virtio_input',
+    'VIRTIO_FS': 'virtiofs',
+    'VIRTIO_VSOCKETS': 'vmw_vsock_virtio_transport',
+    'NET_9P': '9pnet',
+    'NET_9P_VIRTIO': '9pnet_virtio',
+    '9P_FS': '9p',
+    'VHOST_SCSI': 'vhost_scsi',
+    'USBIP_CORE': 'usbip_core',
+    'USBIP_HOST': 'usbip_host',
+    'USBIP_VHCI_HCD': 'vhci_hcd',
+    'USB_VIDEO_CLASS': 'uvcvideo',
+    'USB_NET_AX8817X': 'asix',
+    'NFS_FS': 'nfs',
+    'NFSD': 'nfsd',
+    'CIFS': 'cifs',
+    'XFS_FS': 'xfs',
+    'DM_CACHE': 'dm_cache',
+    'DM_WRITECACHE': 'dm_writecache',
+    'DM_MULTIPATH': 'dm_multipath',
+    'DM_INTEGRITY': 'dm_integrity',
+    'DM_MIRROR': 'dm_mirror',
+    'MD_RAID456': 'raid456',
+})
+
 
 def config_check(path):
     config = dict(line.split('=', 1) for line in path.read_text().splitlines()
@@ -49,6 +82,7 @@ def config_check(path):
             raise ValueError(f'CONFIG_{key} missing in built kernel.config; rebuild kernel')
     if config.get('CONFIG_ARM_SPRD_CPUFREQ_V2') != 'm':
         raise ValueError('CONFIG_ARM_SPRD_CPUFREQ_V2=m required for boot voltage profiles; rebuild kernel')
+    runpy.run_path(str(Path(__file__).with_name('audit-bundle.py')))['expanded_check'](config, Path(__file__).with_name('mu300-mainline.config'))
     return config
 
 
@@ -82,6 +116,7 @@ def check(out):
         vermagic = re.search(rb'vermagic=([^\s\x00]+)', (out / name).read_bytes())
         if not vermagic or vermagic[1] != version[1]:
             raise ValueError(f'{name} vermagic does not match Image')
+    runpy.run_path(str(Path(__file__).with_name('audit-bundle.py')))['audit'](out)
     normalized = {name.replace('-', '_') for name in files}
     if len(normalized) != len(files):
         raise ValueError('module names collide after hyphen/underscore normalization')

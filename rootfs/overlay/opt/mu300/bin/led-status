@@ -2,8 +2,9 @@
 # MU300/V50 status LED controller.
 #
 # The F50 has three LED channels under sc27xx:*, where "green" is physically WHITE
-# (verified: the vendor's own userspace treats it as white). The V50 has separate
-# /sys/class/leds/{red,white,blue}/ paths. This script auto-detects both.
+# (verified: the vendor's own userspace treats it as white). V50/MU3351 has an
+# AW9523B controller with three independent red/white/blue indicators, AND
+# unused sc27xx nodes. Its hardware groups are owned by v50-led-status.
 #
 # States (one multi-color LED, priority order):
 #   boot           red/white/blue chase - Linux is booting
@@ -21,8 +22,20 @@ export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
 LED_ROOT=${MU300_LED_SYSFS_ROOT:-/sys/class/leds}
 RUN_DIR=${MU300_LED_RUN_DIR:-/run}
 
+# The V50 has three independently wired red/white/blue indicators.
+if [ -d "$LED_ROOT/v50:net1:white" ]; then
+    exec "${MU300_LED_BACKEND:-/opt/mu300/bin/v50-led-status}" "$@"
+fi
+[ "$(mu300-device 2>/dev/null)" != v50 ] || exit 0
+
 # --- detect LED paths (F50 sc27xx vs V50 plain)
-if [ -d "$LED_ROOT/sc27xx:blue" ]; then
+RGB_WHITE=0
+if [ -d "$LED_ROOT/aw_led" ] && [ -d "$LED_ROOT/green" ] && [ -d "$LED_ROOT/blue" ]; then
+    LED_R=$LED_ROOT/red/brightness
+    LED_W=$LED_ROOT/green/brightness
+    LED_B=$LED_ROOT/blue/brightness
+    RGB_WHITE=1
+elif [ -d "$LED_ROOT/sc27xx:blue" ]; then
     LED_R=$LED_ROOT/sc27xx:red/brightness
     LED_W=$LED_ROOT/sc27xx:green/brightness   # physically white on the F50
     LED_B=$LED_ROOT/sc27xx:blue/brightness
@@ -124,6 +137,11 @@ done
 
 set_rgb() {  # R W B (0-255)
     [ "$SIGNAL_ENABLED" = 1 ] || set -- 0 0 0
+    if [ "$RGB_WHITE" = 1 ] && [ "${2:-0}" -gt 0 ]; then
+        # AW9523B has true RGB: white uses all three groups.
+        [ "${1:-0}" -ge "$2" ] || set -- "$2" "$2" "${3:-0}"
+        [ "${3:-0}" -ge "$2" ] || set -- "$1" "$2" "$2"
+    fi
     scaled "${1:-0}" "$SIGNAL_BRIGHTNESS" "$R_MAX" > "$LED_R" 2>/dev/null
     scaled "${2:-0}" "$SIGNAL_BRIGHTNESS" "$W_MAX" > "$LED_W" 2>/dev/null
     scaled "${3:-0}" "$SIGNAL_BRIGHTNESS" "$B_MAX" > "$LED_B" 2>/dev/null

@@ -8,7 +8,7 @@ import struct
 import tarfile
 import unittest
 
-from helpers import BIN, ShellTest
+from helpers import BIN, TOP, ShellTest
 
 
 class Update(ShellTest):
@@ -212,8 +212,10 @@ class Update(ShellTest):
         new = self.bundle('new.tar.gz', 'f50 u30air\n')
         old = self.bundle('old.tar.gz', None)
         f50only = self.bundle('f50.tar.gz', 'f50\n')
+        v50 = self.bundle('v50.tar.gz', 'f50 v50 u30air\n')
         cases = [('f50', new, True), ('f50', old, True), ('u30air', new, True), ('u30air', old, False),
-                 ('u30air', f50only, False)]
+                 ('u30air', f50only, False), ('v50', v50, True), ('v50', old, False),
+                 ('v50', new, False), ('v50', f50only, False), ('f50', v50, True)]
         for shell in self.each_shell():
             for dev, b, ok in cases:
                 self.device(dev)
@@ -222,6 +224,25 @@ class Update(ShellTest):
                 r = self.up(shell, f'tar -tzf "{b}" > "{d}/list"; bundle_runs_here "{b}" "{d}/list" "{d}" && echo YES || echo NO')
                 self.assertEqual(r.stdout.strip(), 'YES' if ok else 'NO', (dev, b.name, r.stderr))
                 (d / 'devices').unlink(missing_ok=True)
+
+    def test_v50_is_advertised_only_for_an_aw9523b_kernel(self):
+        source=(TOP/'upstream/make-bundle.sh').read_text()
+        start=source.index("devices='f50 u30air'")
+        end=source.index('\ntar -C "$W/b"',start)
+        code=source[start:end]
+        build=self.tmp/'build';build.mkdir()
+        stage=self.tmp/'stage';(stage/'b').mkdir(parents=True)
+        for shell in self.each_shell():
+            for config,expected in [('CONFIG_LEDS_AW9523B=y\n',True),
+                                    ('CONFIG_LEDS_AW9523B=m\n',False),
+                                    ('# CONFIG_LEDS_AW9523B is not set\n',False)]:
+                (build/'kernel.config').write_text(config)
+                result=self.sh(shell,code,UO=build,W=stage)
+                self.assertEqual(result.returncode,0,result.stderr)
+                boards=(stage/'b/devices').read_text().split()
+                self.assertEqual('v50' in boards,expected)
+                self.assertIn('f50',boards)
+                self.assertIn('u30air',boards)
 
 
 if __name__ == '__main__':

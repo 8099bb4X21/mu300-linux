@@ -1873,3 +1873,79 @@ experiment, and `mu300-update` keeps that segment. 33e made init honour a guard 
 from Android with mu300-linux is exactly that. The generic ramdisk segment, which every update appends behind the
 device segment, now carries an empty `etc/mu300-trial-guard` (a later file replaces an earlier one), and an
 experiment's guard goes into a segment of its own behind the generic one.
+
+## 2026-10-13: Mobility renewal gaps in the OpenWrt protocol
+
+The existing event monitor was only started for dual-stack contexts. IPv4-only
+connections therefore missed in-place address/DNS renewal, while the watchdog
+redialled when CGPADDR differed from the kernel address. Both families now use
+the same event owner; the watchdog requests renew for an active context and
+does not confuse failed AT reads with detach or radio-off. ACT/DETACH/PCO hints
+are coalesced without dropping hints during cooldown. Persistent explicit
+inactivity still requests netifd recovery after bounded confirmation.
+
+Replacement addresses are installed before old ones are withdrawn; failed
+updates retain the previous snapshot for retry. External IPv6 reporting and
+finite RA lifetimes remain intact. There is no ModemManager registration
+timeout here, so the E5/T551M 45-second change was not copied.
+
+20 focused checks passed, including dash/bash/BusyBox renewal tests; adjacent
+IPv6 regressions passed with dash/bash (35 combined checks). No MU300 device
+was deployed or tested for this change. See
+[implementation and validation](CELLULAR-MOBILITY-20261013.zh-CN.md).
+
+## 2026-10-13：对齐 T551M 发现的 Wi-Fi 接入缺陷
+
+MU300 的 AP/GO RX 同样把网络字节序 h_proto 与主机字节序协议常量直接
+比较，导致 IP 组播进入额外复制转发分支。已修正主线共用源码，并补齐
+5.4 构建补丁；保留单播 W2W、非 IP、桥接与 IPv6。
+
+PCIe/SDIO 的过期客户端丢弃和组播 LUT 查找日志收敛，上层 TX 错误限速，
+队列、credit 和 skb/message 释放路径不变。现有 WCN 事件恢复保留，补上
+down 后复查 disabled，避免恢复期间用户关闭 Wi-Fi 仍被重新打开。
+
+34 项 RX/TX/WCN/蜂窝相关测试通过，全部 5.4 Wi-Fi 补丁从原始厂商源码
+实际应用成功。未部署 MU300 实机，不能把 T551M 的现场结果当作 MU300
+验证。详见 [Wi-Fi 对齐记录](WIFI-FORWARDING-20261013.zh-CN.md)。
+
+## 2026-10-14：公共 eMMC 策略与默认启动提示
+
+旧 V50/AW9523B 门槛改为公共非可移除 eMMC 策略，禁用 runtime/system sleep、
+内外 CLK_AUTO，并按 E5 既有路径以刷缓存实现 FUA 持久化。TF/SDIO 保留原策略。
+6.18.54 与 7.2.8 的最终 Image/modules 编译通过；新完整策略尚未刷入实机。
+
+看板按保存的启动意图提示临时 OpenWrt，用户确认后设置默认，不立即重启。
+启动控制写入加入校验、失败回退和 rearm 互斥。V50 已热更新并正确显示默认 Linux。
+
+V50 当前 p76 的 EXT4 8 GiB 与分区长度一致，旧 #17 宿主 on/active、错误计数 0。
+旧 inode 不一致属于元数据版本不一致，不能把 fsck、短时稳定或 runtime PM 关联
+当作唯一底层根因。M8 的已确认铃声损坏原因也不能混作 inode 故障证据。
+详见 [两仓库报告](DUAL-SIM-BOOT-EMMC-20261014.zh-CN.md)。
+
+后续按用户要求撤销公共 eMMC 运行时常驻和 CLK_AUTO 禁用，恢复原有运行时省电。
+系统休眠保护改为专用回调，FUA 兼容保留；构建缓存一并迁移。实机仍运行旧 #17，
+本次未刷内核或切换运行时 sysfs 策略。
+
+### 2026-10-14：F50 / V50 共用固件的机型隔离
+
+旧 `install.sh` 会把 V50 当成未识别设备，用户确认后写入 f50 标记；
+initramfs 又优先相信该标记。现与桌面安装器对齐 V50/MU3351/ums9620 校验，
+启动和运行时均以本机设备树为准。跨机恢复配置在 AT 服务启动前纠正卡槽及映射，
+同机型自定义设置与短信/流量/APN 数据保留。网页灯控仍按实际 LED 节点隔离。
+V50 更新要求包明确支持，主线包和共用 TF 包检查内置 AW9523B 支持。
+详见 [V50 记录](V50-MU3351-20261014.zh-CN.md#f50--v50-共用固件的机型隔离)。
+本轮仅修改代码与回归验证，未重新编译、打包或刷机。
+
+## 2026-10-14：六项上游修复的公共适配
+
+按 #199 / #184 / #217 / #190 / #211 / #228 移植权限、TF 检测、升级锁、温控保护、转发结果及内核/打包检查。保留机型边界和现有双卡后端；E5 无相同升级保活链路，因此不引入 MU300 更新器。E5/T551M 原厂虚拟温区同类提前返回问题也纳入公共修正，M8 同步。正常导入树不重复改权限；不预装 Docker，不增加常驻 AT/温控轮询。详见 [范围与验证](UPSTREAM-BACKPORT-20261014.zh-CN.md)。尚未统一构建安装包或部署实机。
+
+
+## 2026-10-14：eMMC DMA/MMIO 排序与 E5、V50 实机验证
+
+公共 SDHCI 适配器改用有序 MMIO 访问器，修补 ADMA 描述符提交与完成读取之间的排序缺口；保留寄存器特殊处理、HS400 和运行时省电。E5 的修复前块记录存在另一 inode 表的完整内容，E5/V50 旧驱动普通文件测试均曾触发 ADMA 错误，不能仅按断电未刷盘解释。
+
+E5 完成 896 MiB 写入及等量直接读回、3584 次元数据更新、重启后 224 MiB 校验和两遍离线只读 fsck。V50 按用户要求重装现有 8 GiB OpenWrt 分区、重新提取本机固件，完整系统两轮 256 MiB 写读、1024 次元数据更新、重启后 64 MiB 校验通过。两机保持 HS400/200 MHz，错误计数为 0、运行时休眠启用；不把有界测试宣布为所有硬件永久可靠。V50 曾有本次部署漏同步模块导致的 BTF 不匹配，以及旧根目录脱落导致基础程序缺失，已在报告中分别记录。详见 [证据、范围及限制](EMMC-DMA-ORDERING-20261014.zh-CN.md)。未统一构建发行包，T551M/M8 未实机部署本次内核。
+
+
+2026-10-14 补齐排序修复覆盖：E5/T551M/M8 的三个机型内核入口及公共 Docker/本机交叉编译、MU300/F50/V50/U30 Air 两条主线版本均接入公共适配器；另补入两仓库旧 5.4 补丁链，不带入主线专属 PM/FUA 改动。发布 CI 增加实际访问器 C 编译执行检查。实际 6.18、7.2、原厂 5.4 参考驱动测试通过；尚未逐个重编和升级全部机型，详见同一调查报告的构建覆盖表。

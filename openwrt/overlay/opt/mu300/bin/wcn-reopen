@@ -31,6 +31,10 @@ wcn_radio() {
         logger -t mu300-wcn "reopening $section after WCN reset"
         # Always attempt up, even if down reports that the crashed firmware is gone.
         wifi down "$section"
+        # Respect a user disabling this radio while the reset/down was running.
+        config_load wireless
+        config_get_bool disabled "$section" disabled 0
+        [ "$disabled" = 0 ] || return 0
         wifi up "$section" || logger -t mu300-wcn "reopen failed: $section; no automatic reboot"
         return 0
     done

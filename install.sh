@@ -111,16 +111,22 @@ fi
 . "$TOP/tools/linux-mode.sh"
 require_android
 [ "$(su_do 'id -u')" = 0 ] || die "$(t 'su does not work on the device')"
-model="$(su_do 'getprop ro.product.model') / $(su_do 'getprop ro.product.device')"
+android_model=$(su_do 'getprop ro.product.model')
+android_device=$(su_do 'getprop ro.product.device')
+android_platform=$(su_do 'getprop ro.board.platform')
+model="$android_model / $android_device"
 echo "$(t 'device: {1}' "$model")"
-# The U30 Air is the F50's board with a battery: the same kernel and images, a few modules of its own (init
-# loads them; the boot image says which device it is for)
-case "$model" in
-    *U30Air*|*U30_Air*|*"U30 Air"*) DEVICE=u30air ;;
-    *MU300*|*F50*|*mu300*) DEVICE=f50 ;;
-    *) ask go "$(t 'This does not look like a ZTE F50/MU300 or U30 Air. Continue anyway? (yes/no)')" no; [ "$go" = yes ] || exit 1
-       DEVICE=f50 ;;
-esac
+. "$TOP/tools/android-profile.sh"
+if DEVICE=$(mu300_android_profile "$android_model" "$android_device" "$android_platform"); then
+    :
+else
+    profile_error=$?
+    [ "$profile_error" != 2 ] || die "$(t 'V50 requires product V50 / MU3351 on ums9620; refusing installation.')"
+    ask go "$(t 'This does not look like a ZTE F50/MU300, V50 or U30 Air. Continue anyway? (yes/no)')" no
+    [ "$go" = yes ] || exit 1
+    DEVICE=f50
+fi
+[ "$DEVICE" != v50 ] || [ "$MODE" != build ] || die "$(t 'V50 requires a compatible mainline kernel (6.18 or 7.2); the legacy 5.4 build is not supported.')"
 [ "$(su_do 'getprop ro.boot.slot_suffix')" = _a ] || die "$(t 'Android must be running from slot a')"
 # Existing desktop installer targets b; TF Magisk supports either Android slot.
 SYNC_BOOTCHAIN=${MU300_SYNC_BOOTCHAIN:-1}
@@ -373,9 +379,14 @@ if [ $MODE = prebuilt ]; then
     echo "  $(t '         as 6.18; tested less than 6.18')"
     echo "  $(t 'This can be changed later on the device: sudo mu300-update kernel 5.4|6.18|7.2')"
     while :; do
-        ask kchoice "$(t 'Kernel')" 1
+        kernel_default=1; [ "$DEVICE" != v50 ] || kernel_default=2
+        ask kchoice "$(t 'Kernel')" "$kernel_default"
         case $kchoice in
-            1|5.4) if [ "${UBUNTU:-}" = 26.04 ]; then
+            1|5.4) if [ "$DEVICE" = v50 ]; then
+                       echo "  $(t 'V50 requires a compatible mainline kernel (6.18 or 7.2); the legacy 5.4 build is not supported.')"
+                       continue
+                   fi
+                   if [ "${UBUNTU:-}" = 26.04 ]; then
                        echo "  $(t 'Ubuntu 26.04 needs a mainline kernel (6.18 or 7.2): its programs use system calls that 5.4 does not have (tar, for one, cannot unpack folders there).')"
                        continue
                    fi
@@ -470,7 +481,10 @@ for f in $files; do
 done
 rm -rf "$REL/kernel" && mkdir -p "$REL/kernel" && tar -xzf "$REL/mu300-kernel.tar.gz" -C "$REL/kernel"
 KOUT=$REL/kernel
-[ $DEVICE = f50 ] || [ -d "$KOUT/modules-$DEVICE" ] || die "$(t 'release {1} does not support this device yet; use a newer one' "$RELEASE")"
+case $DEVICE in
+    f50|v50) ;; # V50 shares the base modules; mainline support is checked below.
+    *) [ -d "$KOUT/modules-$DEVICE" ] || die "$(t 'release {1} does not support this device yet; use a newer one' "$RELEASE")" ;;
+esac
 BUSYBOX=$KOUT/busybox; LOGDW=$KOUT/logdw
 # a mainline kernel (6.18, 7.2): its bundle, unpacked
 KMAIN=

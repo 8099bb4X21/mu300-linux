@@ -1,5 +1,9 @@
 # Linux on the ZTE F50 / MU300 and U30 Air
 
+V50/MU3351 desktop-installer support and the new LED driver are documented in
+[the V50 adaptation record](docs/V50-MU3351-20261014.zh-CN.md), including what has
+been checked on hardware and what remains unverified.
+
 [![Latest Release](https://img.shields.io/github/v/release/dikeckaan/mu300-linux?logo=github)](https://github.com/dikeckaan/mu300-linux/releases/latest)
 [![Total Downloads](https://img.shields.io/github/downloads/dikeckaan/mu300-linux/total?color=blue&logo=github)](https://github.com/dikeckaan/mu300-linux/releases)
 [![Stars](https://img.shields.io/github/stars/dikeckaan/mu300-linux?logo=github)](https://github.com/dikeckaan/mu300-linux/stargazers)
@@ -12,6 +16,15 @@ The ZTE F50 is a pocket 5G router. This project turns it into a small Linux comp
 to it at any time.
 
 Think of it as a Raspberry Pi that already has a 5G modem, a Wi-Fi access point and 32 GB of storage inside.
+
+OpenWrt TF ZIPs can also be extracted and used with the [desktop installer](desktop/README.md):
+TF deployment, userdata images, independent internal partitions and SSH updates.
+The original Magisk TF installation remains unchanged.
+Desktop independent-partition installation checks GPT free ranges first. If the
+chosen size fits, it adds `mu300root` there and preserves Android userdata,
+including encrypted userdata. Only insufficient contiguous space requires a
+userdata shrink/reset. This desktop path writes a new GPT entry; the legacy
+raw-region installation described below leaves GPT unchanged on 64 GB devices.
 
 The **ZTE U30 Air** is supported too: the same board and chip with a battery. The installer recognises which one it
 is talking to; see [Supported devices](#supported-devices).

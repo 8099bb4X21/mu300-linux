@@ -4,6 +4,7 @@ fail_apply() { printf '%s\n' "$1" >&2; return 1; }
 
 validate_apply() {
     local kind=$1 val=$2 cap encoded pair fr pc
+    case "$kind:$val" in volte:on|volte:off|vonr:on|vonr:off) return 0 ;; esac
     case "$kind:$val" in
         mode:auto|mode:4g|mode:sa|mode:nsa|endc:on|endc:off|auto_apply:on|auto_apply:off|reset:auto) return 0 ;;
         cell:auto|cell:off|cell:off-nr|cell:off-lte) return 0 ;;
@@ -56,6 +57,86 @@ restart_write() {
 
 read_field() {
     at "$1" 4 | sed -n "s/^+$2: *//p" | head -n1 | tr -d ' \t'
+}
+
+voice_receipt() {
+    local bid bit source current
+    current=$(cat /proc/sys/kernel/random/boot_id) || return 1
+    [ -r "$RUNDIR/voice-$1" ] || return 1
+    read -r bid bit source < "$RUNDIR/voice-$1" 2>/dev/null || return 1
+    [ "$bid" = "$current" ] || return 1
+    case "$bit:$source" in 0:modem|1:modem) printf '%s %s\n' "$bit" "$source" ;; *) return 1 ;; esac
+}
+
+voice_record() {
+    local dest=$RUNDIR/voice-$1 bid
+    bid=$(cat /proc/sys/kernel/random/boot_id) || return 1
+    printf '%s %s %s\n' "$bid" "$2" "$3" > "$dest.part.$$" && mv "$dest.part.$$" "$dest"
+}
+
+voice_read() {
+    local kind=$1 timeout=${2:-4} cmd prefix reply raw status=0
+    case $kind in
+        volte) cmd='AT+CAVIMS?'; prefix=CAVIMS ;;
+        vonr) cmd='AT+SP5GCMDS="get nr synch_param",42'; prefix=SP5GCMDS ;;
+        *) return 1 ;;
+    esac
+    reply=$(lock_at "$cmd" "$timeout") || status=$?
+    reply=$(printf '%s\n' "$reply" | tr -d '\r')
+    [ "$status" = 0 ] && [ "$(printf '%s\n' "$reply" | sed '/^[[:space:]]*$/d' | tail -n1)" = OK ] || return 1
+    raw=$(printf '%s\n' "$reply" | sed -n "s/^+$prefix: *//p" | head -n1 | tr -d ' \t"')
+    if [ "$kind" = vonr ]; then
+        raw=$(printf '%s\n' "$raw" | awk -F, '$1=="getnrsynch_param" && $2==42 && ($3=="0" || $3=="1") {print $3;exit}')
+    fi
+    case $raw in 0|1) printf '%s\n' "$raw" ;; *) return 1 ;; esac
+}
+
+voice_set() {
+    local kind=$1 val=$2 timeout=${3:-6} bit cmd reply status=0 got source
+    case $val in on) bit=1 ;; off) bit=0 ;; *) return 1 ;; esac
+    case $kind in
+        volte) cmd="AT+CAVIMS=$bit" ;;
+        vonr) cmd="AT+SP5GCMDS=\"set nr param\",45,$bit" ;;
+        *) return 1 ;;
+    esac
+    reply=$(lock_at "$cmd" "$timeout") || status=$?
+    reply=$(printf '%s\n' "$reply" | tr -d '\r')
+    if printf '%s\n' "$reply" | grep -Eq '^(ERROR|\+CME ERROR|\+CMS ERROR)(:|$)'; then
+        fail_apply '模组拒绝了设置'; return 1
+    fi
+    got=$(voice_read "$kind" "$timeout") && [ "$got" = "$bit" ] ||
+        { fail_apply '模组回读与请求设置不一致，未保存'; return 1; }
+    source=modem
+    voice_record "$kind" "$bit" "$source"
+}
+
+voice_matches() {
+    local kind=$1 val=$2 got
+    case $val in on) val=1 ;; off) val=0 ;; *) return 1 ;; esac
+    got=$(voice_read "$kind" 2) || return 1
+    [ "$got" = "$val" ]
+}
+
+voice_json() {
+    local kind=$1 refresh=${2:-0} got source=unknown enabled=null saved
+    # A getter must not overwrite a write receipt mid-operation. The apply
+    # worker's existing refresh reads the receipt it just verified instead.
+    if [ "$refresh" = 1 ] && [ ! -d "$APPLY_DIR" ]; then
+        if got=$(voice_read "$kind"); then
+            source=modem
+            [ "$got" = 1 ] && enabled=true || enabled=false
+        fi
+    fi
+    # Observations never overwrite a write receipt; only an accepted setter
+    # can publish one. This also protects early replay from concurrent getters.
+    if [ "$refresh" != 1 ] || [ -d "$APPLY_DIR" ]; then
+        if got=$(voice_receipt "$kind"); then
+            source=${got#* }; got=${got%% *}
+            [ "$got" = 1 ] && enabled=true || enabled=false
+        fi
+    fi
+    saved=$(cat "$STATE_DIR/$kind" 2>/dev/null)
+    printf '{"enabled":%s,"source":"%s","saved":%s}' "$enabled" "$source" "$(qs "$saved")"
 }
 
 read_cells() {
@@ -185,6 +266,14 @@ do_apply() {
         do_reset_apply
         return $?
     fi
+    case $kind in
+        volte|vonr)
+            voice_set "$kind" "$val" || return 1
+            save_state "$kind" "$val" || { fail_apply '设置保存失败'; return 1; }
+            say "applied $kind=$val for SIM ${MU300_SIM_SLOT:-0}"
+            "$0" get fresh >/dev/null 2>&1
+            return 0 ;;
+    esac
     case "$kind" in
         mode)
             set -- $(mode_pair "$val"); m0=$1; gran=$2

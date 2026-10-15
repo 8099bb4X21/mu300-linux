@@ -25,13 +25,25 @@ legacy_throttle=$throttle
 # frequency control over when every existing CPU cooling device is bound to
 # the enabled stock zone. Keep our more conservative 105 C shutdown protection.
 native_cpu_cooling() {
-    local zone mode kind dev link found count=0
+    local zone mode kind dev link found trip value passive=0 count=0
     [ -d "$R/sys/module/mu300_thermal" ] || return 1
     for zone in "$R"/sys/class/thermal/thermal_zone*; do
         read -r kind < "$zone/type" 2>/dev/null || continue
         [ "$kind" = soc-thmzone ] || continue
         read -r mode < "$zone/mode" 2>/dev/null || continue
         [ "$mode" = enabled ] || return 1
+        # PR #190: bindings alone cannot prove that the sensor can throttle.
+        read -r value < "$zone/temp" 2>/dev/null || return 1
+        case $value in ''|*[!0-9]*) return 1 ;; esac
+        [ "$value" -ge "$(( ${1:-0} - 15000 ))" ] || return 1
+        for trip in "$zone"/trip_point_*_type; do
+            read -r kind < "$trip" 2>/dev/null || continue
+            [ "$kind" = passive ] || continue
+            read -r value < "${trip%_type}_temp" 2>/dev/null || continue
+            case $value in ''|*[!0-9]*) continue ;; esac
+            [ "$value" -le "$HOT" ] && passive=1
+        done
+        [ "$passive" = 1 ] || return 1
         for dev in "$R"/sys/class/thermal/cooling_device*; do
             read -r kind < "$dev/type" 2>/dev/null || continue
             case "$kind" in cpufreq-*) ;; *) continue ;; esac
@@ -82,24 +94,69 @@ step() {
 
 # the alarm's state outlives a restart of this service, so a cooled device is never left flashing
 ALARM=$R/run/mu300/thermal-alarm
+CAPS=$R/run/mu300/thermal-caps
+# Remember only limits this guard set, preserving a user's lower ceiling.
+guard_lower() {
+    local p=$1 current ceiling applied file=$CAPS/${1##*/}
+    read -r current < "$p/scaling_max_freq" || return 1
+    ceiling=$current
+    if [ -r "$file" ]; then
+        IFS='|' read -r ceiling applied < "$file" || ceiling=$current
+        [ "$current" = "$applied" ] || ceiling=$current
+    fi
+    step "$p" -1 || return 0
+    read -r applied < "$p/scaling_max_freq" || return 1
+    mkdir -p "$CAPS" && printf '%s|%s\n' "$ceiling" "$applied" > "$file"
+}
+guard_release() {
+    local p=$1 current ceiling applied file=$CAPS/${1##*/}
+    [ -r "$file" ] || return 0
+    IFS='|' read -r ceiling applied < "$file" || return 1
+    read -r current < "$p/scaling_max_freq" || return 1
+    case $ceiling:$applied in *[!0-9:]*|:*|*:) return 1 ;; esac
+    # If another controller/user changed it, that newer choice wins.
+    [ "$current" != "$applied" ] || printf '%s\n' "$ceiling" > "$p/scaling_max_freq" || return 1
+    rm -f "$file"
+}
+guard_raise() {
+    local p=$1 current ceiling applied next f file=$CAPS/${1##*/}
+    [ -r "$file" ] || return 0
+    IFS='|' read -r ceiling applied < "$file" || return 1
+    read -r current < "$p/scaling_max_freq" || return 1
+    case $ceiling:$applied in *[!0-9:]*|:*|*:) return 1 ;; esac
+    if [ "$current" != "$applied" ] || [ "$current" -ge "$ceiling" ]; then
+        rm -f "$file"; return 0
+    fi
+    # Keep the previous gradual cool-down recovery, bounded by the user's cap.
+    next=$ceiling
+    for f in $(tr ' ' '\n' < "$p/scaling_available_frequencies" | sort -n); do
+        if [ "$f" -gt "$current" ] && [ "$f" -lt "$next" ]; then next=$f; fi
+    done
+    printf '%s\n' "$next" > "$p/scaling_max_freq" || return 1
+    if [ "$next" = "$ceiling" ]; then rm -f "$file"
+    else printf '%s|%s\n' "$ceiling" "$next" > "$file"; fi
+}
 while :; do
+    t=$(hottest)
     throttle=$legacy_throttle
     emergency=$legacy_throttle
     if [ -d "$R/sys/module/mu300_thermal" ]; then
         throttle=1; emergency=1
-        native_cpu_cooling && throttle=0
+        if native_cpu_cooling "$t"; then
+            throttle=0
+            for p in "$R"/sys/devices/system/cpu/cpufreq/policy*; do guard_release "$p"; done
+        fi
     fi
-    t=$(hottest)
     b=$(battery)
     if [ "$t" -ge "$CRIT" ] && [ "$emergency" = 1 ]; then
         logger -t thermal-guard "critical temperature ${t} mC, powering off"
         poweroff
     elif [ "$t" -ge "$HOT" ] && [ "$throttle" = 1 ]; then
-        for p in "$R"/sys/devices/system/cpu/cpufreq/policy*; do step "$p" -1; done
+        for p in "$R"/sys/devices/system/cpu/cpufreq/policy*; do guard_lower "$p"; done
         logger -t thermal-guard "hot (${t} mC): lowered cpufreq limits"
     elif [ "$t" -le "$COOL" ] && [ "$throttle" = 1 ]; then
         for p in "$R"/sys/devices/system/cpu/cpufreq/policy*; do
-            [ "$(cat $p/scaling_max_freq)" -lt "$(cat $p/cpuinfo_max_freq)" ] && step "$p" 1
+            guard_raise "$p"
         done
     fi
     if [ ! -e "$ALARM" ] && { [ "$t" -ge "$HOT" ] || [ "${b:-0}" -ge "$BATT_HOT" ]; }; then

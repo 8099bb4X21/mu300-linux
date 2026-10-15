@@ -2,6 +2,7 @@
 # Build a Magisk-installable OpenWrt-on-TF package with Linux 6.18 or 7.2.
 # Usage: MU300_KERNEL=6.18|7.2 MU300_INPUTS=work tools/build-openwrt-tf-magisk.sh [OUT.zip]
 # The TF image includes the standalone LuCI package from openwrt/luci-app-mu300.
+umask 022
 set -eu
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 IN=${MU300_INPUTS:-$TOP/work}
@@ -25,6 +26,16 @@ VERSION=${MU300_VERSION:-}
 [ -n "$VERSION" ] || VERSION=clean-tf-$KERNEL
 mkdir -p "$TOP/work"
 
+# Hybrid layout relocates original deployment files behind a thin Magisk entry;
+# desktop code is not added to the Magisk boot image.
+DESKTOP=${MU300_DESKTOP_INSTALLER:-1}
+DESKTOP_TOOLS=${MU300_DESKTOP_TOOLS:-$TOP/work/desktop-tools}
+if [ "$DESKTOP" = 1 ]; then
+    [ -s "$DESKTOP_TOOLS/lib/ld-musl-aarch64.so.1" ] || {
+        echo "desktop maintenance tools missing: $DESKTOP_TOOLS (set MU300_DESKTOP_TOOLS or MU300_DESKTOP_INSTALLER=0)" >&2; exit 1;
+    }
+fi
+
 for f in dumps/boot_a.img dumps/misc-head.bin busybox tools/logdw/logdw; do
     [ -s "$IN/$f" ] || { echo "missing $IN/$f" >&2; exit 1; }
 done
@@ -39,11 +50,24 @@ for f in wcn_bsp.ko sprd_wlan_combo.ko sprdbt_tty.ko mali_kbase.ko; do
 done
 [ -s "$UO/Image" ] || { echo "missing Linux $KERNEL Image in $UO" >&2; exit 1; }
 python3 "$TOP/upstream/check-container-support.py" "$UO"
+grep -qx 'CONFIG_LEDS_AW9523B=y' "$UO/kernel.config" || {
+    echo 'Shared F50/V50 firmware requires built-in AW9523B support; rebuild the kernel before packaging' >&2
+    exit 1
+}
 rel=$(strings "$UO/Image" | sed -n 's/^Linux version \([^ ]*\) .*/\1/p' | head -n1)
 case $rel in "$KERNEL".*) ;; *) echo "$UO is kernel '$rel', expected $KERNEL.x" >&2; exit 1 ;; esac
 for m in $(cat "$TOP/upstream/module-order.txt"); do
     [ -s "$UO/modules/$m" ] || { echo "missing $KERNEL module $m" >&2; exit 1; }
 done
+if grep -qx 'CONFIG_ARM_SPRD_CPUFREQ_V2=m' "$UO/kernel.config"; then
+    cpu_ko=$UO/modules/sprd-cpufreq-v2-driver.ko
+    [ -s "$cpu_ko" ] || { echo 'CPU voltage module missing; run build-modules.sh' >&2; exit 1; }
+    for feature in voltage_offset_uv scaling_voltage_table scaling_voltage_offset scaling_voltage_domain; do
+        strings "$cpu_ko" | grep -F "$feature" >/dev/null || {
+            echo "CPU module lacks $feature; rebuild modules before packaging" >&2; exit 1;
+        }
+    done
+fi
 for m in "$UO"/modules/*.ko; do
     v=$(strings "$m" | sed -n 's/^vermagic=\([^ ]*\) .*/\1/p' | head -n1)
     [ "$v" = "$rel" ] || { echo "$m is built for '$v', Image is '$rel'" >&2; exit 1; }
@@ -71,7 +95,7 @@ for f in ./lib/netifd/proto/mu300cell.sh ./lib/netifd/proto/mu300cell-v6.sh \
     ./opt/mu300/bin/mu300-keys ./opt/mu300/bin/mu300-bt-init ./opt/mu300/bin/mu300-atd ./opt/mu300/bin/mu300-at ./opt/mu300/bin/mobile-data \
     ./opt/mu300/bin/mu300-user-packages ./etc/init.d/mu300-user-packages ./etc/mu300/image-packages \
     ./opt/mu300/lib/wifi-channels.sh ./usr/share/ucode/wifi/hostapd.uc \
-    ./opt/mu300/bin/mu300-usb ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/mu300-data-sim ./opt/mu300/bin/mu300-dual-radio ./etc/init.d/mu300-post ./etc/init.d/mu300-atd \
+    ./opt/mu300/bin/mu300-usb ./opt/mu300/bin/v50-led-status ./opt/mu300/bin/mu300-platform-config ./opt/mu300/bin/openwrt-board-check ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/mu300-data-sim ./opt/mu300/bin/mu300-dual-radio ./etc/init.d/mu300-post ./etc/init.d/mu300-atd \
     ./etc/init.d/mu300-smsd ./opt/mu300/bin/mu300-smsd ./opt/mu300/bin/mu300-sms ./etc/sysctl.d/99-mu300-console.conf \
     ./usr/share/luci/menu.d/luci-app-mu300.json \
     ./www/luci-static/resources/view/mu300/home.js \
@@ -143,9 +167,18 @@ sed -i "s/7\.2/$KERNEL/g" "$STAGE/module.prop"
 cp "$IN/busybox" "$STAGE/busybox"
 cp "$ROOTFS" "$STAGE/mu300-openwrt.tar.gz"
 cp "$BOOT" "$STAGE/boot-linux.img"
+mkdir -p "$STAGE/kernel-evidence"
+cp "$UO/kernel.config" "$UO/modules.in-tree" "$UO/kernel.sha256" "$UO/modules.sha256" "$STAGE/kernel-evidence/"
 (cd "$STAGE" && sha256sum boot-linux.img | cut -d' ' -f1 > boot-linux.sha256)
 python3 "$TOP/tools/tf-payload-manifest.py" "$STAGE"
 chmod 755 "$STAGE"/*.sh "$STAGE/busybox"
+if [ "$DESKTOP" = 1 ]; then
+    if [ -n "${MU300_DESKTOP_EXE:-}" ]; then
+        python3 "$TOP/desktop/package.py" --stage "$STAGE" --tools "$DESKTOP_TOOLS" --kernel "$KERNEL" --exe "$MU300_DESKTOP_EXE"
+    else
+        python3 "$TOP/desktop/package.py" --stage "$STAGE" --tools "$DESKTOP_TOOLS" --kernel "$KERNEL"
+    fi
+fi
 rm -f "$OUT"
 python3 - "$STAGE" "$OUT" <<'PY'
 import os, sys, zipfile

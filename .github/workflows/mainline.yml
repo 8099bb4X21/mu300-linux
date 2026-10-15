@@ -68,6 +68,13 @@ jobs:
           docker run --rm -e KV="$KV" -v mu300-mainline:/src -v "$PWD/upstream":/work \
             mu300-mainline-build bash /work/build-modules.sh > /dev/null
           ls upstream/out/modules/*.ko | wc -l
+      - name: Check shared SDHCI DMA ordering
+        env:
+          KV: ${{ matrix.kv }}
+        run: |
+          docker run --rm -e KV="$KV" -v mu300-mainline:/src:ro \
+            -v "$PWD/upstream":/work:ro -v "$PWD/tests":/tests:ro \
+            mu300-mainline-build bash -c 'python3 /tests/test_emmc_dma.py "/src/linux-$KV" --adapter /work/port/emmc.py'
       - name: Build logs
         if: failure()
         run: tail -n 60 upstream/out/modules/*.log 2>/dev/null || true

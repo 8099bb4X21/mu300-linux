@@ -1,5 +1,5 @@
 #!/bin/sh
-# The U30 Air's NFC tag (Ubuntu and OpenWrt): a phone held against the device reads what is written there.
+# The U30 Air / V50 NFC tag (Ubuntu and OpenWrt): a phone held against the device reads what is written there.
 #   mu300-nfc                 what the tag holds (for Wi-Fi only the network name, never the password)
 #   mu300-nfc wifi            the hotspot's name and password: a phone joins the Wi-Fi with a tap
 #   mu300-nfc url URL         a link the phone opens (https://..., tel:..., mailto:..., geo:...)
@@ -17,12 +17,19 @@
 # field-detect interrupt still counts every tap), found by reading the chip with the switch on and off; this
 # changes that one byte and nothing else there (the same block holds the tag's I2C address).
 # (MU300_SYSROOT, MU300_BIN, MU300_HOTSPOT_CONF are for tests/)
-export PATH="$PATH:/opt/mu300/bin:/usr/sbin:/sbin"
+export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/sbin:/sbin"
 R=${MU300_SYSROOT:-}
 CONF=${MU300_HOTSPOT_CONF:-/etc/mu300/hotspot.conf}
 BUS=2 ADDR=0x57 LINE=190 START=16 CFG=0x3bf RF_OFF=0x20
 
 die() { echo "mu300-nfc: $*" >&2; exit 1; }
+reset_delay() {
+    # OpenWrt's small /bin/sleep rejects fractions; the bundled static
+    # BusyBox supports them. Keep a bounded fallback for minimal systems.
+    if [ -z "$R" ] && [ -x /opt/mu300/bin/busybox ]; then
+        /opt/mu300/bin/busybox sleep "$1" || sleep 1
+    else sleep "$1" 2>/dev/null || sleep 1; fi
+}
 i2ct() {  # i2ctransfer ARGS: i2c-tools when there, else busybox's
     if command -v i2ctransfer >/dev/null 2>&1 && [ "$(command -v i2ctransfer)" != /usr/bin/busybox ]; then i2ctransfer -y "$@"
     elif [ -z "$R" ] && [ -x /opt/mu300/bin/busybox ]; then /opt/mu300/bin/busybox i2ctransfer -y "$@"
@@ -34,7 +41,7 @@ HOLD=
 enable() {
     # 5.4: ZTE's fm11tag driver owns the line and offers it in /proc
     for f in "$R"/proc/ntag_gpios/*reset*; do
-        [ -e "$f" ] && { echo 0 > "$f" && HOLD=proc:$f; trap disable EXIT INT TERM; sleep 0.2; return; }
+        [ -e "$f" ] && { echo 0 > "$f" && HOLD=proc:$f; trap disable EXIT INT TERM; reset_delay 0.2; return; }
     done
     chip=
     for c in "$R"/sys/bus/gpio/devices/gpiochip*; do
@@ -47,7 +54,8 @@ enable() {
     else gpioset --mode=signal "$chip" "$LINE=0" </dev/null >/dev/null 2>&1 & fi
     HOLD=$!
     trap disable EXIT INT TERM
-    sleep 0.3
+    reset_delay 0.3
+    kill -0 "$HOLD" 2>/dev/null || die "cannot acquire NFC reset GPIO $LINE"
 }
 disable() {
     case $HOLD in
@@ -94,7 +102,7 @@ write_ndef() {  # write_ndef HEX...: from START, 16 bytes per write, each page o
         if [ "$have" != "$page" ]; then
             i2ct "$BUS" "w$((n + 2))@$ADDR" $(printf '0x%02x 0x%02x' $((o >> 8)) $((o & 255))) \
                 $(for x in $page; do printf ' 0x%s' "$x"; done) || die "cannot write the tag"
-            sleep 0.02 2>/dev/null || sleep 1   # the EEPROM's write cycle
+            reset_delay 0.02   # the EEPROM's write cycle
             [ "$(read16 $o | awk -v n=$n '{ for (i = 1; i <= n; i++) printf " %s", $i }')" = "$page" ] \
                 || die "the tag did not keep what was written (write-protected?)"
         fi
@@ -112,7 +120,7 @@ rf() {  # rf [on|off]: the RF side's switch, shown or set
     esac
     [ "$n" = "$v" ] && return
     i2ct "$BUS" "w3@$ADDR" 0x03 0xbf "$(printf 0x%02x "$n")" || die "cannot write the tag's configuration"
-    sleep 0.02 2>/dev/null || sleep 1
+    reset_delay 0.02
     [ $(( $(i2ct "$BUS" "w2@$ADDR" 0x03 0xbf r1) )) = "$n" ] || die "the tag did not keep its new configuration"
 }
 
@@ -188,14 +196,30 @@ describe() {  # describe HEX: the NDEF message in words (hex on stdin as words)
                 if (id == 4135) key = l
                 p += l
             }
-            print "wifi: " ssid (key ? " (with its password)" : " (open)")
+            # BusyBox awk otherwise parses "ssid (...)" as a function call.
+            print "wifi: " ssid "" (key ? " (with its password)" : " (open)")
         } else print "other: " type
     }'
 }
 
 # --- main -------------------------------------------------------------------------------------------------------
-[ "$(${MU300_BIN:-/opt/mu300/bin}/mu300-device)" = u30air ] || die "only the U30 Air has an NFC tag"
+case $("${MU300_BIN:-/opt/mu300/bin}/mu300-device") in
+    u30air) ;;
+    v50)
+        # Stock V50 fm11tag uses the AP GPIO controller, but not U30 Air's
+        # reset pin. Read its big-endian GPIO cell rather than guessing 190.
+        prop=$R/proc/device-tree/ntag_fm11_gpio/ntag-reset-gpio
+        [ -r "$prop" ] && [ "$(wc -c < "$prop")" = 12 ] || die "V50 NFC reset binding missing"
+        pin=$(od -An -tx1 -j4 -N4 "$prop" | tr -d ' \n')
+        case "$pin" in *[!0-9a-f]*|'') die "invalid NFC reset GPIO" ;; esac
+        [ "${#pin}" = 8 ] || die "invalid NFC reset GPIO cell"
+        LINE=$((0x$pin))
+        [ "$LINE" = 189 ] || die "unverified V50 NFC reset GPIO"
+        ;;
+    *) die "this device has no supported NFC tag" ;;
+esac
 case ${1:-show} in
+    supported) exit 0 ;;
     show|status|wifi|url|text|clear|sync|on|off) ;;
     *) sed -n '2,10s/^# \{0,1\}//p' "$0" >&2; exit 2 ;;
 esac

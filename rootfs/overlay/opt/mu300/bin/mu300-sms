@@ -33,6 +33,65 @@ at() {  # at CMD [timeout] -> reply lines
 }
 
 # ------------------------------------------------------------------ the pool
+sms_clock_cs() {
+    read -r sms_up sms_rest < /proc/uptime
+    sms_frac=${sms_up#*.}
+    sms_now=$(( ${sms_up%.*} * 100 + 1$sms_frac - 100 ))
+}
+at_unlock() {
+    if [ "$(cat "$ATDIR/lock/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$ATDIR/lock/pid"
+        rmdir "$ATDIR/lock" 2>/dev/null || true
+    fi
+    unset MU300_AT_LOCK_HELD
+}
+at_lock() {
+    local wait=${MU300_AT_LOCK_WAIT:-12} owner end
+    trap 'at_unlock; sms_op_unlock' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    case $wait in ''|*[!0-9]*) die "invalid AT lock wait" ;; esac
+    [ ${#wait} -le 3 ] || die "invalid AT lock wait"
+    while [ "${wait#0}" != "$wait" ]; do wait=${wait#0}; done
+    wait=${wait:-0}
+    sms_clock_cs; end=$((sms_now + wait * 100))
+    while ! mkdir "$ATDIR/lock" 2>/dev/null; do
+        owner=$(cat "$ATDIR/lock/pid" 2>/dev/null || true)
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+            rm -f "$ATDIR/lock/pid"
+            rmdir "$ATDIR/lock" 2>/dev/null || true
+        fi
+        [ -d "$ATDIR/lock" ] || continue
+        sms_clock_cs
+        [ "$sms_now" -lt "$end" ] || die "mu300-at: busy"
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+    echo $$ > "$ATDIR/lock/pid" || die "cannot claim AT lock"
+    export MU300_AT_LOCK_HELD=$$
+}
+
+# PR #177: preserve the modem's SMSC and its current CSCS representation.
+# Refresh failures are diagnostic only: never block the actual submission.
+smsc_refresh() {
+    local reply line addr type written
+    reply=$(at 'AT+CSCA?' 8 2>/dev/null) || {
+        echo 'mu300-sms: SMSC query failed; sending without refresh' >&2; return 0;
+    }
+    line=$(printf '%s\n' "$reply" | tr -d '\r' | sed -n 's/^+CSCA: *//p' | head -n1)
+    addr=; type=
+    case $line in
+        '"'*'",'[0-9]*) addr=${line%,*}; addr=${addr#\"}; addr=${addr%\"}; type=${line##*,} ;;
+    esac
+    case $addr in ''|*[!+0-9A-Fa-f]*) addr= ;; esac
+    case $type in [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) ;; *) addr= ;; esac
+    if [ -z "$addr" ] || [ ${#addr} -gt 64 ]; then
+        echo 'mu300-sms: invalid SMSC reply; sending without refresh' >&2; return 0
+    fi
+    written=$(at "AT+CSCA=\"$addr\",$type" 8 2>/dev/null)
+    case $written in *OK*) ;; *) echo 'mu300-sms: SMSC refresh refused; continuing send' >&2 ;; esac
+    return 0
+}
+
 # One file per message: "field: value" headers, a blank line, then the body verbatim to EOF
 # (bodies span lines). Everything the pool writes goes through name.part + mv so a reader never
 # sees a half-written message; the pool lock keeps two writers from sharing an id.
@@ -789,6 +848,8 @@ cmd_send() {
 
     sms_op_lock
     local r0 r2 submit
+    at_lock
+    smsc_refresh
     r0=$(at 'AT+CAVIMS=1' 6)
     case $r0 in *OK*) ;; *) die "modem refused AT+CAVIMS=1: $r0" ;; esac
     r0=$(at 'AT+CMGF=0' 6)       # PDU mode for the submit
@@ -800,6 +861,8 @@ cmd_send() {
     if ! printf '%s\n' "$r2" | grep -q '^+CMGS:'; then
         die "submit failed: $(printf '%s\n' "$r2" | grep -E 'CMS|ERROR' | head -1)"
     fi
+    # Never wait for the local pool while owning the AT channel.
+    at_unlock
     pool_init
     pool_lock
     # bytes above 0x7F mean the text is not plain GSM-7 ASCII and travelled as UCS-2

@@ -75,8 +75,14 @@ if [ -p "$DIR/cmd" ]; then
     # the two were the same path once, and since the daemon never lets go, every client then waited out the
     # full 90 s and gave up on an idle modem (see mu300-atd).
     lock=$DIR/lock
+    held=0
+    case ${MU300_AT_LOCK_HELD:-} in
+        ''|*[!0-9]*) ;;
+        *) [ "$(cat "$lock/pid" 2>/dev/null)" = "$MU300_AT_LOCK_HELD" ] &&
+           kill -0 "$MU300_AT_LOCK_HELD" 2>/dev/null && held=1 ;;
+    esac
     clock_cs; lock_end=$((now_cs + wait * 100))
-    while ! mkdir "$lock" 2>/dev/null; do
+    while [ "$held" = 0 ] && ! mkdir "$lock" 2>/dev/null; do
         # a client killed with SIGKILL cannot clean up after itself; take the lock over when its owner is gone
         owner=$(cat "$lock/pid" 2>/dev/null || true)
         if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
@@ -91,7 +97,9 @@ if [ -p "$DIR/cmd" ]; then
         [ "$now_cs" -ge "$lock_end" ] && { echo "mu300-at: busy" >&2; exit 1; }
         nap 0.1
     done
-    echo $$ > "$lock/pid" 2>/dev/null || { rmdir "$lock" 2>/dev/null; exit 1; }
+    if [ "$held" = 0 ]; then
+        echo $$ > "$lock/pid" 2>/dev/null || { rmdir "$lock" 2>/dev/null; exit 1; }
+    fi
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM

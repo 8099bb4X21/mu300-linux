@@ -6,7 +6,7 @@ KV=${KV:-6.18.54}
 [ "$(uname -m)" = aarch64 ] || export CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
 K=/src/linux-$KV
 O=/src/out-$KV
-OUT=/work/${OUTDIR:-out}   # as in build.sh
+OUT=${MU300_OUT_DIR:-/work/${OUTDIR:-out}}   # as in build.sh; keep module-name case
 # every out-of-tree module, in dependency order (wlan/bt use wcn_bsp, the PMIC watchdog and Mali the modem's headers)
 mods=${*:-wcn_bsp sprd_wlan_combo sprdbt_tty sprd_modem sprd_pmic_wdt mali mu300_thermal}
 mkdir -p $OUT/modules

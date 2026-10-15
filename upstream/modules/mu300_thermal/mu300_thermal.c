@@ -23,9 +23,11 @@ static int mu300_virtual_temp(struct thermal_zone_device *tz, int *temp)
 	for (i = 0; i < v->count; i++) {
 		ret = thermal_zone_get_temp(v->sensor[i], &value);
 		if (ret)
-			return ret; /* Never turn an unreadable sensor into a cold reading. */
+			continue; /* A broken sensor must not hide the other hot readings. */
 		hottest = max(hottest, value);
 	}
+	if (hottest == INT_MIN)
+		return -EIO; /* No valid sensor: never report a fabricated cold reading. */
 	*temp = hottest;
 	return 0;
 }

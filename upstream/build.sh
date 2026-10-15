@@ -4,7 +4,9 @@ set -eo pipefail
 KV=${KV:-6.18.54}
 [ "$(uname -m)" = aarch64 ] || export CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
 # where Image, DTB and modules.builtin go: /work/out for 6.18, OUTDIR=out-7.2 keeps another kernel next to it
-OUT=/work/${OUTDIR:-out}
+# WSL builds need a case-sensitive output for xt_RATEEST/xt_rateest modules.
+# MU300_OUT_DIR may point at a Linux-native bind mount instead of /work on NTFS.
+OUT=${MU300_OUT_DIR:-/work/${OUTDIR:-out}}
 # the kernel source, fetched once into the volume and checked against kernel.org's checksum list
 if [ ! -d /src/linux-$KV ]; then
     base=https://cdn.kernel.org/pub/linux/kernel/v${KV%%.*}.x
@@ -34,6 +36,10 @@ O=/src/out-$KV
 mkdir -p $O
 make O=$O ARCH=arm64 allnoconfig >/dev/null
 ./scripts/kconfig/merge_config.sh -m -O $O $O/.config /work/mu300-mainline.config >/dev/null
+# PR #228: NFSv4.1 is a separate prerequisite only on kernels exposing it.
+if grep -q '^config NFS_V4_1$' fs/nfs/Kconfig; then
+    scripts/config --file "$O/.config" --enable NFS_V4_1
+fi
 make O=$O ARCH=arm64 olddefconfig >/dev/null
 # options Kconfig did not take; ones known not to exist in this kernel are listed in config-ignored.txt, any
 # other one stops the build (a silently dropped option has cost a working feature before)

@@ -57,6 +57,7 @@ return view.extend({
 		this.wire(root);
 		this.reload();
 		M.simSelector(root);
+		this.watchJob(true);
 		return root;
 	},
 
@@ -116,25 +117,56 @@ return view.extend({
 	/* 动态提示统一走顶部 toast；页面底部那行只保留静态帮助文案 */
 	note: function(t, type) { M.toast(t, { type: type || 'info' }); },
 
+	watchJob: function(quiet) {
+		if (this._jobWatch) return;
+		this._jobWatch = true;
+		var self = this, btn = this.Q('sms-send'), announced = !quiet;
+		var slot = M.selectedSlot(), started = Date.now();
+		var stop = function() { self._jobWatch = false; M.busy(btn, false); };
+		var tick = function() {
+			if (!btn.isConnected) { stop(); return; }
+			M.callSmsJob(slot).then(function(j) {
+				if (!btn.isConnected) { stop(); return; }
+				if (j && j.running && Date.now() - started < 120000) {
+					if (!announced) { M.busy(btn, true); self.note('发送中…', 'busy'); announced = true; }
+					setTimeout(tick, 1000); return;
+				}
+				stop();
+				if (j && j.done && announced) self.sent(j);
+				else if (announced) self.note('调用失败', 'error');
+			}, function() { stop(); if (announced) self.note('调用失败', 'error'); });
+		};
+		tick();
+	},
+
+	sent: function(r) {
+		if (r.ok) {
+			this.note('已发送，稍后自动刷新。', 'success');
+			this.Q('sms-text').value = '';
+			setTimeout(L.bind(this.reload, this), 2500);
+		} else {
+			this.note(M.translate('发送失败：') + M.translate(r.error || '未知错误') +
+				(r.busy ? M.translate('（AT 通道正忙，稍后重试）') : ''), 'error');
+		}
+	},
+
 	send: function() {
+		if (this._sending || this._jobWatch) return;
 		var self = this;
 		var num = (this.Q('sms-num').value || '').trim();
 		var text = (this.Q('sms-text').value || '').replace(/\s+$/, '');
 		if (!num || !text) { this.note('号码和内容都要填。', 'error'); return; }
 		var btn = this.Q('sms-send');
+		this._sending = true;
 		M.busy(btn, true);
 		this.note('发送中…', 'busy');
 		L.resolveDefault(M.callSmsSend(num, text)).then(function(r) {
+			self._sending = false;
 			r = r || {};
+			if (r.ok && r.job) { self.watchJob(false); return; }
 			M.busy(btn, false);
-			if (r.ok) {
-				self.note('已发送，稍后自动刷新。', 'success');
-				self.Q('sms-text').value = '';
-				setTimeout(function() { self.reload(); }, 2500);
-			} else {
-				self.note('发送失败：' + (r.error || '未知错误') + (r.busy ? '（AT 通道正忙，稍后重试）' : ''), 'error');
-			}
-		}, function() { M.busy(btn, false); self.note('调用失败', 'error'); });
+			self.sent(r);
+		}, function() { self._sending = false; M.busy(btn, false); self.note('调用失败', 'error'); });
 	},
 
 	/* 聚合池子里的几页，按联系人分组 */

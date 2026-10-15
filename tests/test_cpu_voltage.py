@@ -65,6 +65,13 @@ class EarlyVoltageDiscovery(ShellTest):
         for shell in self.each_shell():
             r=self.sh(shell,check+'\nsupported')
             self.assertEqual(r.returncode,0,r.stderr)
+        self.stub('sha256sum','printf "%s  %s\\n" 5b3183f17af9b416e71dea61e578c61824e4e1df43737a1179032f4b20466b2b "$1"')
+        for shell in self.each_shell():
+            self.assertEqual(self.sh(shell,check+'\nsupported').returncode,0)
+        self.stub('sha256sum','printf "%s  %s\\n" unknown "$1"')
+        for shell in self.each_shell():
+            self.assertNotEqual(self.sh(shell,check+'\nsupported').returncode,0)
+        self.stub('sha256sum','printf "%s  %s\\n" 5b3183f17af9b416e71dea61e578c61824e4e1df43737a1179032f4b20466b2b "$1"')
         (self.tmp/'sys/class/block/mmcblk0p7/size').write_text('4096\n')
         for shell in self.each_shell():
             self.assertNotEqual(self.sh(shell,check+'\nsupported').returncode,0)

@@ -1,5 +1,6 @@
 """Fail closed when KVM is only requested, or optional modules never get shipped."""
 import hashlib
+import gzip
 import importlib.util
 import io
 import tarfile
@@ -24,6 +25,9 @@ class ContainerSupport(unittest.TestCase):
             (self.out / name).write_bytes(b'builtin metadata')
         self.config = {key: 'y' for key in support.BUILTIN}
         self.config.update({key: 'm' for key in support.MODULES})
+        import re
+        fragment = (TOP/'upstream/mu300-mainline.config').read_text()
+        self.config.update({k.removeprefix('CONFIG_'):v for k,v in re.findall(r'^(CONFIG_\w+)=(.*)$', fragment[fragment.index('# Adapted from MU300 PR #228'):], re.M)})
         (self.out / 'Image').write_bytes(b'Linux version 6.18.54 test Image')
         for name in support.MODULES.values():
             (self.out / 'modules' / f'{name}.ko').write_bytes(name.encode() + b'\0vermagic=6.18.54 SMP\0')
@@ -33,7 +37,9 @@ class ContainerSupport(unittest.TestCase):
         self.manifests()
 
     def write_config(self):
-        (self.out / 'kernel.config').write_text(''.join(f'CONFIG_{k}={v}\n' for k, v in self.config.items()))
+        config = ''.join(f'CONFIG_{k}={v}\n' for k, v in self.config.items())
+        (self.out / 'kernel.config').write_text(config)
+        (self.out / 'Image').write_bytes(b'Linux version 6.18.54 test Image' + b'IKCFG_ST' + gzip.compress(config.encode()) + b'IKCFG_ED')
 
     def manifests(self):
         for manifest, names in [('kernel.sha256', ['Image', 'kernel.config']),

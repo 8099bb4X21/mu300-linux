@@ -18,6 +18,62 @@ def function(text, name):
 
 
 class TxPressureLogging(unittest.TestCase):
+    def test_stale_peer_logging_keeps_pcie_and_sdio_rejection(self):
+        for backend in ('pcie', 'sdio'):
+            text = (WLAN / (backend + '.c')).read_text()
+            start = text.index('\tif (lut_index < 6 && (!sc2355_is_group(hif->skb_da))) {')
+            branch = text[start:text.index('\n\t}', start) + 3]
+            self.assertIn('pr_debug_ratelimited(', branch)
+            self.assertNotIn('pr_err(', branch)
+            self.run_c(r'''
+#include <assert.h>
+#include <errno.h>
+#define pr_debug_ratelimited(...) ((void)0)
+struct sprd_hif { unsigned char skb_da[6]; };
+static int sc2355_is_group(unsigned char *addr) { return addr[0] & 1; }
+static int check(int lut_index, struct sprd_hif *hif) {
+''' + branch + r'''
+    return 0;
+}
+int main(void) {
+    struct sprd_hif h = {0};
+    for (int group = 0; group < 2; group++) {
+        h.skb_da[0] = group;
+        for (int lut = 0; lut < 8; lut++)
+            assert(check(lut, &h) == ((lut < 6 && !group) ? -EPERM : 0));
+    }
+    return 0;
+}
+''')
+
+    def test_tx_failure_frees_each_packet_even_when_logging_is_limited(self):
+        text = (WLAN.parent / 'common/iface.c').read_text()
+        start = text.index('\tif (ret) {', text.index('\tret = sprd_send_data(vif->priv, vif, msg, skb,'))
+        branch = text[start:text.index('\n\t}', start) + 3]
+        self.run_c(r'''
+#include <assert.h>
+#define NETDEV_TX_OK 0
+static int logs, checks, freed, messages;
+static int net_ratelimit(void) { return checks++ < 10; }
+#define netdev_err(...) (++logs)
+static void dev_kfree_skb(void *p) { ++freed; }
+static void sprd_chip_free_msg(void *p, void *msg) { ++messages; }
+struct priv { int chip; };
+struct vif { struct priv *priv; };
+static int check(int ret, struct vif *vif) {
+    void *skb = vif, *msg = vif;
+''' + branch + r'''
+    return 99;
+}
+int main(void) {
+    struct priv p = {0}; struct vif v = {&p};
+    assert(check(0, &v) == 99 && !freed && !messages && !checks);
+    for (int i = 0; i < 50000; i++) assert(check(-1, &v) == NETDEV_TX_OK);
+    assert(freed == 50000 && messages == 50000 && logs == 10 && checks == 50000);
+    return 0;
+}
+''')
+
     def run_c(self, code):
         cc = shutil.which('cc')
         if not cc:

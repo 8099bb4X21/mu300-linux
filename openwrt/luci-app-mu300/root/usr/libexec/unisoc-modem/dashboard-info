@@ -346,6 +346,10 @@ printf '"wifi":{"available":%d,"enabled":%d,"pending":%d,"section":%s,"radio":%s
     "$W_AVAILABLE" "$W_ENABLED" "$W_PENDING" "$(qs "$W_SECTION")" "$(qs "$W_RADIO")" "$(qs "$W_ERROR")" "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_WIDTH")" "$(qs "$W_COUNTRY")" "$(qs "$W_ENC")" "$(n_or_null "$W_HIDDEN")" "$W_HOSTAPD" "${W_CLIST:-}" "$W_CN"
 printf '"lan":{"leases":%s,"ip":%s,"list":[%s]},' "$(n_or_null "$LAN_LEASES")" "$(qs "$LAN_IP")" "${LEASES:-}"
 printf '"modem":{"alive":%d,"atd":%d,"data_paused":%d},' "$MODEM_ALIVE" "$ATD_OK" "$DATA_PAUSED"
+# Source a builtin-only boot snapshot; this never changes startup intent.
+BOOT_STATUS_LIBRARY=1
+. "${MU300_DASH_BIN:-/usr/libexec/unisoc-modem}/boot-status"
+printf '"boot":'; boot_status; printf ','
 printf '"capabilities":{"vpn":%d,"dualboot":%d},' "$CAP_VPN" "$CAP_DUALBOOT"
 printf '"conns":%s,' "$(n_or_null "$CONNS")"
 # The accounting worker publishes one atomic JSON line; no extra RPC or AT

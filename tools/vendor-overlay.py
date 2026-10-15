@@ -68,6 +68,16 @@ def add_kernel_bundle(tar, bundle: Path, os_name, seen):
     return krel, len(kos)
 
 
+def host_free_mode(arc, is_dir):
+    """PR #199: derive imported modes from purpose, not FAT/exFAT host modes."""
+    if is_dir:
+        return 0o755
+    parts = arc.split('/')
+    if 'dev-properties' in parts[:-1]:
+        return 0o444
+    return 0o755 if parts[-2:-1] == ['bin'] else 0o644
+
+
 def add_tree(tar, src: Path, dest: str, seen: set, rename=None):
     for root, dirs, files in os.walk(src, followlinks=False):
         dirs.sort()
@@ -88,11 +98,7 @@ def add_tree(tar, src: Path, dest: str, seen: set, rename=None):
                 continue
             seen.add(arc)
             info = tar.gettarinfo(str(path), arcname=arc)
-            if os.name == 'nt':
-                # Windows knows no mode bits, only a read-only attribute, and gettarinfo therefore reports
-                # 0666/0444 for every file and 0777 for every directory there: write what a Linux host would
-                # have stored (mkdir 0755, adb pull 0644), so the installed system gets the same modes
-                info.mode = 0o755 if info.isdir() else (0o444 if not (info.mode & 0o200) else 0o644)
+            info.mode = 0o777 if info.issym() else host_free_mode(arc, info.isdir())
             info.uid = info.gid = 0
             info.uname = info.gname = 'root'
             if info.isfile():
@@ -123,6 +129,7 @@ def add_members(tar, src: Path, dest: str, seen: set, rename=None):
             seen.add(arc)
             info = copy.copy(m)
             info.name = arc
+            info.mode = 0o777 if info.issym() else host_free_mode(arc, info.isdir())
             info.uid = info.gid = 0
             info.uname = info.gname = 'root'
             tar.addfile(info, stored.extractfile(m) if m.isreg() else None)

@@ -7,6 +7,7 @@ export MU300_FORWARD_DIR=$base/config MU300_SMS_POOL=$base/pool MU300_FORWARD_RE
 export MU300_FORWARD_BATTERY=$base/battery MU300_SMS_BIN=/bin/false
 export MU300_FORWARD_RUNTIME=$base
 export MU300_FORWARD_RENDERER=${source%/*}/forward-template.uc
+export MU300_FORWARD_ANSWER=${source%/*}/forward-answer.uc
 mkdir -p "$base/config" "$base/pool/msg" "$base/pool/sim1/msg"
 printf '0\n' > "$base/pool/next_id"
 printf '0\n' > "$base/pool/sim1/next_id"

@@ -141,6 +141,13 @@ for n in ${MU300_AT_URC_CHANNELS-0}; do
         while IFS= read -r urc; do
             urc=${urc%"$CR"}
             capture_cmt "$urc"
+            # Registration changes already arrive on the persistent URC owner.
+            # No new AT query or polling timer for V50's second network lamp.
+            case "$n:$urc" in
+                0:+CEREG:*|3:+CEREG:*)
+                    [ ! -d /sys/class/leds/v50:net1:white ] ||
+                        /opt/mu300/bin/led-status sim-status "$((n / 3))" "$urc" >/dev/null 2>&1 ;;
+            esac
             printf '%s\n' "$urc" >> "$log"
             # cheap cap: start over rather than grow without end, /run is RAM
             [ "$(wc -c < "$log" 2>/dev/null || echo 0)" -gt "$URCMAX" ] && : > "$log"

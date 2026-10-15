@@ -169,14 +169,19 @@ class ReopenScript(ShellTest):
             dev = root / phy / 'device' / 'driver'
             dev.mkdir(parents=True)
             (dev / 'module').symlink_to(driver)
-        self.stub('wifi', 'echo "$*" >> "$STUBLOG/wifi"\n[ "$1" != down ]')  # still attempt up after failed down
+        self.stub('wifi', 'echo "$*" >> "$STUBLOG/wifi"\n'
+                  '[ "$1" != down ] || { [ "$DISABLE_DURING_DOWN" != 1 ] || '
+                  'touch "$STUBLOG/disabled"; exit 1; }')  # still attempt up after failed down
         self.stub('logger', ':')
         script = (TOP / 'openwrt/overlay/opt/mu300/bin/wcn-reopen').read_text()
         # Minimal config API fixture; the production selection/lock/reopen code runs unchanged.
         fixture = r'''
 config_load() { :; }
 config_foreach() { "$1" radio0; "$1" radio1; }
-config_get_bool() { eval "$1=\"${DISABLED:-0}\""; }
+config_get_bool() {
+    if [ -f "$STUBLOG/disabled" ]; then eval "$1=1";
+    else eval "$1=\"${DISABLED:-0}\""; fi
+}
 config_get() {
     case "${BINDING:-phy}:$2:$3" in
       phy:radio0:phy) eval "$1=phy0" ;;
@@ -200,6 +205,13 @@ config_get() {
                     else:
                         self.assertFalse((self.tmp / 'wifi').exists())
                     self.assertFalse((self.tmp / 'lock').exists())
+            (self.tmp / 'wifi').unlink(missing_ok=True)
+            r = self.sh(shell, script, DISABLE_DURING_DOWN='1')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual((self.tmp / 'wifi').read_text().splitlines(), ['down radio0'])
+            self.assertFalse((self.tmp / 'lock').exists())
+            (self.tmp / 'disabled').unlink()
+            (self.tmp / 'wifi').unlink()
             (self.tmp / 'lock').mkdir()
             r = self.sh(shell, script)
             self.assertEqual(r.returncode, 0, r.stderr)

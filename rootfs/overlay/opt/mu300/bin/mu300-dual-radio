@@ -21,45 +21,73 @@ for stream in "$root/mu300-at/urc/stty_nr0.ready" "$root/mu300-at4/urc/stty_nr3.
     reader=$(cat "$stream" 2>/dev/null)
     [ -n "$reader" ] && kill -0 "$reader" 2>/dev/null || fail 'URC reader not ready'
 done
+present0=1; present1=1
+for card in 0 1; do
+    pin=$(query "$card" 'AT+CPIN?')
+    case "$pin" in
+        *'+CME ERROR: 10'*) [ "$card" != 0 ] && present1=0 || present0=0 ;;
+        *'+CPIN:'*) ;;
+        *) fail "SIM $card presence unreadable" ;;
+    esac
+    if [ -x /opt/mu300/bin/v50-led-status ]; then
+        state=present
+        case "$pin" in *'+CME ERROR: 10'*) state=absent ;; esac
+        /opt/mu300/bin/v50-led-status sim-presence "$card" "$state" 2>/dev/null || :
+    fi
+done
+present() { case $1 in 0) [ "$present0" = 1 ] ;; 1) [ "$present1" = 1 ] ;; *) return 1 ;; esac; }
 cf0=$(cfun 0); cf1=$(cfun 1)
-if [ "$cf0" = 1 ] && [ "$cf1" = 1 ]; then
+if { [ "$present0" = 0 ] || [ "$cf0" = 1 ]; } && { [ "$present1" = 0 ] || [ "$cf1" = 1 ]; }; then
     actual=$(query 0 'AT+SPSWDATA?' | sed -n 's/^+SPSWDATA: *\([01]\)$/\1/p')
     case "$actual" in 0|1) printf '%s\n' "$actual" > "$root/mu300-data-sim-actual" ;; *) fail 'data SIM readback unavailable' ;; esac
     : > "$root/mu300-dual-radio-ready"; exit 0
 fi
-case "$cf0:$cf1" in
+check0=$cf0; check1=$cf1
+[ "$present0" != 0 ] || check0=0
+[ "$present1" != 0 ] || check1=0
+case "$check0:$check1" in
     0:0) ;;
     0:1|1:0)
         echo 'dual-radio: mixed radio power state; fresh dual-SIM boot required' >&2
         exit 4 ;;
     *) fail 'radio state unreadable' ;;
 esac
-for card in 0 1; do
-    query "$card" 'AT+CPIN?' | grep -qx '+CPIN: READY' || fail "SIM $card not ready"
-done
+# Only a positively absent card is skipped. The E5 RIL comparison found that
+# raising an empty first stack with only SIM2 inserted asserts mnphone_api.c.
+# A PIN-locked card is still present; registration is handled by the dial path.
 modes=$(query 0 'AT+SPTESTMODE?' | sed -n 's/^+SPTESTMODE: *//p' | tr -d ' ')
 printf '%s\n' "$modes" | grep -qE '^[0-9]+,[0-9]+,[01](,[0-9]+)*$' || fail 'invalid work mode readback'
 pair=$(printf '%s' "$modes" | cut -d, -f1-2)
 # No band policy is invented here. Retain the user's existing per-card modes
 # and lock replay; T551M-specific NR locks must never be forced onto an F50.
-ok 0 'AT+SFUN=2' || fail 'SIM 0 power-on rejected'
-ok 1 'AT+SFUN=2' || fail 'SIM 1 power-on rejected'
-ok 1 "AT+SPTESTMODEM=$pair" || fail 'SIM 1 mode initialization rejected'
-ok 0 "AT+SPTESTMODEM=$pair" || fail 'SIM 0 mode initialization rejected'
+for card in 0 1; do
+    present "$card" || continue
+    ok "$card" 'AT+SFUN=2' || fail "SIM $card power-on rejected"
+done
+for card in 1 0; do
+    present "$card" || continue
+    ok "$card" "AT+SPTESTMODEM=$pair" || fail "SIM $card mode initialization rejected"
+done
 if [ -x /usr/libexec/unisoc-modem/lock ]; then
     for card in 0 1; do
+        present "$card" || continue
         (
             . /usr/libexec/unisoc-modem/sim-scope.sh
             sim_scope "$card" && /usr/libexec/unisoc-modem/lock replay early
         ) || logger -t mu300-dual-radio "SIM $card early replay unverified"
     done
 fi
-ok "$target" 'AT+SPSWDATA' || fail 'data SIM selection rejected'
+if present "$target"; then
+    ok "$target" 'AT+SPSWDATA' || fail 'data SIM selection rejected'
+fi
 actual=$(query "$target" 'AT+SPSWDATA?' | sed -n 's/^+SPSWDATA: *\([01]\)$/\1/p')
-[ "$actual" = "$target" ] || fail 'data SIM readback mismatch'
+case "$actual" in 0|1) ;; *) fail 'data SIM readback unavailable' ;; esac
+if present "$target"; then [ "$actual" = "$target" ] || fail 'data SIM readback mismatch'; fi
 printf '%s\n' "$actual" > "$root/mu300-data-sim-actual"
-ok 0 'AT+SFUN=4' 20 || fail 'SIM 0 radio-on rejected'
-ok 1 'AT+SFUN=4' 20 || fail 'SIM 1 radio-on rejected'
-[ "$(cfun 0)" = 1 ] && [ "$(cfun 1)" = 1 ] || fail 'radio-on readback mismatch'
+for card in 0 1; do
+    present "$card" || continue
+    ok "$card" 'AT+SFUN=4' 20 || fail "SIM $card radio-on rejected"
+    [ "$(cfun "$card")" = 1 ] || fail "SIM $card radio-on readback mismatch"
+done
 : > "$root/mu300-dual-radio-ready"
 echo 'dual-radio: both SIM stacks ready' >&2

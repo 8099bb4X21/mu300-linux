@@ -92,11 +92,14 @@ function waitLockJob(started, active) {
 var callSmsList = scopedRpc({ object: 'mu300dash', method: 'sms_list', params: [ 'page' ], expect: { '': {} } });
 var callSmsShow = scopedRpc({ object: 'mu300dash', method: 'sms_show', params: [ 'id' ], expect: { '': {} } });
 var callSmsSend = scopedRpc({ object: 'mu300dash', method: 'sms_send', params: [ 'num', 'text' ], expect: { '': {} } });
+var smsJobRpc = rpc.declare({ object: 'mu300dash', method: 'sms_job', params: [ 'slot' ], nobatch: true, expect: { '': {} } });
+function callSmsJob(slot) { return smsJobRpc(slot == null ? selectedSlot() : String(slot)); }
 var callSmsDel  = scopedRpc({ object: 'mu300dash', method: 'sms_delete', params: [ 'id', 'sim' ], expect: { '': {} } });
 var callSmsSync = scopedRpc({ object: 'mu300dash', method: 'sms_sync', expect: { '': {} } });
 var callForwardGet = rpc.declare({ object: 'mu300dash', method: 'forward_get', params: [ 'profile' ], expect: { '': {} } });
 var callForwardStatus = rpc.declare({ object: 'mu300dash', method: 'forward_status', params: [ 'profile' ], expect: { '': {} } });
 var callForwardSet = rpc.declare({ object: 'mu300dash', method: 'forward_set', params: [ 'payload' ], expect: { '': {} } });
+var callForwardClear = rpc.declare({ object: 'mu300dash', method: 'forward_log_clear', expect: { '': {} } });
 var callForwardTest = rpc.declare({ object: 'mu300dash', method: 'forward_test', params: [ 'profile' ], expect: { '': {} } });
 var callTrafficGet = scopedRpc({ object: 'mu300dash', method: 'traffic_get', expect: { '': {} } });
 var callTrafficSet = scopedRpc({ object: 'mu300dash', method: 'traffic_set', params: [ 'payload' ], expect: { '': {} } });
@@ -494,6 +497,15 @@ var DASH_I18N = {
 	'测试消息': ['Test message', 'Test mesajı'],
 	'仅保留本次开机最近 30 次投递结果，不记录号码、地址或短信内容。': ['Keeps the last 30 delivery results since boot; no numbers, addresses or message content are recorded.', 'Açılıştan bu yana son 30 teslimat sonucu tutulur; numara, adres veya mesaj içeriği kaydedilmez.'],
 	'最近电源通知：': ['Last power notice: ', 'Son güç bildirimi: '],
+	"成功响应条件（可选）": ["Success response condition (optional)", "Başarılı yanıt koşulu (isteğe bağlı)"],
+	"留空时任意 HTTP 2xx 为成功；填写 errcode=0 或 ok=true 时，还需响应 JSON 顶层字段匹配。": ["Empty accepts any HTTP 2xx; errcode=0 or ok=true also checks a top-level JSON field.", "Boşken tüm HTTP 2xx yanıtları başarılıdır; errcode=0 veya ok=true üst düzey JSON alanını da denetler."],
+	"成功响应条件格式无效": ["Invalid success response condition", "Başarılı yanıt koşulu geçersiz"],
+	"服务返回失败结果": ["The service rejected the delivery", "Hizmet gönderimi reddetti"],
+	"服务响应无法确认成功": ["The service response does not confirm success", "Hizmet yanıtı başarıyı doğrulamıyor"],
+	"请等待 5 秒后再测试": ["Please wait 5 seconds before testing again", "Tekrar denemeden önce 5 saniye bekleyin"],
+	"清空投递记录": ["Clear delivery history", "Teslimat geçmişini temizle"],
+	"清空投递记录？": ["Clear delivery history?", "Teslimat geçmişi temizlensin mi?"],
+	"只清除最近投递记录，不影响短信、转发配置或已处理状态。": ["Only clears delivery history; messages, settings and processed state stay unchanged.", "Yalnızca teslimat geçmişini temizler; mesajlar, ayarlar ve işlenen kayıtlar korunur."],
 	'暂无投递': ['No delivery yet', 'Henüz teslimat yok'],
 	'发送成功': ['Sent successfully', 'Başarıyla gönderildi'],
 	'已拦截向原发件人转发': ['Forwarding to original sender blocked', 'Asıl gönderene yönlendirme engellendi'],
@@ -706,6 +718,10 @@ var DASH_I18N = {
 	'已执行': ['Done', 'Tamamlandı'],
 	'失败': ['Failed', 'Başarısız'],
 	'未知错误': ['Unknown error', 'Bilinmeyen hata'],
+	'状态暂不可读，请刷新后重试': ['State unavailable; refresh and retry', 'Durum okunamıyor; yenileyip tekrar deneyin'],
+	'关闭后只停止下次开机回放，已保存的网络、VoLTE 和 VoNR 设置不会被删除。': ['Turning this off only disables boot replay; saved network, VoLTE and VoNR settings are kept.', 'Kapatmak yalnızca açılışta uygulamayı durdurur; ağ, VoLTE ve VoNR ayarları korunur.'],
+	'VoLTE 用于 4G 通话，VoNR 用于 5G SA 通话。设置按当前查看的 SIM 保存，并跟随“开机自动应用”。': ['VoLTE handles 4G calls and VoNR handles 5G SA calls. Settings are saved per viewed SIM and follow Apply at boot.', 'VoLTE 4G, VoNR 5G SA aramaları içindir. Ayarlar görüntülenen SIM için kaydedilir ve açılışta uygulama ayarını izler.'],
+	'关闭 VoLTE 或 VoNR 不等于屏蔽全部来电和短信，传统网络业务仍可能到达。': ['Disabling VoLTE or VoNR does not block every call or SMS; traditional network services may still arrive.', 'VoLTE veya VoNR kapatıldığında tüm aramalar ve SMS engellenmez; geleneksel şebeke hizmetleri ulaşabilir.'],
 	'调用失败': ['Request failed', 'İstek başarısız'],
 	'正在断开数据连接': ['Disconnecting data', 'Veri bağlantısı kesiliyor'],
 	'正在拨号': ['Connecting data', 'Veri bağlantısı kuruluyor'],
@@ -724,7 +740,18 @@ var DASH_I18N = {
 	'蜂窝连接会中断 1-2 分钟': ['Cellular connectivity may stop for 1–2 minutes', 'Hücresel bağlantı 1–2 dakika kesilebilir'],
 	'重启整个设备': ['Restart the entire device', 'Tüm cihazı yeniden başlat'],
 	'所有连接会断开': ['All connections will be interrupted', 'Tüm bağlantılar kesilecek'],
-	'切换到 Android 系统': ['Switch to Android', 'Android sistemine geç'],
+	  '启动控制不可用': ['Boot control unavailable', 'Açılış kontrolü kullanılamıyor'],
+ '启动控制正忙，请稍后重试': ['Boot control is busy; try again later', 'Açılış kontrolü meşgul; sonra tekrar deneyin'],
+ '启动控制信息无效': ['Invalid boot control information', 'Açılış kontrol bilgisi geçersiz'],
+ '启动控制回读校验失败': ['Boot control readback verification failed', 'Açılış kontrolü geri okuma doğrulaması başarısız'],
+ '启动控制回退失败，请检查启动设置': ['Boot control rollback failed; check boot settings', 'Açılış kontrolü geri alma başarısız; açılış ayarlarını kontrol edin'],
+ '默认启动设置失败，请重试': ['Could not save the default boot; try again', 'Varsayılan açılış kaydedilemedi; tekrar deneyin'],
+'当前为临时启动 OpenWrt': ['OpenWrt was booted temporarily', 'OpenWrt geçici olarak başlatıldı'],
+ '是否将 OpenWrt 设为默认启动？不会立即重启或断网。': ['Make OpenWrt the default boot? This will not reboot or interrupt networking.', 'OpenWrt varsayılan açılsın mı? Yeniden başlatma veya ağ kesintisi olmaz.'],
+ '设为默认启动': ['Make default boot', 'Varsayılan başlatma yap'],
+ '以后开机默认进入 OpenWrt；启动失败仍保留 Android 回退。现在不会重启。': ['Future boots will use OpenWrt, with Android fallback if startup fails. No reboot now.', 'Sonraki açılışlar OpenWrt kullanır; başarısızlıkta Android geri dönüşü korunur. Şimdi yeniden başlatılmaz.'],
+ '当前启动镜像不支持设置默认启动': ['This boot image cannot set a default boot', 'Bu açılış imajı varsayılan başlatmayı ayarlayamaz'],
+'切换到 Android 系统': ['Switch to Android', 'Android sistemine geç'],
 	'下次启动将进入 Android 并立即重启，此管理页面与蜂窝共享都会断开': ['The next boot will enter Android and reboot now. This management page and cellular sharing will disconnect', 'Sonraki açılış Android’e geçecek ve cihaz şimdi yeniden başlayacak. Yönetim sayfası ve hücresel paylaşım kesilecek'],
 	'回到 OpenWrt：在 Android 上执行 mu300-next-boot linux 后重启': ['To return to OpenWrt, run mu300-next-boot linux in Android and reboot', 'OpenWrt’ye dönmek için Android’de mu300-next-boot linux çalıştırıp yeniden başlatın'],
 	'或什么都不做，连续 5 次开机未完成会自动回退': ['Or do nothing: five failed boots trigger automatic fallback', 'Ya da hiçbir şey yapmayın: beş başarısız açılışta otomatik geri dönülür'],
@@ -1151,6 +1178,16 @@ html.mud-bootstrap-theme{--surface:var(--background-color-high);--surface-sunken
 .mud-freq .mud-k{flex:0 0 2.4em}
 .mud-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;border:1px solid var(--hairline,var(--border,#ccc));border-radius:var(--radius-base,.5rem);background:var(--surface,var(--background,#fff));color:var(--text,#222);font-size:.82rem;cursor:pointer;user-select:none}
 .mud-btn:active{transform:scale(.97)}
+.mud-voice-row{align-items:center;gap:12px;padding:8px 0}
+.mud-voice-row .mud-v{flex:1;text-align:right;min-width:0;overflow-wrap:anywhere}
+.mud-btn.mud-voice-switch{flex:0 0 48px;min-height:36px;padding:6px;border:0;border-radius:18px;background:transparent;color:var(--text,#222)}
+.mud-voice-switch:focus-visible{outline:2px solid var(--brand,var(--primary,#2f7bf6));outline-offset:2px}
+.mud-voice-track{position:relative;display:block;width:36px;height:22px;flex:0 0 36px;border-radius:12px;background:var(--muted,#777);transition:background .18s}
+.mud-voice-track:after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .18s}
+.mud-voice-switch.on .mud-voice-track{background:var(--brand,var(--primary,#2f7bf6))}
+.mud-voice-switch.on .mud-voice-track:after{transform:translateX(14px)}
+@media(prefers-reduced-motion:reduce){.mud-voice-track,.mud-voice-track:after{transition:none}}
+
 .mud-btn.on{background:var(--brand,var(--primary,#2f7bf6));border-color:var(--brand,var(--primary,#2f7bf6));color:var(--on-brand,#fff)}
 .mud-btn.warn{border-color:color-mix(in oklab,var(--danger,#E25555) 55%,transparent);color:var(--danger,#E25555)}
 .mud-btn[disabled]{opacity:.4;pointer-events:none}
@@ -1567,11 +1604,11 @@ return baseclass.extend({
 	callRates: callRates, callCells: callCells, mergeCell: mergeCell, callStatus: callStatus, callSignal: callSignal, callSysinfo: callSysinfo, callAct: callAct, callAt: callAt, callAtHist: callAtHist,
 	callLockGet: callLockGet, callLockFresh: callLockFresh, callLockSet: callLockSet,
 	callLockStatus: callLockStatus, waitLockJob: waitLockJob,
-	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend,
+	callSmsList: callSmsList, callSmsShow: callSmsShow, callSmsSend: callSmsSend, callSmsJob: callSmsJob,
 	callSmsDel: callSmsDel, callSmsSync: callSmsSync,
 	callForwardGet: callForwardGet, callForwardStatus: callForwardStatus,
 	callSimGet: callSimGet, simSelector: simSelector, selectedSlot: selectedSlot, selectViewedSlot: selectViewedSlot,
-	callForwardSet: callForwardSet, callForwardTest: callForwardTest,
+	callForwardSet: callForwardSet, callForwardTest: callForwardTest, callForwardClear: callForwardClear,
 	callTrafficGet: callTrafficGet, callTrafficSet: callTrafficSet,
 	callTrafficClear: callTrafficClear,
 	callUsbGet: callUsbGet, callUsbSet: callUsbSet,

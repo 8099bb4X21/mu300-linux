@@ -87,14 +87,18 @@ echo 1 > /proc/sys/kernel/sysrq
 # Which device this is. The ZTE U30 Air is the F50's board with a battery: ZTE's SQC charger stack, USB-PD, LEDs.
 # It runs the same kernel with its own build of a few modules (linux-modules/u30air/, see kernel/build-u30air.sh)
 # and its own load order; without them the charger manager never probes and USB stays down. The installer names
-# the device in /etc/mu300-device (the device segment of the ramdisk, which the generic segment of an update does
-# not replace); without that file the stock device tree tells: only the U30 Air's has the charger policy service.
-if [ -s /etc/mu300-device ]; then
-    DEVICE=$(cat /etc/mu300-device)
-elif [ -d /proc/device-tree/charger_policy_service ]; then
+# the device in /etc/mu300-device. Hardware takes priority: an old installation
+# may have labelled a V50 as f50, and updates retain that device ramdisk segment.
+if [ -d /proc/device-tree/charger_policy_service ]; then
     DEVICE=u30air
-else
+elif [ -d /proc/device-tree/soc/soc:ap-ahb/i2c@2270000/aw9523b_led@5b ] ||
+     [ -d /proc/device-tree/soc/ap-ahb/i2c@2270000/aw9523b_led@5b ]; then
+    DEVICE=v50
+elif [ -d /proc/device-tree ]; then
     DEVICE=f50
+else
+    DEVICE=$(cat /etc/mu300-device 2>/dev/null)
+    case $DEVICE in f50|v50|u30air) ;; *) DEVICE=f50 ;; esac
 fi
 # its modules only for the kernel they were built for (a mainline kernel brings its own set and order)
 MODULE_ORDER=/etc/module-order

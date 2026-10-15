@@ -25,6 +25,11 @@ const labels = {
 	'Signal lamp brightness': ['信号灯亮度', 'Sinyal ışığı parlaklığı'],
 	'Wi-Fi hotspot lamp': ['Wi-Fi 热点灯', 'Wi-Fi erişim noktası ışığı'],
 	'Wi-Fi lamp brightness': ['Wi-Fi 灯亮度', 'Wi-Fi ışığı parlaklığı'],
+	'NET1 lamp (SIM 1)': ['NET1 灯（SIM1）', 'NET1 ışığı (SIM 1)'],
+	'NET2 lamp (SIM 2)': ['NET2 灯（SIM2）', 'NET2 ışığı (SIM 2)'],
+	'NET1 brightness': ['NET1 亮度', 'NET1 parlaklığı'],
+	'NET2 brightness': ['NET2 亮度', 'NET2 parlaklığı'],
+	'Each network lamp shows its own SIM status. Wi-Fi: 5 GHz white, 2.4 GHz blue.': ['两组网络灯分别显示各自 SIM 的注册状态；Wi-Fi：5 GHz 白色、2.4 GHz 蓝色。', 'Ağ ışıkları kendi SIM durumlarını gösterir. Wi-Fi: 5 GHz beyaz, 2.4 GHz mavi.'],
 	'0–255; 0 is dark. LTE stays blue, 5G white, and no service red.': ['0–255；0 为熄灭。4G 仍为蓝色、5G 为白色、无信号为红色。', '0–255; 0 ışığı kapatır. 4G mavi, 5G beyaz, servis yoksa kırmızı kalır.'],
 	'0 is dark. Hardware maximum: ': ['0 为熄灭。硬件最大值：', '0 ışığı kapatır. Donanım üst sınırı: '],
 	'Add LED action': ['添加 LED 动作', 'LED eylemi ekle'],
@@ -73,6 +78,8 @@ return view.extend({
 
 	render([leds, plugins]) {
 		let m, s, o;
+		const awRgb = !!(leds.aw_led && leds.red && leds.green && leds.blue);
+		const v50 = !!leds['v50:net1:white'];
 		let wifiMax = leds['keyboard-backlight'] && Number(leds['keyboard-backlight'].max_brightness);
 		if (!Number.isInteger(wifiMax) || wifiMax < 1 || wifiMax > 255) wifiMax = 255;
 		const triggers = [];
@@ -90,14 +97,23 @@ return view.extend({
 		s = m.section(form.NamedSection, 'mu300_leds', 'mu300_leds', label('Physical status lamps'));
 		s.anonymous = true;
 		s.addremove = false;
-		o = s.option(form.Flag, 'signal', label('Signal lamp (LTE / 5G / no service)'));
+		if (v50) s.description = label('Each network lamp shows its own SIM status. Wi-Fi: 5 GHz white, 2.4 GHz blue.');
+		o = s.option(form.Flag, 'signal', label(v50 ? 'NET1 lamp (SIM 1)' : 'Signal lamp (LTE / 5G / no service)'));
 		o.default = '1';
 		o.rmempty = false;
-		o = s.option(form.Value, 'signal_brightness', label('Signal lamp brightness'),
+		o = s.option(form.Value, 'signal_brightness', label(v50 ? 'NET1 brightness' : 'Signal lamp brightness'),
 			label('0–255; 0 is dark. LTE stays blue, 5G white, and no service red.'));
 		o.datatype = 'range(0,255)';
 		o.default = '255';
 		o.rmempty = false;
+		if (v50) {
+			o = s.option(form.Flag, 'signal2', label('NET2 lamp (SIM 2)'));
+			o.default = '1'; o.rmempty = false;
+			o = s.option(form.Value, 'signal2_brightness', label('NET2 brightness'));
+			o.datatype = 'range(0,255)'; o.default = '255'; o.rmempty = false;
+			wifiMax = 255; // normalized brightness, scaled to each physical channel
+		}
+		if (!awRgb || v50) {
 		o = s.option(form.Flag, 'wifi', label('Wi-Fi hotspot lamp'));
 		o.default = '1';
 		o.rmempty = false;
@@ -106,6 +122,7 @@ return view.extend({
 		o.datatype = 'range(0,' + wifiMax + ')';
 		o.default = String(Math.min(127, wifiMax));
 		o.rmempty = false;
+		}
 
 		s = m.section(form.GridSection, 'led', '');
 		s.anonymous = true;

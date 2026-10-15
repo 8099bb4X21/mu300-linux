@@ -49,6 +49,10 @@ async function main() {
     Date.now = oldDate;
     // All newly emitted backend error messages are translated in both locales.
     let messages = ['已应用并核对模组状态','等待模组能力数据','正在确认设置结果…'];
+    messages.push('状态暂不可读，请刷新后重试',
+        '关闭后只停止下次开机回放，已保存的网络、VoLTE 和 VoNR 设置不会被删除。',
+        'VoLTE 用于 4G 通话，VoNR 用于 5G SA 通话。设置按当前查看的 SIM 保存，并跟随“开机自动应用”。',
+        '关闭 VoLTE 或 VoNR 不等于屏蔽全部来电和短信，传统网络业务仍可能到达。');
     for (const file of ['lock-apply.sh','lock-jobs.sh']) {
         const src=fs.readFileSync(path.join(root,'root/usr/libexec/unisoc-modem',file),'utf8');
         messages.push(...[...src.matchAll(/'([^'\n]*[\u3400-\u9fff][^'\n]*)'/g)]
@@ -65,7 +69,13 @@ async function main() {
     // modem in a browser test, but do check confirmation, SIM scope and busy.
     let selected=1, confirm, modal, requests=[], finishJob, failJob, notes=[];
     const elements=new Map();
-    const pageRoot={isConnected:true, querySelectorAll:()=>[], querySelector:selector=>{
+    const voices=['volte','vonr'].map(kind=>({
+        dataset:{voice:kind},setAttribute(k,v){this[k]=v;}
+    }));
+    assert(!locks.includes('data-enabled='));
+    assert(!locks.includes("['ims','volte','vonr']"));
+    assert(locks.includes('role="switch"'));
+    const pageRoot={isConnected:true, querySelectorAll:selector=>selector==='[data-voice]' ? voices : voices.filter(b=>selector==='[data-voice="'+b.dataset.voice+'"]'), querySelector:selector=>{
         if(!elements.has(selector)) elements.set(selector, {
             classList:{toggle:()=>{}}, addEventListener:()=>{}, querySelectorAll:()=>[], children:[]
         });
@@ -82,6 +92,41 @@ async function main() {
     page.refresh=()=>Promise.resolve();
     page.note=(text,type)=>notes.push({text,type});
     page.wire(pageRoot);
+    page.lastLock={volte:{enabled:true},vonr:{enabled:true}};
+    page._root=pageRoot;
+    page.paintVoiceSwitches(page.lastLock);
+    for(const kind of ['volte','vonr']) {
+        const btn=voices.find(b=>b.dataset.voice===kind);
+        assert.equal(btn['aria-checked'],'true');
+        assert.equal(btn.disabled,false);
+        btn.onclick();assert.equal(modal.options.danger,false);
+        confirm(false);await flush();assert.equal(requests.length,0);
+        btn.onclick();confirm(true);await flush();
+        assert.deepEqual(requests,[{kind,val:'off',slot:1}]);
+        assert.equal(btn.busy,true);
+        finishJob({...start,kind});await flush();
+        assert.equal(btn.busy,false);assert.equal(page._applying,false);
+        requests.length=0;notes.length=0;
+    }
+    // The same button toggles in both directions, follows live readback,
+    // and cannot guess an unreadable state or send a request while busy.
+    const toggle=voices[0];
+    page.lastLock.volte.enabled=false;
+    page.paintVoiceSwitches(page.lastLock);
+    assert.equal(toggle['aria-checked'],'false');
+    toggle.onclick();confirm(true);await flush();
+    assert.deepEqual(requests,[{kind:'volte',val:'on',slot:1}]);
+    finishJob({...start,kind:'volte'});await flush();
+    requests.length=0;
+    page.lastLock.volte.enabled=null;
+    page.paintVoiceSwitches(page.lastLock);
+    assert.equal(toggle.disabled,true);
+    toggle.onclick();await flush();assert.equal(requests.length,0);
+    page.lastLock.volte.enabled=true;page._applying=true;
+    page.paintVoiceSwitches(page.lastLock);
+    assert.equal(toggle.disabled,true);
+    page._applying=false;
+    page.paintVoiceSwitches(page.lastLock);
     const reset=elements.get('#mud-lock-reset');
     lang='en'; reset.onclick();
     assert.equal(modal.title,'Clear all locks for SIM 2?');

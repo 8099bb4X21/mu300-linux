@@ -6,7 +6,7 @@
 #     ./ramdisk-generic.lz4  boot/init, busybox, logdw and the modules of upstream/module-order.txt
 #     ./modules/*.ko         every module, for /lib/modules/<release> on the root filesystem
 #     ./kernel.release       the kernel's release string (uname -r)
-#     ./devices              the devices it runs on (f50 u30air)
+#     ./devices              boards supported by this actual kernel build
 #     ./modules.builtin*     what the kernel has built in, for depmod/modprobe
 # busybox and logdw are the static helpers of the 5.4 bundle (default: the newest one under release/).
 set -eu
@@ -52,9 +52,16 @@ python3 "$TOP/boot/build-boot-image.py" --generic-ramdisk --modules "$UO/modules
     --ueventd-perms "$TOP/android-vendor/ueventd-perms.sh" --out "$W/b/ramdisk-generic.lz4" >/dev/null
 cp "$UO"/modules/*.ko "$W/b/modules/"
 for f in modules.builtin modules.builtin.modinfo; do [ ! -f "$UO/$f" ] || cp "$UO/$f" "$W/b/"; done
+cp "$UO/kernel.config" "$UO/modules.in-tree" "$UO/modules.sha256" "$UO/kernel.sha256" "$W/b/"
 echo "$krel" > "$W/b/kernel.release"
 # the devices this kernel runs on; mu300-update and the installers check it (FINDINGS 33c: mainline kernels from
 # before this file do not bring up the U30 Air's USB)
-echo "f50 u30air" > "$W/b/devices"
+devices='f50 u30air'
+# Do not mark an older kernel as V50-compatible just because the packaging
+# source is newer. V50's physical lamps require the built-in AW9523B driver.
+if grep -qx 'CONFIG_LEDS_AW9523B=y' "$UO/kernel.config"; then
+    devices="$devices v50"
+fi
+echo "$devices" > "$W/b/devices"
 tar -C "$W/b" -czf "$OUT" .
 echo "$OUT: kernel $krel, $(ls "$W/b/modules" | wc -l | tr -d ' ') modules, ramdisk segment $(wc -c < "$W/b/ramdisk-generic.lz4" | tr -d ' ') bytes"
