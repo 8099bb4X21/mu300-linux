@@ -769,15 +769,14 @@ class Usb(ShellTest):
             self.assertEqual(self.reg('0x01'), 0x1a)
             self.assertEqual(self.reg('0x05'), (0x9f & ~0x30) | 0x10)
 
-    def test_refuses_while_powered(self):
+    def test_powered_hub_uses_external_supply_without_boost(self):
         for shell in self.each_shell():
             self.regs(r01='0x1a', r05='0x9f', r08='0x24')   # power good, a USB host drives VBUS
             (self.tmp / 'writes').unlink(missing_ok=True)
             r = self.usb(shell, 'host')
-            self.assertEqual(r.returncode, 1)
-            self.assertIn('unplug it first', r.stderr)
-            self.assertFalse((self.tmp / 'writes').exists())   # not a single register written
-            self.assertEqual(self.role(), 'device')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.reg('0x01') & 0x20, 0)
+            self.assertEqual(self.role(), 'host')
 
     def test_boot_switches_a_leftover_boost_off(self):
         for shell in self.each_shell():

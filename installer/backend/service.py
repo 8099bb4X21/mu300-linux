@@ -12,9 +12,10 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 import zipfile
 
-from .adapter import Adapter
+from .adapter import Adapter, installation_committed
 from .package import inspect_package
 from .state import Cancelled, Context, DeviceLock, Pending, RecoveryRequired, Store, compatible
 from .transport import Adb
@@ -91,6 +92,9 @@ class Service:
         self.package = None
         self.adapters = Adapter
         self.stop = threading.Event()
+        self.verification_lock = threading.Lock()
+        self.verification_request = None
+        self.verification_wake = threading.Event()
 
     def emit(self, kind, data, request_id=None):
         event = {'protocol': 1, 'type': kind, 'data': data}
@@ -120,7 +124,7 @@ class Service:
         if command == 'list':
             return [self.public(r) for r in self.store.list()]
         if command == 'cancel':
-            if self.active:
+            if self.active and self.worker and self.worker.is_alive():
                 self.active.cancel = True
                 self.active.record['cancel_requested'] = True
                 self.store.save(self.active.record)
@@ -128,6 +132,39 @@ class Service:
             return {'accepted': False}
         if command == 'can_close':
             return not self.worker or not self.worker.is_alive()
+        if command == 'verify_openwrt':
+            context = self.active
+            if (not context or not self.worker or not self.worker.is_alive() or
+                    p.get('transaction') != context.record['id'] or context.record['unsafe'] or
+                    context.record['stage'] != 'openwrt_boot' or
+                    context.record['status'] not in ('waiting_user','waiting_device')):
+                raise ValueError('OpenWrt verification is unavailable at this stage / 当前阶段不能确认 OpenWrt 启动')
+            host = p.get('host', '')
+            password = p.get('password', '')
+            if not isinstance(host,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}',host):
+                raise ValueError('Enter an IP address or hostname / 请输入 IP 地址或主机名')
+            if not isinstance(password,str) or len(password)>4096:
+                raise ValueError('Invalid SSH password / SSH 密码无效')
+            with self.verification_lock:
+                self.verification_request = (context.record['id'], host, password)
+                self.verification_wake.set()
+            return {'accepted':True}
+        if command == 'diagnostics':
+            record = self.store.load(p['transaction'])
+            ctx = Context(self.store, record, lambda *_:None)
+            header = {key:record.get(key) for key in ('version','revision','stage','status','choices','plan','completed','error')}
+            header['model'] = record['device'].get('model')
+            header['package'] = {key:record['package'].get(key) for key in ('adapter','profile','kernel','layout')}
+            parts = ['OpenWrt Installer diagnostics (redacted)\n'+ctx.sanitize(json.dumps(header,ensure_ascii=False,indent=2))]
+            for name in ('debug.previous.ndjson','debug.ndjson'):
+                path = ctx.directory/name
+                if path.is_file():
+                    with path.open('rb') as stream:
+                        size = stream.seek(0, 2)
+                        stream.seek(max(0, size-512*1024))
+                        parts.append(name+'\n'+stream.read().decode('utf-8','replace'))
+            if len(parts)==1:parts.append('This older transaction has no debug log. Retry with the current installer to record detailed diagnostics.')
+            return {'text':'\n\n'.join(parts)}
         if self.worker and self.worker.is_alive() and command not in ('export',):
             raise ValueError('An operation is active / 任务正在执行')
         if command == 'package':
@@ -172,12 +209,16 @@ class Service:
                 raise ValueError('This plan has not been confirmed / 此计划尚未确认')
             self.store.save(record)
             context = Context(self.store, record, self.emit)
+            context.private.append(p.get('password', ''))
             adapter = self.adapter(current, context)
             adapter.password = p.get('password', '')
             context.cancel = False
             record['cancel_requested'] = False
             record['error'] = None
             self.active = context
+            with self.verification_lock:
+                self.verification_request = None
+                self.verification_wake.clear()
             self.worker = threading.Thread(target=self.run, args=(context, adapter), daemon=False)
             self.worker.start()
             return self.public(record)
@@ -225,12 +266,13 @@ class Service:
             client.connect(host, username='root', password=p.get('password', ''), timeout=12,
                            auth_timeout=15, look_for_keys=False, allow_agent=False)
             key = hashlib.sha256(client.get_transport().get_remote_server_key().asbytes()).hexdigest()
-            def read(script):
+            def read_bytes(script):
                 _, out, err = client.exec_command(script, timeout=15)
-                data = out.read().decode('utf-8', 'replace').strip()
+                data = out.read()
                 if out.channel.recv_exit_status():
                     raise ValueError('OpenWrt preflight failed / OpenWrt 预检失败')
                 return data
+            def read(script):return read_bytes(script).decode('utf-8','replace').strip()
             if read('id -u') != '0':
                 raise ValueError('SSH root required')
             kind = self.package['adapter']
@@ -241,11 +283,10 @@ class Service:
             if not re.fullmatch('[a-f0-9]{32}', cid):
                 raise ValueError('Cannot establish OpenWrt eMMC identity')
             capacity = int(read("df -Pk / | awk 'END {print $2}'"))*1024
-            import base64
             root_dev = read('cat /run/mu300/disk-dev' if kind == 'mu300' else
                             "readlink -f $(awk '$2==\"/\" {print $1}' /proc/mounts | tail -1)")
             if re.fullmatch(r'/dev/(?:block/)?(?:mmcblk\d+(?:p\d+)?|loop\d+)', root_dev):
-                raw = base64.b64decode(read(f'dd if={root_dev} bs=1024 skip=1 count=1 2>/dev/null | base64'))
+                raw = read_bytes(f'dd if={root_dev} bs=1024 skip=1 count=1 2>/dev/null')
                 capacity = verify_ext4_capacity(raw, 0)
             return dict(serial='ssh:'+key, cid=cid, ssh_key=key, host=host, profile=profile,
                         model=profile.upper(), system='OpenWrt', slot=read('cat /run/mu300/linux-slot') if kind == 'mu300' else 'B',
@@ -259,7 +300,8 @@ class Service:
             with ExitStack() as locks:
                 for identity in sorted({r['device']['serial'], r['device']['cid']}):
                     locks.enter_context(DeviceLock(self.store.base, identity))
-                if r['stage'] == 'openwrt_boot':
+                if r['stage'] in ('openwrt_boot', 'verify_capacity') or installation_committed(r):
+                    self.openwrt_wait_stage(context)
                     return self.wait_openwrt(context, adapter)
                 if r.get('legacy'):
                     self.wait_android(context, adapter)
@@ -282,13 +324,14 @@ class Service:
                 if result is not None and getattr(result, 'state', '') == 'pending' and r.get('legacy'):
                     self.wait_android(context, adapter)
                     result = adapter.execute()
-                context.stage('openwrt_boot', 'waiting_device', reboot_manually=True)
+                self.openwrt_wait_stage(context)
                 self.wait_openwrt(context, adapter)
         except Cancelled:
             context.stage(r['stage'], 'cancelled')
         except BaseException as error:
-            message = str(error)[:2000] if isinstance(error, (ValueError, RecoveryRequired)) else \
-                      'Operation interrupted; keep backups and retry from the saved record / 操作中断，请保留备份并从记录续装'
+            context.private.append(adapter.password)
+            context.log(''.join(traceback.format_exception(error)), level='error', scope='exception')
+            message = context.sanitize(f'{type(error).__name__}: {error}')[:2000]
             for private in (r['device'].get('serial'), r['device'].get('cid'), adapter.password,
                             r.get('secrets', {}).get('wifi_key')):
                 if private: message = message.replace(private, '[redacted]')
@@ -320,6 +363,19 @@ class Service:
             if self.stop.wait(3):
                 raise Cancelled()
 
+    def openwrt_wait_stage(self, context, error=None, connection_state=None):
+        r = context.record
+        # These entrypoints send their own reboot request. The other install
+        # paths finish after verified writes and explicitly leave reboot to the user.
+        manual = r['choices']['method'] != 'update' and not (
+            r['package']['adapter'] == 'e5' and r['choices']['method'] == 'boot')
+        manual = manual and not r.get('openwrt_confirmed',False)
+        host = r['choices'].get('host') or ('192.168.9.1' if r['package']['adapter'] == 'e5' else
+                '192.168.78.1' if r['device']['profile'] == 'u30air' else '192.168.77.1')
+        context.stage('openwrt_boot', 'waiting_user' if manual or error else 'waiting_device',
+                      host=host, reboot_manually=manual, boot_confirmed=bool(r.get('openwrt_confirmed')),
+                      verification_error=error, connection_state=connection_state)
+
     def wait_openwrt(self, context, adapter):
         import paramiko
         r = context.record
@@ -328,30 +384,53 @@ class Service:
         # No network/interface changes and no automatic hotspot connection.
         while True:
             context.boundary()
+            with self.verification_lock:
+                pending = self.verification_request
+                self.verification_request = None
+                self.verification_wake.clear()
+            if pending and pending[0] == r['id']:
+                _, host, adapter.password = pending
+                context.private.append(adapter.password)
+                r['choices']['host'] = host
+                r['openwrt_confirmed'] = True
+                self.openwrt_wait_stage(context)
+                context.log('User confirmed OpenWrt boot; checking the selected management address', scope='verification')
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
                 client.connect(host, username='root', password=adapter.password or 'root', timeout=5,
                                auth_timeout=5, look_for_keys=False, allow_agent=False)
-                def read(script):
+                def read_bytes(script):
                     _, out, _ = client.exec_command(script, timeout=15)
-                    value = out.read().decode().strip()
-                    if out.channel.recv_exit_status():
+                    value = out.read()
+                    status = out.channel.recv_exit_status()
+                    if status < 0:
+                        raise EOFError('SSH closed before a command exit status was received')
+                    if status:
                         raise ValueError('Final verification command failed')
                     return value
+                def read(script):return read_bytes(script).decode().strip()
                 cid = read('cat /sys/class/block/mmcblk0/device/cid')
                 if cid != r['device']['cid']:
                     raise RecoveryRequired('Management address belongs to another device / 管理地址对应另一台设备')
+                if r['choices']['method'] == 'update':
+                    before = r.get('update_boot_id')
+                    if not before:
+                        raise ValueError('Update record lacks pre-update boot evidence; automatic completion cannot be verified / 旧更新记录缺少重启前标识，无法自动确认更新完成，请保留记录人工复核')
+                    boot_id = read('cat /proc/sys/kernel/random/boot_id')
+                    if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',boot_id):
+                        raise ValueError('Cannot verify post-update boot identity / 无法校验更新后的启动标识')
+                    if boot_id == before:
+                        raise Pending()
                 context.stage('verify_capacity')
-                # Read superblock via SSH base64; no od/SFTP dependency.
-                import base64
+                # SSH exec preserves raw stdout bytes; no encoding/od/SFTP.
                 if r['package']['adapter'] == 'e5':
                     dev = read("readlink -f $(awk '$2==\"/\" {print $1}' /proc/mounts | tail -1)")
                 else:
                     dev = read('cat /run/mu300/disk-dev')
                 if not re.fullmatch(r'/dev/(?:block/)?(?:mmcblk\d+(?:p\d+)?|loop\d+)', dev):
                     raise ValueError('Cannot identify installed root block device')
-                raw = base64.b64decode(read(f'dd if={dev} bs=1024 skip=1 count=1 2>/dev/null | base64'))
+                raw = read_bytes(f'dd if={dev} bs=1024 skip=1 count=1 2>/dev/null')
                 capacity = verify_ext4_capacity(raw, r['plan']['openwrt_bytes'] if r['plan'].get('grow', True) else 0)
                 # Mounted and usable, not just a larger partition entry.
                 read('test -s /etc/openwrt_release && test -x /sbin/init')
@@ -360,14 +439,29 @@ class Service:
                                'temporary': r['choices']['method'] == 'boot'}
                 context.stage('complete', 'completed')
                 return
-            except (RecoveryRequired, ValueError):
+            except Pending:
+                # The old runtime can still answer during the scheduled reboot
+                # delay. It is not proof that the new system has started.
+                self.openwrt_wait_stage(context)
+            except RecoveryRequired as error:
+                # The default address can belong to another router. Keep all
+                # writes blocked, but let the user select the intended endpoint.
+                self.openwrt_wait_stage(context, str(error))
+            except ValueError:
                 raise
-            except (OSError, EOFError, paramiko.SSHException):
-                context.stage('openwrt_boot', 'waiting_device', host=host, reboot_manually=True)
+            except paramiko.AuthenticationException:
+                self.openwrt_wait_stage(context, 'SSH authentication failed; check the root password / SSH 认证失败，请核对 root 密码')
+            except (OSError, EOFError, paramiko.SSHException) as error:
+                # Transport loss is expected during restart, including refused
+                # connections, missing interfaces, timeouts and SSH EOF. Keep
+                # retrying without a user-facing warning or arbitrary deadline.
+                context.log(f'Waiting for OpenWrt reconnection: {type(error).__name__}: {error}', scope='reconnect')
+                self.openwrt_wait_stage(context, connection_state='reconnecting')
             finally:
                 client.close()
-            if self.stop.wait(4):
-                raise Cancelled()
+            for _ in range(40):
+                if self.verification_wake.is_set():break
+                if self.stop.wait(.1):raise Cancelled()
 
 
 def verify_ext4_capacity(superblock, expected):
@@ -392,8 +486,8 @@ def main():
     a = p.parse_args()
     output = sys.stdout
     service = Service(a.package_root, Store(a.data_dir), output)
-    # Legacy prints are suppressed at the source; service replies always use
-    # this captured protocol stream, even while legacy code redirects stdout.
+    # Legacy prints become sanitized diagnostic events; protocol replies use
+    # this captured stream even while legacy code redirects stdout.
     for line in sys.stdin:
         if len(line) > 1024*1024:
             continue
@@ -403,7 +497,11 @@ def main():
             value = service.dispatch(request)
             service.emit('response', {'ok': True, 'result': value}, request.get('id'))
         except Exception as error:
-            service.emit('response', {'ok': False, 'error': str(error)[:2000]}, request.get('id'))
+            from .diagnostics import redact
+            params = request.get('params', {})
+            private = [params.get(key) for key in ('serial','password')] if isinstance(params,dict) else []
+            message = redact(f'{type(error).__name__}: {error}',private)[:2000]
+            service.emit('response', {'ok': False, 'error': message}, request.get('id'))
     # EOF requests safe cancellation; never kill a storage operation.
     if service.active:
         service.active.cancel = True

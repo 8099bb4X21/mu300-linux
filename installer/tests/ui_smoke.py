@@ -10,7 +10,7 @@ BRIDGE=r"""
  const device = {serial:'fixture-1234',model:'E5',system:'Android',slot:'_a',root:true,readiness:'ready',encrypted:true,profile:'e5'};
  const pkg = {path:'D:/OpenWrt-Package',name:'e5-openwrt-release',adapter:'e5',profile:'e5',kernel:'v2'};
  const tx = {id:'a'.repeat(32),status:'ready',stage:'plan',device,package:pkg,choices:{method:'part'},plan:{wipe:true,two_stage:true,offline:true,openwrt_bytes:10737418240,android_bytes:21474836480,target:'userdata shrink',grow:true},completed:[],unsafe:false,updated:Date.now()/1000};
- window.__fixture={tx,callbacks,records:[tx],fail:null,requests:[]};
+ window.__fixture={tx,callbacks,records:[tx],fail:null,requests:[],calls:[],probed:{}};
  window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};
  window.__TAURI_INTERNALS__={
   transformCallback(fn,once){const id=seq++;callbacks.set(id,fn);return id;},
@@ -22,15 +22,19 @@ BRIDGE=r"""
    if(cmd==='plugin:event|unlisten')return;
    if(cmd==='backend_request'){
     window.__fixture.requests.push(args.command);
+    window.__fixture.calls.push({command:args.command,params:args.params});
     if(window.__fixture.fail===args.command)throw new Error('Fixture: operation rejected');
     switch(args.command){
      case 'hello':return {package_path:pkg.path,transactions:window.__fixture.saved || []};
      case 'package':return pkg;
-     case 'devices':return [{...device,label:'E5',state:'device'},{serial:'fixture-5678',label:'Other device',state:'unauthorized'}];
-     case 'probe':return device;
-     case 'plan':return tx;
+     case 'devices':return window.__fixture.devices ?? [{...device,label:'E5',state:'device'},{serial:'fixture-5678',label:'Other device',state:'unauthorized'}];
+     case 'probe':return {...device,...window.__fixture.probed,serial:args.params.serial};
+     case 'plan':Object.assign(tx,{choices:{...args.params.choices},device:{...device,...window.__fixture.probed,serial:args.params.serial},plan:{...tx.plan,method:args.params.choices.method,wipe:args.params.choices.method==='part',two_stage:args.params.choices.method==='part',offline:args.params.choices.method==='part',target:args.params.choices.method==='reinstall'?'mmcblk1p20':'userdata shrink'}});return {...tx};
      case 'list':return window.__fixture.records;
-     case 'start':tx.stage='android_setup';tx.status='waiting_user';return {...tx};
+     case 'start':if(window.__fixture.startRace){const older={...tx,stage:'android_setup',status:'waiting_user',revision:1};window.__emitFixture({stage:'complete',status:'completed',revision:2,result:{filesystem_bytes:10737418240,url:'http://192.168.9.1'}});return older;}tx.stage='android_setup';tx.status='waiting_user';return {...tx};
+     case 'cancel':return {accepted:window.__fixture.cancelAccepted ?? true,deferred:false};
+     case 'verify_openwrt':return {accepted:true};
+     case 'diagnostics':return {text:'DEBUG fixture diagnostics: commands, traceback and verified bytes (redacted)'};
      default:return null;
     }
    }
@@ -123,7 +127,8 @@ def main():
         assert page.locator('h1').bounding_box()==before
         assert page.locator('.records-list').evaluate('(el)=>el.scrollTop>0')
         page.evaluate('window.__logFixture()')
-        page.get_by_role('button',name='详细日志',exact=False).click();settle(page);layout(page)
+        if page.get_by_role('button',name='详细日志',exact=False).get_attribute('aria-expanded')=='false':page.get_by_role('button',name='详细日志',exact=False).click()
+        settle(page);layout(page)
         assert page.locator('.records-list').evaluate('(el)=>el.clientHeight>=100')
         assert page.locator('.log-panel pre').evaluate('(el)=>el.scrollHeight>el.clientHeight')
         assert page.locator('.log-toggle span').inner_text()=='500'

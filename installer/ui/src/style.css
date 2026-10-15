@@ -98,6 +98,16 @@ main{position:relative;display:flex;flex-direction:column;padding:28px 36px 18px
 .activity-heading>svg{color:hsl(var(--primary));flex-shrink:0;}
 .activity-heading p{font-size:12px;color:hsl(var(--muted-foreground));margin-top:6px;}
 .waiting-guidance{font-size:13px;line-height:1.9;margin-top:20px;}
+.boot-guidance{display:flex;gap:10px;align-items:flex-start;flex-shrink:0;padding:12px 14px;margin:0 0 12px;border:1px solid hsl(var(--primary)/.3);border-radius:8px;background:hsl(var(--primary)/.06);font-size:13px;line-height:1.7;}
+.boot-guidance>svg{flex-shrink:0;color:hsl(var(--primary));margin-top:1px;}
+.boot-wait .log-inner{height:min(145px,18dvh);}
+.boot-wait .status-line{margin:10px 0 14px;}
+.verification-controls{flex-shrink:0;}
+.verification-controls .form-grid{grid-template-columns:1fr 1fr;gap:12px;margin:8px 0 0;}
+.verification-controls input{min-width:0;width:100%;}
+.verification-error{font-size:12px;color:hsl(var(--destructive));line-height:1.5;margin-top:6px;}
+.network-guidance{font-size:12px;line-height:1.7;}
+@media(max-height:720px){.boot-wait .log-inner{height:88px;}.boot-wait .boot-guidance{padding:8px 10px;font-size:12px;line-height:1.6;margin-bottom:6px;}.boot-wait .actions{padding-top:10px;}.boot-wait .backup-actions{margin-top:8px;}.boot-wait .log-panel{margin-top:10px;padding-top:8px;}}
 .transfer{margin:25px 0 10px;}
 .transfer>div{display:flex;justify-content:space-between;font-size:12px;}
 progress{display:block;width:100%;height:7px;margin:13px 0;accent-color:hsl(var(--primary));border-radius:4px;}
@@ -115,6 +125,7 @@ progress{display:block;width:100%;height:7px;margin:13px 0;accent-color:hsl(var(
 .log-toggle>span{margin-left:auto;font-size:11px;}
 .log-panel pre{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;background:hsl(var(--muted));border-radius:6px;padding:14px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere;}
 .log-actions{display:flex;justify-content:flex-end;margin:10px 0;}
+.log-actions>small{margin-right:auto;align-self:center;font-size:11px;color:hsl(var(--muted-foreground));}
 .log-actions button{font-size:11px;height:30px;}
 footer{flex-shrink:0;border-top:1px solid hsl(var(--border));padding:12px 30px;display:flex;justify-content:space-between;color:hsl(var(--muted-foreground));font-size:10px;}
 footer span{display:flex;align-items:center;gap:6px;}
@@ -135,6 +146,9 @@ h1{font-size:24px;}
 
 
 html,body,#root {width:100%;height:100%;overflow:hidden;}
+body {-webkit-user-select:none;user-select:none;}
+input:not([type=checkbox]),textarea,[contenteditable=true],.file-path,.device-card strong,.plan-list dd,.log-panel pre,.help-markdown,.help-markdown *,.app-toast .toast-description,.error-message {-webkit-user-select:text;user-select:text;}
+.device-hint {font-size:12px;color:hsl(var(--muted-foreground));margin-top:12px;line-height:1.7;}
 * {box-sizing:border-box;}
 .page {display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden;}
 .page>h1,.page>.eyebrow,.page>.status-line,.page>.resume-tools,.page>.form-grid {flex-shrink:0;}
@@ -169,6 +183,13 @@ input:not([type=checkbox]):hover,select:hover {border-color:hsl(var(--primary)/.
 .log-inner {height:min(190px,24dvh);display:flex;flex-direction:column;}
 .log-panel pre {margin:0;tab-size:2;}
 .log-actions {flex-shrink:0;margin:6px 0;}
+.stage-progress {margin-top:20px;}
+.stage-progress>small {display:block;color:hsl(var(--muted-foreground));font-size:11px;line-height:1.7;}
+.indeterminate-progress {height:7px;background:hsl(var(--muted));border-radius:6px;overflow:hidden;margin:10px 0 7px;}
+.indeterminate-progress>div {height:100%;width:32%;border-radius:6px;background:hsl(var(--primary)/.4);}
+.indeterminate-progress.is-running>div {background:hsl(var(--primary));animation:stage-activity 1.6s ease-in-out infinite;}
+.copy-diagnostics {margin-top:12px;}
+@keyframes stage-activity {from{transform:translateX(-105%);}to{transform:translateX(320%);}}
 .backup-actions {flex-shrink:0;margin:14px 0 0;}
 .resume-tools {margin:0 0 12px;}
 .resume-password {display:flex;flex-shrink:0;align-items:center;gap:12px;margin:0 0 16px;font-size:12px;}
@@ -202,7 +223,7 @@ input:not([type=checkbox]):hover,select:hover {border-color:hsl(var(--primary)/.
 .help-topics button {width:100%;text-align:left;font-size:13px;line-height:1.6;padding:11px 12px;border-radius:7px;margin-bottom:4px;transition:background-color .15s,color .15s;}
 .help-topics button:hover {background:hsl(var(--muted));}
 .help-topics button[aria-current=page] {color:hsl(var(--primary));background:hsl(var(--primary)/.09);font-weight:600;}
-.help-article {padding:24px 26px;min-height:0;user-select:text;}
+.help-article {padding:24px 26px;min-height:0;}
 .help-article>h2 {font-size:19px;margin-bottom:18px;}
 .help-article:focus-visible {outline:2px solid hsl(var(--primary));outline-offset:-4px;}
 .help-markdown {font-size:13px;line-height:1.85;overflow-wrap:anywhere;}

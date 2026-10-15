@@ -81,6 +81,7 @@ MU300_INPUTS="$IN" MU300_LUCI_PLUGIN_SRC="$TOP/openwrt/luci-app-mu300" MU300_VER
     sh "$TOP/openwrt/build-rootfs.sh" mu300-openwrt-release.tar.gz >/dev/null
 mv "$TOP/openwrt/mu300-openwrt-release.tar.gz" "$D/mu300-openwrt-rootfs.tar.gz"
 for f in ./opt/mu300/bin/mu300-at ./opt/mu300/bin/mobile-data \
+    ./opt/mu300/bin/mu300-data-sim-u30 ./opt/mu300/bin/mu300-sim-u30 ./opt/mu300/bin/mu300-sim2-start ./opt/mu300/bin/mu300-sim2-warmup ./opt/mu300/lib/sim-config.sh \
     ./opt/mu300/bin/mu300-user-packages ./etc/init.d/mu300-user-packages ./etc/mu300/image-packages \
     ./opt/mu300/lib/wifi-channels.sh ./usr/share/ucode/wifi/hostapd.uc ./opt/mu300/bin/v50-led-status ./opt/mu300/bin/mu300-platform-config ./opt/mu300/bin/mu300-sim-env ./opt/mu300/bin/mu300-data-sim ./opt/mu300/bin/mu300-dual-radio ./usr/share/luci/menu.d/luci-app-mu300.json ./www/luci-static/resources/view/mu300/home.js \
     ./lib/netifd/hostapd-unisoc.sh ./usr/share/ucode/wifi/unisoc-sae.uc \
@@ -103,7 +104,7 @@ for f in ./opt/mu300/bin/mu300-at ./opt/mu300/bin/mobile-data \
     ./usr/libexec/unisoc-modem/cpu-voltage ./usr/libexec/unisoc-modem/cpu-voltage.uc \
     ./opt/mu300/bin/cpu-voltage-platform ./etc/init.d/mu300-cpu-driver \
     ./etc/rc.d/S08mu300-cpu-driver ./etc/rc.d/K89unisoc-cpu \
-    ./usr/libexec/unisoc-modem/sms-forward ./usr/libexec/unisoc-modem/forward-template.uc \
+    ./usr/libexec/unisoc-modem/sms-forward ./usr/libexec/unisoc-modem/power-supply.sh ./usr/libexec/unisoc-modem/forward-template.uc \
     ./www/luci-static/resources/view/mu300/forward.js ./etc/init.d/unisoc-sms-forward \
     ./usr/libexec/unisoc-modem/data-sim ./www/luci-static/resources/view/mu300/sim.js \
     ./www/luci-static/resources/view/mu300/device.js ./usr/libexec/unisoc-modem/device-usb \

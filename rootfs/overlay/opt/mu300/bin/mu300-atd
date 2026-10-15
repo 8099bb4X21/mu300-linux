@@ -258,7 +258,7 @@ while :; do
     # gone away, and then there is nothing left to lose.
     if [ -z "$reply" ]; then
         silent=$((silent + 1))
-        if [ "$silent" -ge 5 ] && [ $(( $(now) - last_reopen )) -ge 300 ] && ! modem_alive; then
+        if [ "${MU300_AT_DISABLE_REOPEN:-0}" != 1 ] && [ "$silent" -ge 5 ] && [ $(( $(now) - last_reopen )) -ge 300 ] && ! modem_alive; then
             echo "mu300-atd: no reply and no URCs either, the modem looks gone; reopening $DEV" >&2
             last_reopen=$(now)
             if open_tty; then

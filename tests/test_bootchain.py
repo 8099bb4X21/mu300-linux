@@ -101,6 +101,12 @@ class Fixture(ShellTest):
     def run_bc(self, shell, *args, **env):
         e = dict(MU300_BY_NAME=self.by, MU300_SKIP_ROOT_CHECK=1, MU300_DROP_CACHES=self.tmp / 'no-drop-caches')
         e.update(env)
+        if (self.stubs/'dd').is_file():
+            # BusyBox ash may prefer its built-in applet over PATH. Force the
+            # injected dd so corruption/target-audit tests actually exercise
+            # readback/restore rather than silently running the real applet.
+            return subprocess.run(shell+['-c','dd() { "$STUBLOG/stubs/dd" "$@"; }; . "$0"',str(SCRIPT)]+[str(a) for a in args],
+                                  capture_output=True,text=True,env=self.env(**e),timeout=60)
         return self.script(shell, SCRIPT, *args, **e)
 
 

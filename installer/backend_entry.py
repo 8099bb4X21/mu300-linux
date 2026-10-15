@@ -1,7 +1,6 @@
 """Frozen NDJSON entry; no console window is created by the Tauri host."""
 import argparse
 from pathlib import Path
-import runpy
 import sys
 from backend.service import main
 
@@ -12,8 +11,8 @@ for stream in (sys.stdin, sys.stdout, sys.stderr):
 if __name__ == '__main__':
     if len(sys.argv) > 2 and sys.argv[1] == '--run-tool':
         tool = sys.argv[2]
-        sys.argv = [tool, *sys.argv[3:]]
-        runpy.run_path(tool, run_name='__main__')
+        from backend.helpers import execute_script
+        execute_script(tool, sys.argv[3:])
     elif '--cli' in sys.argv:
         from backend.adapter import load
         parser = argparse.ArgumentParser(add_help=False)

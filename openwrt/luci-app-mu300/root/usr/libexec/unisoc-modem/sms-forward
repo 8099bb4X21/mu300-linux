@@ -19,7 +19,10 @@ RENDERER=${MU300_FORWARD_RENDERER:-/usr/libexec/unisoc-modem/forward-template.uc
 SMS=${MU300_SMS_BIN:-$(uci -q get unisoc_modem.main.sms_command 2>/dev/null)}
 [ -n "$SMS" ] || SMS=$(command -v mu300-sms 2>/dev/null || true)
 case "$SMS" in */*) ;; *) SMS=$(command -v "$SMS" 2>/dev/null || true) ;; esac
-BATTERY=${MU300_FORWARD_BATTERY:-/sys/class/power_supply/battery}
+POWER_LIB=${MU300_POWER_LIB:-${0%/*}/power-supply.sh}
+[ -r "$POWER_LIB" ] || POWER_LIB=${RENDERER%/*}/power-supply.sh
+[ -r "$POWER_LIB" ] || POWER_LIB=/usr/libexec/unisoc-modem/power-supply.sh
+. "$POWER_LIB"
 NL='
 '
 CR=$(printf '\r')
@@ -313,9 +316,10 @@ read_result() {
 }
 power_read() {
     power_ok=0 current_percent=-1 current_status=none
-    [ -r "$BATTERY/present" ] && [ "$(cat "$BATTERY/present" 2>/dev/null)" = 1 ] || return 0
-    current_percent=$(cat "$BATTERY/capacity" 2>/dev/null)
-    current_status=$(cat "$BATTERY/status" 2>/dev/null)
+    local battery
+    battery=$(power_battery_dir "${MU300_FORWARD_BATTERY:-}") || return 0
+    current_percent=$(power_supply_read "$battery/capacity")
+    current_status=$(power_supply_read "$battery/status")
     number "$current_percent" && [ "$current_percent" -le 100 ] || return 0
     case "$current_status" in Charging|Discharging|Not\ charging|Full) power_ok=1 ;; esac
 }

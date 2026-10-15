@@ -6,7 +6,7 @@ use std::{collections::HashMap, io::{BufRead, BufReader, Write}, path::PathBuf,
 use tauri::{Emitter, Manager, State};
 use tokio::sync::oneshot;
 
-const COMMANDS: &[&str] = &["hello","snapshot","list","package","devices","probe","probe_update","plan","start","resume","retry","cancel","can_close","export","import"];
+const COMMANDS: &[&str] = &["hello","snapshot","list","package","devices","probe","probe_update","plan","start","resume","retry","cancel","can_close","export","import","diagnostics","verify_openwrt"];
 struct Bridge {
     input: Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
@@ -25,7 +25,10 @@ async fn backend_request(state: State<'_, Arc<Bridge>>, command: String, params:
     let line = json!({"protocol":1,"id":id,"command":command,"params":params}).to_string()+"\n";
     let written = {
         let mut input = state.input.lock().unwrap();
-        input.as_mut().ok_or("Backend is unavailable")?.write_all(line.as_bytes()).map_err(|e|e.to_string())
+        match input.as_mut() {
+            Some(stream) => stream.write_all(line.as_bytes()).map_err(|e|e.to_string()),
+            None => Err("Backend is unavailable".to_string()),
+        }
     };
     if let Err(error) = written {state.pending.lock().unwrap().remove(&id); return Err(error);}
     // Verification and large archives can take minutes. No artificial device wait deadline.

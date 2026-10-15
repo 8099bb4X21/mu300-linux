@@ -120,6 +120,32 @@ class StateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Select'):
             service.dispatch({'protocol':1,'command':'probe','params':{}})
 
+    def test_device_refresh_without_verified_package(self):
+        service = Service('.', self.store, io.StringIO())
+        with patch('backend.service.Adb') as factory:
+            factory.return_value.devices.side_effect = [[], [], [{'serial':'chosen','state':'unauthorized'}]]
+            for expected in [[], [], [{'serial':'chosen','state':'unauthorized'}]]:
+                self.assertEqual(service.dispatch({'protocol':1,'command':'devices','params':{}}), expected)
+            self.assertIsNone(service.package)
+            factory.return_value.shell.assert_not_called()
+        with self.assertRaisesRegex(ValueError, 'Verify a package first'):
+            service.dispatch({'protocol':1,'command':'probe','params':{'serial':'chosen'}})
+
+    def test_adb_empty_list_is_not_failure(self):
+        with patch('backend.transport.shutil.which',return_value='adb'):
+            transport = Adb('.')
+        with patch.object(transport, 'call', return_value='List of devices attached\n\n') as call:
+            self.assertEqual(transport.devices(), [])
+            call.assert_called_once_with('devices','-l')
+
+    def test_adb_list_preserves_all_device_states(self):
+        with patch('backend.transport.shutil.which',return_value='adb'):
+            transport = Adb('.')
+        listing = 'List of devices attached\nchosen device product:test model:E5 transport_id:1\nother unauthorized transport_id:2\nwaiting offline transport_id:3\n'
+        with patch.object(transport, 'call', return_value=listing):
+            values = transport.devices()
+        self.assertEqual([(d['serial'], d['state']) for d in values], [('chosen','device'),('other','unauthorized'),('waiting','offline')])
+
     def test_expected_reboot_waits_without_failure_or_deadline(self):
         service = Service('.', self.store, io.StringIO())
         states = iter(['android_boot', 'debug_authorization', 'android_setup', 'magisk', 'root_permission', 'ready'])
@@ -128,9 +154,9 @@ class StateTests(unittest.TestCase):
                 return {**DEVICE, 'readiness':next(states)}
         with patch.object(service.stop, 'wait', return_value=False):
             service.wait_android(self.ctx, Adapter())
-        stages = [event[1]['stage'] for event in self.events]
+        stages = [event[1]['stage'] for event in self.events if event[0]=='transaction']
         self.assertEqual(stages, ['android_boot', 'debug_authorization', 'android_setup', 'magisk', 'root_permission', 'root_ready'])
-        self.assertNotIn('failed',[event[1]['status'] for event in self.events])
+        self.assertNotIn('failed',[event[1]['status'] for event in self.events if event[0]=='transaction'])
 
     def test_wrong_device_after_reset_is_rejected(self):
         service = Service('.', self.store, io.StringIO())

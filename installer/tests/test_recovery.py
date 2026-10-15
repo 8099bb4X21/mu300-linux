@@ -113,7 +113,7 @@ class Recovery(unittest.TestCase):
     def test_two_stage_boot_chain_checkpoints_are_distinct(self):
         source=self.ctx.directory/'package'
         source.mkdir(parents=True)
-        (source/'OpenWrt-Installer.py').write_text('GUI=None\n')
+        (source/'OpenWrt-Installer.py').write_text('GUI=None\ndef adb(*args, **kwargs):pass\n')
         adapter=Adapter({**PACKAGE,'path':str(source)},self.ctx)
         legacy=self.ctx.directory/'legacy.json'
         self.record['legacy']=str(legacy)
@@ -127,7 +127,7 @@ class Recovery(unittest.TestCase):
 
     def test_backend_cannot_escalate_confirmed_gap_plan_to_android_reset(self):
         source=self.ctx.directory/'package';source.mkdir(parents=True)
-        (source/'OpenWrt-Installer.py').write_text('GUI=None\n')
+        (source/'OpenWrt-Installer.py').write_text('GUI=None\ndef adb(*args, **kwargs):pass\n')
         adapter=Adapter({**PACKAGE,'path':str(source)},self.ctx)
         self.record['plan'].update(target='GPT unallocated space',wipe=False,gap_start=90000000)
         with self.assertRaisesRegex(ValueError,'confirmed plan'):

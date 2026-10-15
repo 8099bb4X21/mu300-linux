@@ -13,7 +13,7 @@ class DataPriority(ShellTest):
         self.pending = self.tmp / 'early-pending'
         self.code = self.source[self.source.index('data_priority() {'):
                                 self.source.index('\n# 取 PDP 地址')]
-        self.code = self.code.replace('/run/mu300-radio-on.lock', str(self.mutex))
+        self.code = self.code.replace('/run/mu300-radio-on.owner', str(self.mutex))
         self.code = self.code.replace('/run/mu300-data-priority-', str(self.tmp / 'priority-'))
         self.code = self.code.replace('/run/unisoc-modem-early-hook-pending', str(self.pending))
         self.code = self.code.replace('/opt/mu300/bin/mu300-at', str(self.stubs / 'client'))
@@ -177,10 +177,26 @@ esac
         self.assertNotIn('using /dev/null directly', r.stderr)
 
     def test_shared_build_inputs_and_no_new_startup_sleep(self):
-        helper = self.code[:self.code.index('\nradio_on() {')]
+        helper = self.code[:self.code.index('\nqueue_data_priority() {')]
         self.assertNotIn('sleep ', helper)
         self.assertNotIn('SFUN=', helper)
         self.assertIn('$TOP/rootfs/overlay/opt/mu300', (TOP / 'openwrt/build-rootfs.sh').read_text())
         self.assertIn('cp -a /w/overlay/. $R/', (TOP / 'rootfs/assemble.sh').read_text())
         for path in ('tools/build-openwrt-tf-magisk.sh', 'tools/make-release.sh'):
             self.assertIn('./opt/mu300/bin/mobile-data ', (TOP / path).read_text())
+
+
+class AtomicModemLocks(ShellTest):
+    def test_concurrent_stale_owner_recovery_never_enters_twice(self):
+        import subprocess
+        source=(BIN/'mobile-data').read_text()
+        code=source[source.index('RADIOLOCK='):source.index('radio_locked() {')]
+        code=code.replace('/opt/mu300/bin/busybox sleep 0.2 2>/dev/null || sleep 1','sleep 0.05')
+        script=self.tmp/'mobile-data-lock-fixture'
+        script.write_text('#!/bin/bash\nset -eu\n'+code+'\nlock_take "$TEST_LOCK" 8 || exit 91\ntrap \'lock_drop "$TEST_LOCK"\' EXIT\nmkdir "$TEST_CRITICAL" || exit 92\nsleep 0.04\nrmdir "$TEST_CRITICAL"\nlock_drop "$TEST_LOCK"\n')
+        lock=self.tmp/'owner';lock.symlink_to('99999999')
+        procs=[subprocess.Popen(['bash',str(script)],env=self.env(TEST_LOCK=lock,TEST_CRITICAL=self.tmp/'critical'),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(8)]
+        results=[(p.communicate(timeout=12),p.returncode) for p in procs]
+        self.assertTrue(all(rc==0 for _,rc in results),results)
+        self.assertFalse(lock.is_symlink())
+        self.assertFalse((self.tmp/'critical').exists())

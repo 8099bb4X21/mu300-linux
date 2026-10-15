@@ -20,6 +20,8 @@
 
 ### 独立内置分区
 
+检查设备不会替换你已选择的安装方式；“推荐”只作提示。重装已有内置分区不要求插 TF 卡，也不会校验 TF 卡容量。只有选择 TF 卡安装时才要求卡及其目标分区有效。最终计划会明确列出安装方式、写入目标和数据影响；返回修改时会保留所选方式及原页面。
+
 优先使用已验证 GPT 未分配区域，足够时不缩容或清空 userdata。没有合适区域时使用既有离线缩容逻辑。计划显示 Android 保留空间、OpenWrt 分配大小及数据影响。
 
 “使用全部已分配的 OpenWrt 分区容量”默认开启，意思是扩满选定大小的 OpenWrt 分区，**不是占用设备所有剩余空间**。设备端写入后检查文件系统块数，进入 OpenWrt 后再次读取 ext4 超级块验证实际容量。验证没通过不会显示安装成功。
@@ -38,9 +40,15 @@
 
 这些等待**没有总超时**。预期重启或 USB 消失属于等待状态，不是 EOF 失败。无 ADB 时电脑无法区分“Android 仍在开机”和“尚未开启调试”；界面同时给出初始化、开启调试与允许授权的具体步骤。未加密 userdata 保留离线保数据缩容，不默认清空。
 
+### 更新与自动重启
+
+更新提交后，设备会自动重启以应用更新，网络会暂时断开。页面与通知会显示“更新已提交，设备将自动重启”；请保持供电。安装器确认同一设备的启动标识确实变化，再校验实际容量，最后显示“OpenWrt 已更新并通过校验”。重启前旧系统仍能响应 SSH 时不会提前显示完成。点击“我已进入 OpenWrt”也仍会核验真实重启；地址或密码变化时可在此处修正。完成、失败和暂停后阶段计时停止；这些时间保存在记录中，重新打开后仍可查看，重试开始新的执行计时。旧更新记录若未保存重启前证据，不能自动认定更新完成，应保留记录人工复核。
+
+重启期间的 SSH 断开、连接被拒绝、连接超时或 USB 网卡暂时消失，均属于正常的“设备正在重启，等待重新连接”，不会显示连接错误或要求重新更新，也没有固定等待总时限。详细原因仅记入 DEBUG 日志；认证失败或地址确实对应另一台设备时，才提示修正密码/目标。管理地址与密码输入框始终保留，设备开机后可手动确认并重试校验。
+
 ### 暂停、关闭与失败恢复
 
-事务默认位于 `%LOCALAPPDATA%\OpenWrt-Installer\transactions\<transaction-id>\`。通过“打开事务目录”查看，通过“导出事务与备份”生成 ZIP。备份含设备身份和可能含无线配置的旧后端记录，请妥善保管，不要公开上传。默认日志不包含原终端输出、密码、短信正文或完整设备标识。
+事务默认位于 `%LOCALAPPDATA%\OpenWrt-Installer\transactions\<transaction-id>\`。通过“打开事务目录”查看，通过“导出事务与备份”生成 ZIP。备份含设备身份和可能含无线配置的旧后端记录，请妥善保管，不要公开上传。DEBUG 日志记录命令边界、脱敏后的 CLI 输出、校验结果及具体异常堆栈；密码、无线密钥与完整设备标识在写入日志前脱敏，不读取短信正文。
 
 “在安全边界暂停”会等待正在进行的存储操作结束，不会直接杀进程。任务执行中关闭窗口会被阻止并提示先暂停。暂停后可以关闭、重启电脑或移动包；重新打开 EXE，选择“继续未完成的安装”。若已提交离线准备，暂停不会撤销设备已收到的启动请求，仍须保持设备供电。完成页保持显示，不会自动关闭。
 
@@ -52,6 +60,16 @@
 
 窗口顶部、步骤导航和底部操作按钮保持固定；安装内容、续装列表和展开的日志各自滚动。侧栏底部可打开事务目录。操作结果、错误与阶段变化统一通过右上角通知提示；错误通知可以手动关闭，详细信息仍可在日志或对应事务页面查阅。通知不会覆盖底部最终确认按钮。数据影响、等待操作指引和完成结果会持续显示在页面中。界面动效会遵循 Windows 的“动画效果/减少动态效果”设置。
 
+开始或继续安装后，底部“详细日志 · DEBUG”自动展开，可随时收起；日志列表限制高度，不会推走操作按钮。出错时可一键“复制诊断信息给开发者”，也可复制或导出日志。分享内容来自电脑上持久保存的日志，不局限于界面最近显示的 500 条；完整轮转日志随事务备份导出。旧版记录没有保存的调试细节无法凭空恢复，使用新版重试后会开始记录。备份及传输显示真实字节数、速度和进度条；写入、检查、缩容或扩容缺少可信百分比时，显示活动进度条、阶段及耗时，不生成虚假百分比。等待用户操作时，进度条停止活动并显示下一步指引。
+
+启动链备份逐项 `dd` 到设备 `/data/local/tmp/` 下的独立临时目录，再通过 `adb pull` 拉到电脑；源分区、临时文件、电脑文件的 SHA-256 必须一致。每项完成后删除设备临时文件，全部完成后删除临时目录。不使用 Base64 或压缩流备份；临时空间不足时会明确停止。备份只读取启动相关源分区，不向源分区写入。
+
+文件传输的 100% 仅代表当前文件已传完。后续提取、音频或蓝牙固件转换会切换到独立阶段和活动进度条，并在日志中显示转换器文件名、输出及耗时。电脑端转换支持安全暂停，单个转换器超过 120 秒会明确报错；Android 初始化和授权等待仍没有此时限。
+
+详细日志按最新记录在上、较早记录在下显示；一条异常内的堆栈顺序保持不变。复制及导出的持久化诊断仍按发生时间排列，方便开发者分析。
+
+阶段 4 需要手动重启时，页面顶部会明确显示“请现在手动重启设备”。使用设备正常重启功能；已经重启或进入 OpenWrt 时不要重复重启。自动重启流程会显示已发送请求。进入 OpenWrt 后，将电脑连接到这台设备的 USB 网络或热点，核对管理地址和 SSH root 密码，点击“我已进入 OpenWrt，开始校验”。多台 OpenWrt 的默认地址可能冲突，请连接目标设备的网络并填写它可访问的地址；安装器不会自动改网卡或路由。地址对应另一台设备、连接失败或认证失败时，可以直接修正地址/密码并重试，不必重新安装。手动确认会立即请求最终身份及容量校验，通过后显示完成；不会跳过校验或重新执行分区写入。所选地址与启动确认保存在原记录中，密码只在内存使用，重启安装器后需重新填写。
+
 ### 连接与常见问题
 
 #### 第一次使用，从哪里开始？
@@ -60,7 +78,7 @@
 
 #### 没有发现设备，或者同时连接了多台设备？
 
-先完成安装包校验，再刷新设备。确认 USB 线支持数据传输、设备供电正常；必要时更换线缆或 USB 口，并在 Windows 设备管理器检查设备及其 USB 驱动。Android 中开启开发者选项和 USB 调试。多台设备会列在下拉列表中，请核对型号和序列号末四位，明确选择目标后检查；后续操作绑定所选设备，不会任选另一台。
+刷新设备不依赖安装包校验；没有设备时也可以反复刷新。进入安装、临时启动或高级选项时会先自动刷新一次。枚举连接不读取分区或请求 root，检查设备和安装前仍须校验安装包。确认 USB 线支持数据传输、设备供电正常；必要时更换线缆或 USB 口，并在 Windows 设备管理器检查设备及其 USB 驱动。Android 中开启开发者选项和 USB 调试。多台设备会列在下拉列表中，请核对型号和序列号末四位，明确选择目标后检查；后续操作绑定所选设备，不会任选另一台。
 
 #### 显示“等待调试授权”或“离线”？
 
@@ -94,6 +112,8 @@ Extract the complete ZIP and run **OpenWrt-Installer.exe** at its root. Keep all
 
 ### Storage and capacity
 
+Inspecting a device never changes your selected installation method; recommendation badges are advisory. Reinstalling an existing internal partition needs no TF card and does not validate card capacity. A valid card/target is required only for TF installation. The final plan names the method, write target and data impact. Returning to edit preserves the chosen method and original page.
+
 TF installation follows the existing first-partition preference, using the raw card only when it has no partitions. It does not repartition cards or impose a 32 GiB ceiling. Check the exact target and capacity. The payload and local firmware are prepared before releasing Android mounts and formatting. A release failure stops installation. Magisk TF installation remains supported.
 
 Internal installation first checks validated GPT gaps. A sufficient gap avoids shrinking/resetting userdata. Otherwise the existing offline resize is used. The plan displays retained Android space, allocated OpenWrt space and data impact. **Use all allocated OpenWrt partition capacity** is enabled by default: it fills the chosen allocation, not all remaining device storage. Device-side block-count checks and final ext4 superblock verification prevent a 10 GiB partition with an unexpanded 2 GiB filesystem from being reported as success.
@@ -108,9 +128,15 @@ Wait for offline preparation and stock recovery to finish. Complete Android setu
 
 There is **no overall deadline** for user setup or authorization. Expected reboots and missing USB are waiting states. Without ADB the computer cannot distinguish Android still booting from USB debugging not yet enabled; the UI provides both instructions. Unencrypted userdata retains its preserving offline-shrink path.
 
+### Updates and automatic restart
+
+After submission the device automatically restarts to apply the update, briefly disconnecting its network. The page and notification show “Update submitted; device restarting.” Keep power connected. Completion requires the same device’s boot identifier to change, followed by actual-capacity verification; an SSH response from the old runtime before reboot cannot complete the update. Explicit boot confirmation retains this check. Correct changed addresses/passwords in the verification form. Phase clocks stop on completion, failure and pause, persist across application restart, and begin a new execution segment on retry. Older update records without pre-reboot evidence require manual review and are not automatically accepted as complete.
+
+SSH EOF, refused connections, timeouts and a temporarily absent USB network during reboot are normal reconnection waits. They do not generate connection-error warnings, request another update or impose a fixed overall deadline. Transport details remain in DEBUG diagnostics. Authentication failure or a confirmed different device still asks for corrected credentials/target. The editable management endpoint and explicit verification button remain available.
+
 ### Recovery and results
 
-Transactions live in `%LOCALAPPDATA%\OpenWrt-Installer\transactions\<transaction-id>\`. Open this directory or export the full transaction/backup ZIP from the application. Backups include private hardware identity and may contain wireless settings in legacy records; do not publish them. Default logs omit legacy terminal output, passwords, SMS bodies and full hardware identifiers.
+Transactions live in `%LOCALAPPDATA%\OpenWrt-Installer\transactions\<transaction-id>\`. Open this directory or export the full transaction/backup ZIP from the application. Backups include private hardware identity and may contain wireless settings in legacy records; do not publish them. DEBUG logs include command boundaries, sanitized CLI output, verification results and exception tracebacks. Passwords, wireless keys and complete hardware identifiers are redacted before logging; installation does not read SMS bodies.
 
 Pause takes effect at a safe boundary. A partition or boot write is not killed. Closing an active window is blocked until a safe pause. Pausing cannot undo an already submitted offline boot request: keep the device powered. After closing the application, restarting the computer or moving the package, reopen it and choose **Continue an unfinished installation**. The completed page stays open.
 
@@ -122,6 +148,16 @@ Connect to USB networking or the device hotspot manually. Default management add
 
 The header, step navigation and bottom actions stay fixed. Installation content, recovery records and expanded logs scroll independently. The transaction-folder shortcut stays at the bottom of the sidebar. Results, errors and phase changes share the notification area at the upper right, away from the final confirmation buttons. Dismiss error notifications manually; consult the log or transaction page for details. Data-impact warnings, waiting instructions and completed results remain on the page. Interface motion follows the Windows animation/reduced-motion preference.
 
+Detailed logs · DEBUG opens automatically when starting or continuing and can be collapsed at any time. Its bounded list keeps the action buttons visible. On failure, use Copy diagnostics for the developer; the log also supports copying and export. Sharing reads persisted diagnostics rather than only the last 500 UI entries; full rotated logs are included in backup export. Missing debug details from an older release cannot be reconstructed; retrying with this release begins recording them. Backup and transfer bars show measured bytes, speed and progress. Writing, checking, shrink and growth without a reliable percentage show an activity bar, phase and elapsed time. Waiting pauses bar activity and provides the next action.
+
+Boot-chain backups use device-side `dd` into a private temporary directory under `/data/local/tmp/`, then `adb pull` to the computer. Source, temporary and computer SHA-256 checksums must match. Device temporary files are removed after each item, and the directory is removed when finished. Backup does not use Base64 or compressed streams and stops clearly if temporary space is insufficient. Source partitions are read without writing to them.
+
+A transfer reaching 100% means only that file finished. Firmware extraction and audio/Bluetooth conversion have separate phases and activity bars, with converter names, output and elapsed time in the log. Host conversion can be safely paused and has a 120-second per-converter timeout. Android setup and authorization waits retain no overall deadline.
+
+The detailed log displays newest entries first while preserving line order within each traceback. Copied/exported persistent diagnostics retain chronological order for investigation.
+
+At phase 4, a manual restart requirement appears prominently as “Restart the device now.” Use the device’s normal restart control; do not restart again if OpenWrt is already starting or running. Automatic paths identify the requested restart instead. Once OpenWrt starts, connect this computer to that device’s USB network or hotspot, check its management address and SSH root password, and select “OpenWrt is running — verify now.” Multiple routers can have conflicting default addresses: use the target network and a reachable address. The installer never changes adapters or routes. Wrong-device, connection and authentication errors allow correcting the endpoint/password and retrying without reinstalling. Confirmation requests final device identity and capacity checks; it neither bypasses verification nor repeats partition writes. The endpoint and boot confirmation persist in the original record; passwords remain in memory and must be reentered after restarting the installer.
+
 ### Connection and troubleshooting
 
 #### Where should a beginner start?
@@ -130,7 +166,7 @@ The three-step getting-started guide appears on first launch when no installatio
 
 #### No devices, or several devices connected?
 
-Verify the package before refreshing devices. Use a data-capable USB cable, keep power connected and try another cable or USB port if necessary. Check the device and USB driver in Windows Device Manager. Enable Android developer options and USB debugging. With multiple devices, check the model and last four serial characters in the list, explicitly select your target and inspect it. Later operations remain bound to that device.
+Refreshing devices does not require package verification, and an empty list can be refreshed repeatedly. Entering Install, one-time boot or Advanced options refreshes once automatically. Enumeration does not read partitions or request root; verify the package before device inspection or installation. Use a data-capable USB cable, keep power connected and try another cable or USB port if necessary. Check the device and USB driver in Windows Device Manager. Enable Android developer options and USB debugging. With multiple devices, check the model and last four serial characters in the list, explicitly select your target and inspect it. Later operations remain bound to that device.
 
 #### Awaiting debugging authorization, or offline?
 

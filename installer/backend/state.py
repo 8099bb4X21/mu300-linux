@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import threading
 import time
 import uuid
+from .diagnostics import redact
 
 VERSION = 1
 TERMINAL = {'completed', 'cancelled'}
@@ -101,6 +103,7 @@ class Store:
         return self.base / 'transactions' / tid
 
     def save(self, record):
+        record['revision'] = record.get('revision', 0) + 1
         record['updated'] = time.time()
         atomic_json(self.directory(record['id']) / 'transaction.json', record)
 
@@ -145,6 +148,15 @@ class Context:
         self.store, self.record, self.emit = store, record, emit
         self.cancel = False
         self.clock = time.monotonic()
+        self.private = []
+        self.log_lock = threading.Lock()
+        self.last_transfer = {}
+        if record.get('legacy'):
+            try:
+                old = json.loads(Path(record['legacy']).read_text(encoding='utf-8'))
+                self.private.extend(old.get(key) for key in ('key','token','password') if old.get(key))
+            except (OSError,ValueError):
+                pass
 
     @property
     def directory(self):
@@ -170,17 +182,34 @@ class Context:
         return out
 
     def stage(self, stage, status='running', **details):
+        now = time.time()
+        previous = self.record
+        phase_changed = stage != previous['stage'] or details.get('tool') != previous.get('details',{}).get('tool')
+        resumed = previous['status'] in ('ready','failed','cancelled') and status in ('running','waiting_user','waiting_device')
+        if (phase_changed and stage != 'complete') or resumed:
+            previous['stage_started_at'] = now
+        elif 'stage_started_at' not in previous:
+            previous['stage_started_at'] = previous.get('updated',now)
+        if status in ('completed','failed','cancelled'):
+            previous['stage_finished_at'] = now
+        else:
+            previous.pop('stage_finished_at',None)
         self.record.update(stage=stage, status=status, details=details)
         self.store.save(self.record)
         self.snapshot()
+        self.log(f'STAGE {stage} / {status}', scope='state')
 
     def boundary(self):
         if self.cancel or self.record.get('cancel_requested'):
             raise Cancelled()
 
+    def activity(self, name):
+        self.emit('activity', {'name':self.sanitize(name)})
+
     def effect(self, name, operation, *, retry_safe=False):
         entry = self.record['effects'].get(name)
         if entry and entry['state'] == 'done':
+            self.log('SKIP verified effect: '+name, scope='effect')
             return entry.get('result')
         if entry and not retry_safe:
             raise RecoveryRequired('Interrupted write requires readback / 写入中断，必须复核: ' + name)
@@ -189,6 +218,7 @@ class Context:
         self.record['unsafe'] = not retry_safe
         self.store.save(self.record)
         self.snapshot()
+        self.log('BEGIN effect: '+name, scope='effect')
         result = operation()
         self.record['effects'][name] = {'state': 'done', 'time': time.time(), 'result': result}
         self.record['unsafe'] = False
@@ -196,10 +226,12 @@ class Context:
             self.record['completed'].append(name)
         self.store.save(self.record)
         self.snapshot()
+        self.log('VERIFIED effect: '+name, scope='effect')
         self.boundary()
         return result
 
     def legacy_record(self, path, value):
+        self.private.extend(value.get(key) for key in ('key','token','password') if value.get(key))
         self.record['legacy'] = str(Path(path).resolve())
         self.record['legacy_phase'] = value.get('phase', value.get('state'))
         self.store.save(self.record)
@@ -207,12 +239,28 @@ class Context:
     def transfer(self, name, done, total, since):
         self.emit('transfer', dict(name=name, bytes=done, total=total,
                                   bytes_per_second=done / max(time.monotonic() - since, .001)))
+        previous = self.last_transfer.get(name)
+        if previous is None or done == total or done < previous or done-previous >= 8*1024*1024:
+            self.last_transfer[name] = done
+            self.log(f'TRANSFER {name}: {done}/{total} bytes, {done/max(time.monotonic()-since,.001):.0f} bytes/s',scope='transfer')
 
-    def log(self, message):
-        # Legacy stdout can contain hotspot credentials, SMS or raw identifiers.
-        # It is intentionally not forwarded. Only named structured events log.
-        safe = str(message)
-        for value in (self.record['device'].get('serial'), self.record['device'].get('cid')):
-            if value:
-                safe = safe.replace(value, '[redacted]')
-        self.emit('log', {'time': time.time(), 'message': safe[:2000]})
+    def sanitize(self, message):
+        device = self.record.get('device', {})
+        return redact(message, [device.get('serial'), device.get('cid'), device.get('ssh_key'),
+                                *self.record.get('secrets', {}).values(), *self.private])
+
+    def log(self, message, level='debug', scope='backend'):
+        event = {'time':time.time(), 'level':level, 'scope':scope,
+                 'stage':self.record['stage'], 'message':self.sanitize(message)[:32768]}
+        # Persist diagnostics across application restarts. Logging failure must
+        # never interrupt a partition write or hide the original exception.
+        try:
+            with self.log_lock:
+                path = self.directory/'debug.ndjson'
+                if path.exists() and path.stat().st_size > 4*1024*1024:
+                    os.replace(path, self.directory/'debug.previous.ndjson')
+                with path.open('a', encoding='utf-8') as stream:
+                    stream.write(json.dumps(event, ensure_ascii=False)+'\n')
+        except OSError:
+            pass
+        self.emit('log', event)

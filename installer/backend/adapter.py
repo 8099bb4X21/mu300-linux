@@ -1,5 +1,5 @@
 """Repository adapters call existing installation code, never frontend shell."""
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import contextmanager, redirect_stdout, redirect_stderr
 import gzip
 import hashlib
 import importlib.util
@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from . import gpt
 from .state import Pending, RecoveryRequired, atomic_json, sha
 from .transport import Adb, push_chunks
+from .diagnostics import DebugStream, traced
 
 
 def load(path, name):
@@ -26,11 +27,14 @@ def load(path, name):
     return module
 
 
-class Quiet(io.TextIOBase):
-    def write(self, text):
-        return len(text)
-    def flush(self):
-        pass
+@contextmanager
+def debug_output(context):
+    stream = DebugStream(context)
+    try:
+        with redirect_stdout(stream), redirect_stderr(stream):
+            yield
+    finally:
+        stream.flush()
 
 
 def args_for(record, directory):
@@ -44,6 +48,25 @@ def args_for(record, directory):
                            boot_openwrt=choices['method'] == 'boot', resume=False, resume_part=None,
                            transaction=None, backup_dir=str(directory / 'legacy-backups'), probe=False,
                            serial=record['device']['serial'], adb=None, host=choices.get('host'))
+
+
+def installation_committed(record):
+    """Only final, verified effects can bypass the initial Android plan.
+
+    A stage-one boot selection is not a final installation. Legacy two-stage
+    records must still use their geometry/token-aware resume implementation.
+    """
+    method = record['choices']['method']
+    if record.get('legacy') or record['plan'].get('method') != method:
+        return False
+    done = {name for name, value in record['effects'].items() if value['state'] == 'done'}
+    if method == 'update':
+        return 'update-commit' in done
+    if record['package']['adapter'] == 'e5':
+        return method in ('tf', 'part', 'image', 'boot') and 'misc-trial' in done
+    return record['package']['adapter'] == 'mu300' and (
+            method == 'tf' and 'root-tf-write' in done or
+            method in ('part', 'reinstall', 'image') and any(name.startswith('boot-and-misc-') for name in done))
 
 
 class Adapter:
@@ -61,6 +84,19 @@ class Adapter:
         self.adb = None
         self.password = ''
         self.expected_ssh_key = None
+        if self.ctx:
+            if self.kind == 'e5':
+                original = self.legacy.adb
+                def observed(*args, **kwargs):
+                    return traced(self.ctx, 'legacy ADB '+shlex.join(map(str,args)),
+                                  lambda:original(*args, **kwargs), output=True)
+                self.legacy.adb = observed
+            else:
+                original = self.legacy.Android.call
+                def observed(android, *args, **kwargs):
+                    return traced(self.ctx, 'legacy ADB '+shlex.join(map(str,args)),
+                                  lambda:original(android, *args, **kwargs), output=False)
+                self.legacy.Android.call = observed
 
     def stage(self, stage, status='running', **details):
         if self.ctx:
@@ -70,13 +106,21 @@ class Adapter:
         if self.ctx:
             self.ctx.transfer(name, done, total, since)
 
+    def run_tool(self, script, *arguments):
+        from .helpers import run_helper
+        return run_helper(self.ctx, self.root, script, arguments)
+
     def action(self, name, operation, retry_safe=False):
         if not self.ctx:
             raise ValueError('Writes are unavailable during a probe')
         if self.ctx.record.get('legacy') and name in ('bootchain-sync', 'misc-trial'):
             state = json.loads(Path(self.ctx.record['legacy']).read_text(encoding='utf-8'))
             name += '-' + state.get('phase', state.get('state', 'unknown'))
-        return self.ctx.effect(name, operation, retry_safe=retry_safe)
+        result = self.ctx.effect(name, operation, retry_safe=retry_safe)
+        if name == 'update-commit':
+            self.stage('openwrt_boot','waiting_device',reboot_manually=False,
+                       host=self.ctx.record['choices'].get('host'))
+        return result
 
     def saved(self, path, record):
         if self.ctx:
@@ -98,7 +142,8 @@ class Adapter:
 
     def reboot(self):
         # Persist expected loss of transport BEFORE sending reboot.
-        self.stage('android_boot' if self.ctx.record['plan'].get('two_stage') else 'openwrt_boot', 'waiting_device')
+        self.stage('android_boot' if self.ctx.record['plan'].get('two_stage') else 'openwrt_boot',
+                   'waiting_device', reboot_manually=False)
 
     def push(self, call, shell, local, remote):
         return push_chunks(call, shell, local, remote, self.ctx)
@@ -107,10 +152,19 @@ class Adapter:
         fingerprint = hashlib.sha256(client.get_transport().get_remote_server_key().asbytes()).hexdigest()
         if self.expected_ssh_key and fingerprint != self.expected_ssh_key:
             raise ValueError('SSH device identity changed / SSH 设备身份改变')
+        if self.ctx and self.ctx.record['choices']['method'] == 'update':
+            _, out, _ = client.exec_command('cat /proc/sys/kernel/random/boot_id', timeout=15)
+            boot_id = out.read().decode().strip()
+            if out.channel.recv_exit_status() or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',boot_id):
+                raise ValueError('Cannot establish pre-update boot identity / 无法确认更新前的启动标识')
+            self.ctx.record['update_boot_id'] = boot_id
+            self.ctx.store.save(self.ctx.record)
+            self.stage('transfer_install')
         return fingerprint
 
     def bind(self, serial):
         self.adb = Adb(self.root, serial)
+        self.adb.context = self.ctx
         if self.kind == 'e5':
             self.legacy.ADB = self.adb.exe
             self.legacy.SERIAL = serial
@@ -118,6 +172,8 @@ class Adapter:
             self.legacy.find_adb = lambda: None
 
     def probe(self, serial, method='part'):
+        if method not in ('tf', 'part', 'reinstall', 'image', 'boot'):
+            raise ValueError('Unsupported Android installation method / 不支持的 Android 安装方式')
         self.bind(serial)
         devices = self.adb.devices()
         entry = next((d for d in devices if d['serial'] == serial), None)
@@ -159,8 +215,12 @@ class Adapter:
             'echo SOURCE=$(awk \'$2=="/data" {print $1;exit}\' /proc/mounts); '
             'for u in /sys/class/block/${b}p*/uevent; do '
             'grep -qE "^PARTNAME=(e5root|mu300root)$" "$u" && { n=${u%/uevent}; echo ROOT=${n##*/}; } || true; done; '
-            'if [ -b /dev/block/mmcblk1p1 ]; then echo TF=/dev/block/mmcblk1p1; '
-            'elif [ -b /dev/block/mmcblk1 ]; then echo TF=/dev/block/mmcblk1; fi', root=True)
+            'cards=""; for p in /sys/class/block/mmcblk*; do k=${p##*/}; '
+            'case $k in *p[0-9]*|*boot*) continue;; esac; '
+            '[ "$k" = "$b" ] || cards="$cards $k"; done; '
+            'set -- $cards; if [ "$#" -eq 1 ]; then '
+            'if [ -b /dev/block/"${1}p1" ]; then echo TF=/dev/block/"${1}p1"; '
+            'elif [ -b /dev/block/"$1" ]; then echo TF=/dev/block/"$1"; fi; fi', root=True)
         storage = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
         if not re.fullmatch(r'mmcblk\d+p\d+', storage['NODE']) or not re.fullmatch('[a-f0-9]{32}', storage['CID']):
             raise ValueError('Cannot establish eMMC identity / 无法确认闪存身份')
@@ -169,7 +229,9 @@ class Adapter:
         encrypted = properties['ro.crypto.state'] == 'encrypted' or properties['ro.crypto.type'] in ('file', 'block') or storage['SOURCE'].startswith(('/dev/block/dm-', '/dev/mapper/'))
         device.update(cid=storage['CID'], storage=storage, encrypted=encrypted, existing=bool(storage.get('ROOT')),
                       tf=storage.get('TF'), userdata_bytes=storage['SIZE']*512, free_bytes=storage['FREE']*1024)
-        if storage.get('TF'):
+        # Other modes need only a read-only availability hint for recommendations.
+        # A removable card and its readable capacity are prerequisites only for TF.
+        if method == 'tf' and self.kind != 'e5' and storage.get('TF'):
             node = storage['TF'].rsplit('/', 1)[-1]
             device['tf_bytes'] = int(self.adb.shell('cat /sys/class/block/' + node + '/size', root=True).strip())*512
             disk_node = re.sub(r'p\d+$', '', node)
@@ -182,26 +244,23 @@ class Adapter:
         if method != 'boot':
             space = self.read_gpt(storage)
             device['gpt'] = {k: v for k, v in space.items() if k not in ('first', 'last')}
-        if self.kind == 'e5':
+        if self.kind == 'e5' and method == 'tf':
             # Reuse the existing internal-vs-removable selection policy.
-            try:
-                disk = self.legacy.device_sd()
-                node = disk.rsplit('/', 1)[-1]
-                if self.adb.shell('test -b '+disk+'p1; echo $?', root=True).strip() == '0':
-                    target = disk+'p1'
-                else:
-                    parts = self.adb.shell('ls /sys/class/block/'+node+'p* 2>/dev/null; true', root=True).strip()
-                    if parts: raise ValueError('TF has partitions but no p1; cannot select the whole card')
-                    target = disk
-                device['tf'] = target
-                device['tf_bytes'] = int(self.legacy.device_size(target))
-                device['tf_identity'] = {'cid': self.adb.shell('cat /sys/class/block/'+node+'/device/cid', root=True).strip(),
-                                         'sectors': device['tf_bytes']//512,
-                                         'start': self.adb.shell('cat /sys/class/block/'+target.rsplit('/',1)[-1]+'/start 2>/dev/null || echo 0', root=True).strip()}
-                storage['TF'] = target
-            except SystemExit:
-                device['tf'] = None
-                storage.pop('TF', None)
+            # Do not catch discovery failures: TF must stop on missing/ambiguous cards.
+            disk = self.legacy.device_sd()
+            node = disk.rsplit('/', 1)[-1]
+            if self.adb.shell('test -b '+disk+'p1; echo $?', root=True).strip() == '0':
+                target = disk+'p1'
+            else:
+                parts = self.adb.shell('ls /sys/class/block/'+node+'p* 2>/dev/null; true', root=True).strip()
+                if parts: raise ValueError('TF has partitions but no p1; cannot select the whole card')
+                target = disk
+            device['tf'] = target
+            device['tf_bytes'] = int(self.legacy.device_size(target))
+            device['tf_identity'] = {'cid': self.adb.shell('cat /sys/class/block/'+node+'/device/cid', root=True).strip(),
+                                     'sectors': device['tf_bytes']//512,
+                                     'start': self.adb.shell('cat /sys/class/block/'+target.rsplit('/',1)[-1]+'/start 2>/dev/null || echo 0', root=True).strip()}
+            storage['TF'] = target
         return device
 
     def read_gpt(self, storage):
@@ -249,17 +308,12 @@ class Adapter:
         (destination/'gpt-first.bin').write_bytes(space['first'])
         (destination/'gpt-last.bin').write_bytes(space['last'])
         atomic_json(destination/'identity.json', device)
-        for name in ['misc'] + [f'{n}_{slot}' for n in ('boot', 'uboot', 'sml', 'teecfg', 'trustos', 'vbmeta') for slot in ('a', 'b')]:
-            self.ctx.boundary()
-            script = f'dd if=/dev/block/by-name/{name} bs=4096 count=1 2>/dev/null' if name == 'misc' else f'cat /dev/block/by-name/{name}'
-            data = self.adb.read(script)
-            if not data:
-                raise ValueError('Empty backup / 备份为空: ' + name)
-            (destination/(name+'.bin')).write_bytes(data)
-            expected = hashlib.sha256(data).hexdigest()
-            actual = self.adb.shell('(set -o pipefail; ' + script + ') | sha256sum', root=True, timeout=120).split()[0]
-            if expected != actual:
-                raise ValueError('Backup readback checksum mismatch / 备份回读校验失败: ' + name)
+        try:
+            for name in ['misc'] + [f'{n}_{slot}' for n in ('boot', 'uboot', 'sml', 'teecfg', 'trustos', 'vbmeta') for slot in ('a', 'b')]:
+                self.ctx.boundary()
+                self.adb.backup_partition(name, destination/(name+'.bin'), self.ctx)
+        finally:
+            self.adb.cleanup_backup(self.ctx)
         atomic_json(destination/'checksums.json', {p.name: sha(p) for p in destination.iterdir() if p.is_file() and p.name != 'checksums.json'})
         self.ctx.record['completed'].append('backup')
         self.ctx.store.save(self.ctx.record)
@@ -268,12 +322,14 @@ class Adapter:
         record = self.ctx.record
         choices = record['choices']
         method = choices['method']
+        if method not in ('tf', 'part', 'reinstall', 'image', 'boot', 'update') or record['plan'].get('method') != method:
+            raise RecoveryRequired('Installation method differs from the saved plan / 安装方式与已保存计划不一致，已停止')
         a = args_for(record, self.ctx.directory)
         if method != 'update':
             self.bind(record['device']['serial'])
             a.adb = self.adb.exe
         self.expected_ssh_key = record['device'].get('ssh_key')
-        with redirect_stdout(Quiet()), redirect_stderr(Quiet()):
+        with debug_output(self.ctx):
             if method == 'update':
                 self.stage('transfer_install')
                 if self.kind == 'e5':
@@ -302,9 +358,7 @@ class Adapter:
                 a.resume = True
                 a.transaction = record['legacy']
                 return self.legacy.install(a, self.root, json.loads((self.root/'desktop/manifest.json').read_text()))
-            done = {name for name, value in record['effects'].items() if value['state'] == 'done'}
-            if (self.kind == 'e5' and 'misc-trial' in done or self.kind == 'mu300' and
-                    ('root-tf-write' in done or any(name.startswith('boot-and-misc-') for name in done))):
+            if installation_committed(record):
                 # Final selection is after image/root readback in the legacy
                 # installers. A crash before the coordinator's next checkpoint
                 # must only wait for boot, never replay the full entrypoint.
