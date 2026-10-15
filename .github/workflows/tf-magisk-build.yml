@@ -1,9 +1,9 @@
 name: TF Magisk zips
 
 # Full TF-card Magisk zips (OpenWrt, kernels 6.18 + 7.2) the kano way,
-# each in two flavors: factory (fresh install) and sysupgrade (keep data).
+# factory only (fresh install; no sysupgrade twin, no desktop installer).
 # Flow: resolve (versions + skip check) -> vendor54 (5.4 modules, once) +
-# build matrix (mainline, rootfs, zips) -> publish (one release, 4 zips).
+# build matrix (mainline, rootfs, zips) -> publish (one release, 2 zips).
 # kano cuts no releases, so this triggers on SOURCE changes; inputs come
 # from our private device-inputs repo.
 on:
@@ -261,7 +261,7 @@ jobs:
             [ -s "work/out/modules/$f" ] || { echo "missing 5.4 module $f" >&2; exit 1; }
           done
 
-      - name: TF Magisk zips (factory + sysupgrade)
+      - name: TF Magisk zips (factory)
         run: |
           mkdir -p out-tf
           DATE=$(date -u +%Y%m%d)
@@ -270,6 +270,7 @@ jobs:
           for i in 1 2 3; do
             echo "==> TF build attempt $i/3"
             if MU300_KERNEL="${{ matrix.line }}" MU300_INPUTS="$PWD/work" \
+                 MU300_DESKTOP_INSTALLER=0 \
                  MU300_POST_ROOTFS="$PWD/custom/post-rootfs.sh" \
                  sh tools/build-openwrt-tf-magisk.sh "$ZOUT"; then
               ok=1; break
