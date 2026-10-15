@@ -9,15 +9,13 @@
  } from 'wifi.common';
  import { validate } from 'wifi.validate';
  import * as netifd from 'wifi.netifd';
-@@ -483,8 +483,50 @@
- 	phy_features.ftm_responder = device_extended_features(phy.extended_features, NL80211_EXT_FEATURE_ENABLE_FTM_RESPONDER);
- 	phy_features.radar_background = device_extended_features(phy.extended_features, NL80211_EXT_FEATURE_RADAR_BACKGROUND);
- 	phy_features.cipher_gcmp256 = WLAN_CIPHER_SUITE_GCMP_256 in (phy.cipher_suites ?? []);
-+	/* mu300: a driver that can detect radar names the widths in an interface combination */
+@@ -463,1 +463,3 @@
+ 	let band = wiphy_band(phy, config.band);
 +	phy_features.radar_detect = length(filter(phy.interface_combinations ?? [], (c) => c.radar_detect_widths)) > 0;
 +	phy_capabilities.freqs = band?.freqs ?? [];
+@@ -485,5 +487,43 @@
  }
-+
+ 
 +/* mu300: an AP on a DFS channel needs radar detection; without it hostapd's start_dfs_cac() fails and the AP never
 + * comes up (the SC2355 driver: mu300-linux docs/FINDINGS.md 40). For such a driver an explicit DFS channel becomes
 + * channel 36, keeping htmode exactly as configured. Never select 149 or narrow the bandwidth.
@@ -59,7 +57,6 @@
 +
  function generate(config) {
  	if (!config)
- 		die(`${config.path} is an unknown phy`);
 @@ -495,6 +537,8 @@
  
  	set_device_defaults(config);
