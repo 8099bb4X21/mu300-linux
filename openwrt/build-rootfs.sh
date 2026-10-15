@@ -86,6 +86,8 @@ URL=$BASEURL/$VER/targets/armsr/armv8
 # Build/install the patched APK before exposing LuCI's Mount Points page.
 BLOCK_APK=$TOP/work/block-mount-mu300.apk
 sh "$TOP/openwrt/build-block-mount.sh" "$BLOCK_APK"
+WIFI_APKS="$TOP/work/wifi-sae"
+UNISOC_WRT_VER="$VER" sh "$TOP/openwrt/build-hostapd.sh" "$WIFI_APKS"
 
 cd "$TOP"
 if [ ! -f "openwrt/$TARBALL" ]; then
@@ -129,6 +131,7 @@ docker run --rm --platform linux/arm64 \
   -v "$THEME_APK":/in/luci-theme-aurora.apk:ro \
   -v "$BLOCK_APK":/in/block-mount-mu300.apk:ro \
   -v "$BLOCK_APK.build-id":/in/block-mount.build-id:ro \
+  -v "$WIFI_APKS":/in/wifi-sae:ro \
   -v "$TOP/work/luci-app-aurora-config-1.2.5-r20260920.apk":/in/luci-app-aurora-config.apk:ro \
   -v "$TOP/work/luci-i18n-aurora-config-zh-cn-26.262.58276.362887a.apk":/in/aurora-config-zh-cn.apk:ro \
   -v "$TOP/work/luci-i18n-aurora-config-tr-26.262.58276.362887a.apk":/in/aurora-config-tr.apk:ro \
@@ -145,7 +148,8 @@ apk_retry() {
 apk_retry update >/dev/null
 # openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure;
 # i2c-tools, gpiod-tools: mu300-usb (the charger of the U30 Air) and mu300-nfc (its NFC tag)
-apk_retry add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
+apk_retry add --allow-untrusted /in/wifi-sae/*.apk >/dev/null
+apk_retry add iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
     i2c-tools gpiod-tools >/dev/null
 apk_retry add --allow-untrusted /in/block-mount-mu300.apk >/dev/null
 apk_retry add --allow-untrusted /in/luci-theme-aurora.apk >/dev/null
@@ -172,6 +176,8 @@ cp -a /in/opt-mu300 $R/opt/mu300
 cp -a /in/overlay/. $R/
 mkdir -p $R/etc/mu300
 cp /in/block-mount.build-id $R/etc/mu300/block-mount.build-id
+cp /in/wifi-sae/build-id $R/etc/mu300/wifi-sae.build-id
+cp /in/wifi-sae/source-info $R/etc/mu300/wifi-sae.source-info
 for f in sbin/block lib/libblkid-tiny.so etc/init.d/fstab; do
     [ -s "$R/$f" ] || { echo "patched block-mount required file missing: $f" >&2; exit 1; }
 done

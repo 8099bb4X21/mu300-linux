@@ -1,5 +1,8 @@
 # Linux on the ZTE F50 / MU300 and U30 Air
 
+Windows desktop installer: extract the complete release package and run root `OpenWrt-Installer.exe`. Device selection, persistent recovery and the two-stage Android reset flow share the existing backend. Python/CLI and Magisk entries remain available. See the bilingual [user guide](installer/GUIDE.md), [build instructions](installer/README.md), and [verification/screenshots](installer/VERIFICATION.md). Multiple ADB devices can be selected in the GUI or interactive CLI, or explicitly bound with `--serial SERIAL`.
+
+
 V50/MU3351 desktop-installer support and the new LED driver are documented in
 [the V50 adaptation record](docs/V50-MU3351-20261014.zh-CN.md), including what has
 been checked on hardware and what remains unverified.

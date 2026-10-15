@@ -4,6 +4,7 @@ import base64
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import shlex
@@ -454,7 +455,10 @@ desktop_free_loop
                 elf=bytearray(64);elf[:6]=b'\x7fELF\x02\x01';struct.pack_into('<H',elf,18,183);p.write_bytes(elf)
             (stage/'customize.sh').write_text('ORIGINAL_PAYLOAD=$MODPATH\n[ -f "$MODPATH/boot-linux.img" ]\n')
             original=package.original_files(stage)
-            manifest=package.assemble(stage,tools,'7.2')
+            # This tiny Magisk fixture deliberately exercises the CLI-only layout.
+            # Portable GUI artifacts are verified by the shared release tests.
+            with patch.dict(os.environ, {'OPENWRT_GUI_OPTIONAL':'1'}):
+                manifest=package.assemble(stage,tools,'7.2')
             self.assertEqual({n:package.sha(stage/manifest['magisk_layout'][n]) for n in original},original)
             self.assertEqual([p.relative_to(stage).as_posix() for p in stage.rglob('*.tar.gz')],['payload/mu300-openwrt.tar.gz'])
             self.assertEqual({p.name for p in stage.iterdir() if p.is_file()}, {'OpenWrt-Installer.py','START-HERE.md','customize.sh','module.prop'})

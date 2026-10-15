@@ -464,7 +464,8 @@ static int cmdevt_send_cmd(struct sprd_priv *priv, struct sprd_msg *msg)
 		hdr->common.mode, cmdevt_cmd2str(hdr->cmd_id));
 
 	if (sprd_get_debug_level() >= L_DBG)
-		print_hex_dump_debug("CMD: ", DUMP_PREFIX_OFFSET, 16, 1,
+		if (hdr->cmd_id != CMD_SET_SAE_PARAM)
+			print_hex_dump_debug("CMD: ", DUMP_PREFIX_OFFSET, 16, 1,
 				     (u8 *)hdr, hdr->plen, 0);
 
 	ret = sprd_chip_tx(&priv->chip, msg);
@@ -681,7 +682,9 @@ int sc2355_send_cmd_recv_rsp(struct sprd_priv *priv, struct sprd_msg *msg, u8 *r
 	}
 
 	ret = sc2355_api_version_available_check(priv, msg);
-	if (ret || cmdevt_lock_cmd(cmd, hif)) {
+	if (!ret)
+		ret = cmdevt_lock_cmd(cmd, hif);
+	if (ret) {
 		sprd_chip_free_msg(&priv->chip, msg);
 		kfree(msg->tran_data);
 		if (rlen)
@@ -696,6 +699,7 @@ int sc2355_send_cmd_recv_rsp(struct sprd_priv *priv, struct sprd_msg *msg, u8 *r
 
 	if (atomic_read(&priv->hif.block_cmd_after_close) == 1) {
 		if (cmd_id != CMD_CLOSE) {
+			ret = -EBUSY;
 			pr_info("%s need block cmd after close : %s\n",
 				__func__, cmdevt_cmd2str(cmd_id));
 			sprd_chip_free_msg(&priv->chip, msg);
@@ -707,6 +711,7 @@ int sc2355_send_cmd_recv_rsp(struct sprd_priv *priv, struct sprd_msg *msg, u8 *r
 
 	if (atomic_read(&priv->hif.change_iface_block_cmd) == 1) {
 		if (cmd_id != CMD_CLOSE && cmd_id != CMD_OPEN) {
+			ret = -EBUSY;
 			pr_info("%s need block cmd while change iface : %s\n",
 				__func__, cmdevt_cmd2str(cmd_id));
 			sprd_chip_free_msg(&priv->chip, msg);
@@ -733,6 +738,10 @@ int sc2355_send_cmd_recv_rsp(struct sprd_priv *priv, struct sprd_msg *msg, u8 *r
 
 	ret = cmdevt_recv_rsp_timeout(priv, timeout);
 	if (ret != -1) {
+		/* SAE rejection must not become a successful START_AP. */
+		if (cmd_id == CMD_SET_SAE_PARAM &&
+		    (!cmd->data || ((struct sprd_cmd_hdr *)cmd->data)->status))
+			ret = -EIO;
 #ifndef DRV_RESET_SELF
 		if (rbuf && rlen && *rlen) {
 #else
@@ -1877,14 +1886,21 @@ int sc2355_set_sae_ie(struct sprd_priv *priv, struct sprd_vif *vif,
 	return cmdevt_set_ie(priv, vif, SPRD_IE_SAE, ie, len);
 }
 
+#include "sae.h"
+
 int sc2355_start_ap(struct sprd_priv *priv, struct sprd_vif *vif, u8 *beacon,
 		    u16 len, struct cfg80211_ap_settings *settings)
 {
+	int ret;
 	struct sprd_msg *msg;
 	struct cmd_start_ap *p;
 	u16 datalen = sizeof(*p) + len;
 	struct sprd_api_version_t *api = (&priv->sync_api)->api_array;
 	u8 fw_ver = 0;
+
+	ret = sc2355_prepare_sae(priv, vif, settings);
+	if (ret)
+		return ret;
 
 	fw_ver = (api + CMD_SCAN)->fw_version;
 	if (vif->priv->hif.hw_type == SPRD_HW_SC2355_PCIE) {
@@ -3948,7 +3964,8 @@ unsigned short sc2355_rx_evt_process(struct sprd_priv *priv, u8 *msg)
 		return plen;
 	}
 
-	print_hex_dump_debug("EVENT: ", DUMP_PREFIX_OFFSET, 16, 1,
+	if (hdr->cmd_id != EVT_NEW_STATION)
+		print_hex_dump_debug("EVENT: ", DUMP_PREFIX_OFFSET, 16, 1,
 			     (u8 *)hdr, hdr->plen, 0);
 
 	len = plen - sizeof(*hdr);

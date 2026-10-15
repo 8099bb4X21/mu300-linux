@@ -4,6 +4,7 @@
 set -eu
 set -o pipefail
 P=${MU300_PAYLOAD_DIR:?};T=${MU300_INSTALL_TMP:?}
+. "$P/desktop-settings.env"
 . "$P/android-loop.sh"
 # BusyBox's losetup lacks a size-limit option. Use Android Toybox explicitly;
 # PATH in the installer intentionally points at BusyBox for other applets.
@@ -69,10 +70,12 @@ repair=$P/desktop/files/boot/repair
 "$repair/lib/ld-musl-aarch64.so.1" --library-path "$repair/lib:$repair/usr/lib" "$repair/usr/sbin/e2fsck" -pf "$loop" || {
     rc=$?; [ "$rc" = 1 ] || exit "$rc";
 }
+if [ "${GROW_FS:-1}" = 1 ]; then
 "$repair/lib/ld-musl-aarch64.so.1" --library-path "$repair/lib:$repair/usr/lib" "$repair/usr/sbin/resize2fs" -f "$loop" "$((need/8))"
 "$repair/lib/ld-musl-aarch64.so.1" --library-path "$repair/lib:$repair/usr/lib" "$repair/usr/sbin/e2fsck" -fn "$loop"
 low=$(od -An -tu4 -j1028 -N4 "$loop" | tr -d ' \n');high=$(od -An -tu4 -j1360 -N4 "$loop" | tr -d ' \n')
 [ "$high" = 0 ] && [ "$low" = "$((need/8))" ]
+fi
 mount -t ext4 -o ro,noload "$loop" "$T/image-root"
 mounted=1
 (cd "$T/image-root" && sha256sum -c "$T/image.sha256" >/dev/null)

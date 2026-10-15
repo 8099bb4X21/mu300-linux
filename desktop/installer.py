@@ -22,6 +22,7 @@ import time
 import urllib.request
 import uuid
 import zlib
+GUI = None  # Optional structured observer for the shared Tauri backend.
 
 class Outcome:
     def __init__(self,state,message,next_step=''):
@@ -118,6 +119,9 @@ def verify(root):
     return m
 
 def confirm(message):
+    if GUI:
+        GUI.ctx.boundary()
+        return
     print('\n'+message)
     if input('Type yes to continue / 输入 yes 继续: ').strip()!='yes': raise InstallerCancelled()
 
@@ -234,13 +238,13 @@ def env(values):
     return ''.join(k+'='+shlex.quote(str(v))+'\n' for k,v in values.items())
 
 def settings(args, image_mib, mode, kernel):
-    ssid=input('Hotspot name / 热点名称 [import Android]: ').strip()
+    ssid='' if GUI else input('Hotspot name / 热点名称 [import Android]: ').strip()
     key=input('Hotspot key / 热点密码 (visible / 明文输入): ') if ssid else ''
     if ssid and (len(ssid.encode())>32 or '\n' in ssid or '\r' in ssid): raise ValueError('SSID must be 1–32 UTF-8 bytes')
     if ssid and (not 8<=len(key)<=63 or any(ord(c)<32 or ord(c)>126 for c in key)): raise ValueError('Wi-Fi key must be 8–63 ASCII characters')
-    apn=input('APN [SIM default / SIM 默认]: ').strip()
+    apn='' if GUI else input('APN [SIM default / SIM 默认]: ').strip()
     if apn and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,99}',apn):raise ValueError('Invalid APN')
-    return env({'IMAGE_MIB':image_mib,'DESKTOP_MODE':mode,'KERNEL':kernel,'SSID':ssid,'WIFI_KEY':key,'APN':apn,'PWHASH':''})
+    return env({'IMAGE_MIB':image_mib,'DESKTOP_MODE':mode,'KERNEL':kernel,'SSID':ssid,'WIFI_KEY':key,'APN':apn,'PWHASH':'','GROW_FS':int(getattr(args,'grow_fs',True))})
 
 class Android:
     def __init__(self,args):
@@ -250,6 +254,11 @@ class Android:
         serials=[l.split()[0] for l in listing.splitlines() if len(l.split())==2 and l.split()[1]=='device']
         if args.serial: self.serial=args.serial
         elif len(serials)==1: self.serial=serials[0]
+        elif len(serials)>1 and sys.stdin.isatty() and not GUI:
+            for index,serial in enumerate(serials,1):print(f'  {index}. Device / 设备 ••••{serial[-4:]}')
+            selected=input('Select device number / 选择设备编号: ').strip()
+            if not selected.isdigit() or not 1<=int(selected)<=len(serials):raise ValueError('Invalid device number; use --serial SERIAL')
+            self.serial=serials[int(selected)-1]
         else: raise ValueError('Specify --serial; expected one online Android device: '+repr(serials))
         if self.serial not in serials: raise ValueError('Android is not online: '+self.serial)
         if self.shell('id -u',root=False).strip()=='0': self.su=False
@@ -270,7 +279,8 @@ class Android:
         cmd=[self.adb]
         selected=serial if serial is not None else getattr(self,'serial',None)
         if selected:cmd+=['-s',selected]
-        proc=subprocess.Popen(cmd+list(args),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        proc=subprocess.Popen(cmd+list(args),stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+            **({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {}))
         start=time.monotonic()
         while True:
             try: out,err=proc.communicate(timeout=min(10,timeout));break
@@ -284,9 +294,12 @@ class Android:
         return out
 
     def reboot(self):
+        if GUI:GUI.reboot()
         # The ADB reboot service acknowledges the request before shutting down;
         # a root shell may disconnect before it can return an exit status.
-        self.call('reboot',timeout=30)
+        try:self.call('reboot',timeout=30)
+        except (RuntimeError,ConnectionError,EOFError):
+            if not GUI:raise
         print('Reboot request sent / 已发送重启请求。')
 
     def shell(self,script,root=True,timeout=1800):
@@ -302,6 +315,9 @@ class Android:
         # adb push runs as Android shell even when su is available. Private
         # staging belongs to shell; root remains able to consume it.
         self.shell('mkdir -p '+parent+'; chown 2000:2000 '+parent+'; chmod 700 '+parent)
+        if GUI:
+            GUI.push(self.call,self.shell,path,remote)
+            return remote
         self.call('push',str(path),remote)
         want=digest(path)
         got=self.shell('sha256sum '+shlex.quote(remote)).split()[0]
@@ -320,7 +336,10 @@ class Android:
         cmd='su -c '+shlex.quote(encoded) if self.su else 'sh -c '+shlex.quote(encoded)
         return base64.b64decode(b''.join(self.call('exec-out',cmd).split()),validate=True)
 
-    def run(self,body):
+    def run(self,body,effect=None):
+        if GUI and effect:
+            GUI.stage('transfer_install')
+            return GUI.action(effect,lambda:self.run(body))
         script='#!/system/bin/sh\nset -eu\nP='+self.p+'\nT='+self.t+'\nBB='+self.bb+'\nexport MU300_PAYLOAD_DIR=$P MU300_INSTALL_TMP=$T MU300_BUSYBOX=$BB MU300_KEEP_PAYLOAD=1\nmkdir -p "$T/bin"\n"$BB" --install -s "$T/bin"\nexport PATH="$T/bin:$PATH"\n'+body+'\n'
         p=self.put(script,'run.sh')
         result=self.shell(self.bb+' nsenter -t 1 -m '+self.bb+' sh '+p)
@@ -416,6 +435,10 @@ class Android:
         path.joinpath('gpt-layout.json').write_text(json.dumps({'front_sectors':front,'tail_start':tail,'disk_sectors':s['DISK_SIZE']},indent=2)+'\n')
 
     def flash(self,image,bc):
+        if GUI:return GUI.action('boot-and-misc-'+hashlib.sha256(image).hexdigest()[:16],lambda:self._flash(image,bc))
+        return self._flash(image,bc)
+
+    def _flash(self,image,bc):
         self.put(image,'boot-desktop.img');self.put(bc,'misc-linux.bin')
         self.run('''[ "$(getprop ro.boot.slot_suffix)" = "_'''+self.slot+'''" ]
 "$BB" sh "$P/android-bootchain.sh" sync "$T/bootchain-backup"
@@ -442,12 +465,13 @@ echo 'BOOT-VERIFIED; OpenWrt selected'
 
 def transaction(path,record):
     tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(record,indent=2)+'\n');tmp.replace(path)
+    if GUI:GUI.saved(path,record)
 
-def validate_resume(s,r,slot,serial,root_geometry,marker):
+def validate_resume(s,r,slot,serial,root_geometry,marker,root_verified=False):
     if s['CID']!=r['storage']['CID'] or s['NODE']!=r['storage']['NODE'] or s['START']!=r['storage']['START'] or slot!=r['android_slot'] or serial!=r['serial']:
         raise ValueError('Resume device/slot differs from the saved transaction')
     if s['SIZE']!=r['target'] or root_geometry!=(s['START']+r['target'],r['need']):raise ValueError('Prepared partition geometry differs')
-    if marker.strip()!=('MU300-PART-PREPARED-V2 '+r['token']).encode():raise ValueError('Preparation token mismatch; refusing to overwrite a root')
+    if not root_verified and marker.strip()!=('MU300-PART-PREPARED-V2 '+r['token']).encode():raise ValueError('Preparation token mismatch; refusing to overwrite a root')
 
 def resume_payload_id(manifest):
     # Paths, EXE, prompts and upload scripts can change in a repair release.
@@ -502,7 +526,8 @@ def load_resume(args,root,manifest,a,s):
     if not rootnode:raise ValueError('No prepared mu300root found')
     geometry=tuple(int(x) for x in a.shell('cat /sys/class/block/'+rootnode+'/start /sys/class/block/'+rootnode+'/size').split())
     marker=a.read('dd if=/dev/block/'+rootnode+' bs=512 count=1 2>/dev/null').split(b'\0',1)[0]
-    validate_resume(s,r,a.slot,a.serial,geometry,marker)
+    verified=r.get('state')=='installed' or bool(GUI and GUI.ctx.record['effects'].get('root-part-write',{}).get('state')=='done')
+    validate_resume(s,r,a.slot,a.serial,geometry,marker,root_verified=verified)
     validate_resume_package(root,manifest,r,record)
     return record,r,geometry
 
@@ -540,6 +565,7 @@ def install(args,root,manifest):
     if args.tf:
         sd=a.shell('if [ -b /dev/block/mmcblk1p1 ]; then echo /dev/block/mmcblk1p1; elif [ -b /dev/block/mmcblk1 ]; then echo /dev/block/mmcblk1; fi').strip()
         if not sd:raise ValueError('No TF card found; choose an internal-storage method instead')
+        if GUI:GUI.validate_plan(sd,capacity=int(a.shell('cat /sys/class/block/'+sd.rsplit('/',1)[-1]+'/size').strip())*512)
         confirm('This formats '+sd+'; its existing data will be erased / 会清空所选 TF 分区。')
         a.prepare_payload(root,tf=True)
         custom=settings(args,2048,'sd',manifest['kernel'])
@@ -568,7 +594,7 @@ def install(args,root,manifest):
         a.put(env({'SD_MODE':1,'SD_DEV':sd,'FORMAT':1,'SYNC_BOOTCHAIN':1,'OSES':'openwrt','WIPE_LEGACY':0,'UPDATE':0,'BOOT_OS':'openwrt','DEFAULT_LINUX':1,'BOOT_ATTEMPTS':5,'IMPORT_HOTSPOT':1,'KERNEL':manifest['kernel'],'PWHASH':''}),'mu300-install.env')
         # The original TF worker handles release, formatting and readback.
         # Only its desktop upload has custom settings and fresh A/B blocks.
-        a.run('export MU300_TF_BOOTDEV=/dev/block/by-name/boot_'+a.linux+'\n"$BB" sh "$P/tf-install-worker.sh"')
+        a.run('export MU300_TF_BOOTDEV=/dev/block/by-name/boot_'+a.linux+'\n"$BB" sh "$P/tf-install-worker.sh"',**({'effect':'root-tf-write'} if GUI else {}))
         return Outcome('success','TF installation verified / TF 安装和写入校验已完成。','Reboot the device manually / 请手动重启设备。')
     base=Path(args.backup_dir).expanduser()
     if args.resume:
@@ -581,6 +607,7 @@ def install(args,root,manifest):
         node=s.get('ROOT')
         if not node:raise ValueError('No existing mu300root to reinstall')
         capacity=int(a.shell('cat /sys/class/block/'+node+'/size').strip())
+        if GUI:GUI.validate_plan(node,capacity=capacity*512)
         confirm('Reinstall erases only the existing OpenWrt partition, including its settings / 会清空原 OpenWrt 分区及设置。')
         a.prepare_payload(root)
         return direct_write(a,root,m,manifest,s,capacity)
@@ -599,6 +626,7 @@ def install(args,root,manifest):
         size=image_size(args.size or input(f'OpenWrt partition GiB / 分区大小 [4], max {maximum/1024:.2f}: ') or '4',maximum)
         offset=free_root_range(space,size*2048)
         if offset is not None:
+            if GUI:GUI.validate_plan('GPT unallocated space',capacity=size*1048576,gap_start=offset)
             if args.format_userdata:raise ValueError('Free-space installation preserves userdata; omit --format-userdata')
             confirm(f'Use {size/1024:.2f} GiB of unallocated eMMC space; Android userdata is preserved / 使用未分配空间，不缩容、不格式化 Android。Selected raw range will be overwritten / 所选空闲区域原始内容将被覆盖。')
             backup=base/(time.strftime('%Y%m%d-%H%M%S')+'-'+s['CID'][-8:]);a.backup(backup,s)
@@ -614,16 +642,18 @@ def install(args,root,manifest):
         maximum=(s['FREE']//1024-1024-256)
         print(f'Available / 可用: {s["FREE"]/1048576:.2f} GiB; image maximum {maximum/1024:.2f} GiB')
         size=image_size(args.size or input('Image size GiB / 镜像大小 [4]: ') or '4',maximum)
+        if GUI:GUI.validate_plan('userdata-image',capacity=size*1048576)
         confirm('Create a userdata image; an existing image will be retained as a backup / 新建镜像，保留已有镜像备份。')
         a.prepare_payload(root)
         a.put(settings(args,size,'data-image',manifest['kernel']),'desktop-settings.env')
-        a.run('"$BB" sh "$P/android-image.sh"')
+        a.run('"$BB" sh "$P/android-image.sh"',**({'effect':'root-image-write'} if GUI else {}))
         live=a.live();a.flash(boot(root,m,'data-image',live,a.slot),m.boot_control(live,a.slot))
         return Outcome('success','Userdata image and boot verified / userdata 镜像和启动镜像已安装并校验。','Reboot the device manually / 请手动重启设备。')
     if s['START']%2048:raise ValueError('userdata starts at an unsupported unaligned sector')
     target,need=allocation(s['SIZE'],size)
     destructive=is_encrypted or args.format_userdata
-    if not destructive:
+    if GUI:GUI.validate_plan('userdata shrink',wipe=destructive,capacity=size*1048576)
+    if not destructive and not GUI:
         destructive=input('Format Android userdata instead of preserving it? / 是否格式化 Android 数据？[no]: ').strip().lower()=='yes'
     if not destructive and (target//2 < (s['SIZE']//2-s['FREE']+1048576)):
         raise ValueError('Android data + 1 GiB reserve does not fit the selected smaller userdata')
@@ -648,7 +678,7 @@ def install(args,root,manifest):
     a.prepare_payload(root)
     a.put(settings(args,2048,'part-stage',manifest['kernel']),'desktop-settings.env')
     a.run('"$BB" sh "$P/android-image.sh"')
-    a.run('printf "PART_MIB='+str(size)+'\\nDATA_MIB='+str(target//2048)+'\\nGROW_FS=1\\nFORMAT_DATA=0\\n" > /data/mu300linux/part-install.conf\nsync')
+    a.run('printf "PART_MIB='+str(size)+'\\nDATA_MIB='+str(target//2048)+'\\nGROW_FS='+str(int(getattr(args,'grow_fs',True)))+'\\nFORMAT_DATA=0\\n" > /data/mu300linux/part-install.conf\nsync')
     identity=':'.join(map(str,(s['CID'],s['NODE'],s['START'],s['SIZE'],target)))
     a.flash(boot(root,m,'install-part',live,a.slot,identity=identity),m.boot_control(live,a.slot))
     print('Offline shrink/install starts after reboot; progress at http://192.168.77.1:8089/progress.txt (U30Air: .78.1). / 重启后开始离线安装。')
@@ -659,10 +689,12 @@ def install(args,root,manifest):
 
 def direct_write(a,root,m,manifest,s,sectors,record=None,r=None):
     node=s['ROOT']
-    a.put(settings(a.args,2048,'part',manifest['kernel']),'desktop-settings.env')
-    a.run('"$BB" sh "$P/android-image.sh"')
-    checksum=a.shell('sha256sum '+a.t+'/openwrt.ext4.new').split()[0]
-    a.run('"$BB" sh "$P/android-write-part.sh" /dev/block/'+node+' '+s['CID']+' '+str(sectors)+' '+checksum)
+    verified=bool(GUI and GUI.ctx.record['effects'].get('root-part-write',{}).get('state')=='done')
+    if not verified:
+        a.put(settings(a.args,2048,'part',manifest['kernel']),'desktop-settings.env')
+        a.run('"$BB" sh "$P/android-image.sh"')
+        checksum=a.shell('sha256sum '+a.t+'/openwrt.ext4.new').split()[0]
+        a.run('"$BB" sh "$P/android-write-part.sh" /dev/block/'+node+' '+s['CID']+' '+str(sectors)+' '+checksum,**({'effect':'root-part-write'} if GUI else {}))
     live=a.live();a.flash(boot(root,m,'part',live,a.slot),m.boot_control(live,a.slot))
     if record:r['state']='installed';transaction(record,r)
     return Outcome('success',f'Independent partition installed and verified: {sectors/2097152:.2f} GiB / 独立分区已安装、扩容并校验。',
@@ -679,7 +711,7 @@ def free_write(a,root,m,manifest,s,space,offset,sectors):
     if not re.fullmatch('[a-f0-9]{64}',checksum):raise ValueError('Invalid image checksum')
     disk='/dev/block/'+s['NODE'].split('p')[0]
     a.run('"$BB" sh "$P/android-write-free.sh" '+env_args([
-        disk,s['CID'],s['DISK_SIZE'],offset,sectors,checksum,space['front'],space['tail']]))
+        disk,s['CID'],s['DISK_SIZE'],offset,sectors,checksum,space['front'],space['tail']]),**({'effect':'root-free-write'} if GUI else {}))
     # Independent verification after the device-side comparison, before
     # writing boot or selecting the alternate slot.
     if a.read(f'dd if={disk} bs=512 count={space["front"]} 2>/dev/null')!=first or a.read(
@@ -728,9 +760,11 @@ def ssh_upload(c,path,destination):
         channel.settimeout(120)
         channel.exec_command('umask 077; cat > '+shlex.quote(destination))
         size=path.stat().st_size;sent=0;last=0
+        started=time.monotonic()
         with path.open('rb') as stream:
             while data:=stream.read(262144):
                 channel.sendall(data);sent+=len(data)
+                if GUI:GUI.transfer(path.name,sent,size,started)
                 if time.monotonic()-last>=1:
                     print(f'\r  {path.name}: {sent>>20}/{size>>20} MiB',end='',flush=True)
                     last=time.monotonic()
@@ -749,7 +783,8 @@ def update(args,root):
     # key for this connection without loading or saving a persistent IP pin.
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     host=args.host or input('Device IP / 设备 IP [192.168.77.1]: ').strip() or '192.168.77.1'
-    c.connect(host,username='root',password=os.environ.get('MU300_SSH_PASSWORD') or getpass.getpass('SSH root password: '),timeout=15,look_for_keys=False,allow_agent=False)
+    c.connect(host,username='root',password=GUI.password if GUI else os.environ.get('MU300_SSH_PASSWORD') or getpass.getpass('SSH root password: '),timeout=15,look_for_keys=False,allow_agent=False)
+    if GUI:GUI.validate_ssh(c)
     try:
         info=ssh_exec(c,'''set -e
 cat /run/mu300/device
@@ -785,7 +820,9 @@ fi''').strip().splitlines()
         with tempfile.TemporaryDirectory() as t:
             for name,data in (('boot-desktop.img',newboot),('misc-linux.bin',bc)):
                 f=Path(t)/name;f.write_bytes(data);send(f,name)
-        ssh_exec(c,'chmod 700 '+p+'/busybox && sh '+p+'/local-update.sh '+p)
+        command='chmod 700 '+p+'/busybox && sh '+p+'/local-update.sh '+p
+        if GUI:GUI.action('update-commit',lambda:ssh_exec(c,command))
+        else:ssh_exec(c,command)
     finally:c.close()
     return Outcome('success','Update verified; device is rebooting / 更新校验完成，设备正在重启。',
                    'Wait for OpenWrt to start / 等待 OpenWrt 启动。')
