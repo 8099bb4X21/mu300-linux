@@ -1,23 +1,22 @@
 --- a/usr/share/ucode/wifi/hostapd.uc
 +++ b/usr/share/ucode/wifi/hostapd.uc
-@@ -2,7 +2,7 @@
- 
+@@ -3,5 +3,5 @@
  import {
  	append, append_raw, append_vars, dump_config, flush_config, set_default,
 -	wiphy_info, wiphy_band
 +	wiphy_info, wiphy_band, log
  } from 'wifi.common';
  import { validate } from 'wifi.validate';
- import * as netifd from 'wifi.netifd';
-@@ -483,8 +483,50 @@
- 	phy_features.ftm_responder = device_extended_features(phy.extended_features, NL80211_EXT_FEATURE_ENABLE_FTM_RESPONDER);
- 	phy_features.radar_background = device_extended_features(phy.extended_features, NL80211_EXT_FEATURE_RADAR_BACKGROUND);
- 	phy_features.cipher_gcmp256 = WLAN_CIPHER_SUITE_GCMP_256 in (phy.cipher_suites ?? []);
-+	/* mu300: a driver that can detect radar names the widths in an interface combination */
+@@ -469,4 +469,6 @@
+ 	phy = wiphy_info(phy);
+ 	let band = wiphy_band(phy, config.band);
 +	phy_features.radar_detect = length(filter(phy.interface_combinations ?? [], (c) => c.radar_detect_widths)) > 0;
 +	phy_capabilities.freqs = band?.freqs ?? [];
+ 
+ 	phy_capabilities.ht_capa = band.ht_capa ?? 0;
+@@ -486,4 +488,43 @@
  }
-+
+ 
 +/* mu300: an AP on a DFS channel needs radar detection; without it hostapd's start_dfs_cac() fails and the AP never
 + * comes up (the SC2355 driver: mu300-linux docs/FINDINGS.md 40). For such a driver an explicit DFS channel becomes
 + * channel 36, keeping htmode exactly as configured. Never select 149 or narrow the bandwidth.
@@ -25,7 +24,7 @@
 +function device_no_dfs(config) {
 +	if (config.band != '5g' || phy_features.radar_detect)
 +		return;
- 
++
 +	let radar = {}, usable = [], widths = {};
 +	for (let f in phy_capabilities.freqs) {
 +		let chan = (f.freq - 5000) / 5;
@@ -59,13 +58,10 @@
 +
  function generate(config) {
  	if (!config)
- 		die(`${config.path} is an unknown phy`);
-@@ -495,6 +537,8 @@
+@@ -495,4 +536,6 @@
  
  	set_device_defaults(config);
- 
-+	device_no_dfs(config);
 +
- 	device_log_append(config);
++	device_no_dfs(config);
  
- 	device_country_code(config);
+ 	device_log_append(config);
