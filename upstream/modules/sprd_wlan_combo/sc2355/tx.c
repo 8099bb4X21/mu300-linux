@@ -341,6 +341,12 @@ static int tx_handle_to_send_list(struct sprd_hif *hif, enum sprd_mode mode)
 						credit, SPRD_AC_MAX, coex_bt_on);
 			sc2355_handle_tx_return(hif, list, credit, ret);
 		}
+		/* A full EDMA pending queue kept ownership with us. The bus
+		 * completion wakes TX again; do not spend the hard-error budget
+		 * or flush packets merely because this retry also met pressure.
+		 */
+		if (hif->hw_type == SPRD_HW_SC2355_PCIE && ret == -EAGAIN)
+			return ret;
 		if (ret) {
 			pr_err("%s, %d: tx return err!\n", __func__, __LINE__);
 			tx_mgmt->xmit_msg_list.failcount++;
@@ -931,6 +937,16 @@ static int tx_mc_pkt(struct sk_buff *skb, struct net_device *ndev)
 
 	vif = netdev_priv(ndev);
 	hif = &vif->priv->hif;
+
+	/* PCIe AP multicast belongs to the flow-controlled data queue, like
+	 * IPv4 multicast. CMD_TX_DATA can reject valid bursts (observed after
+	 * six frames on F50 firmware); further IPv6 frames are rejected by FW
+	 * while the command worker considers them sent. Returning to the IP
+	 * filter preserves the dedicated DHCPv6/VoWiFi command handling.
+	 * Keep the SDIO workaround until its transport is validated separately.
+	 */
+	if (hif->hw_type == SPRD_HW_SC2355_PCIE)
+		return 1;
 
 	if (skb->data) {
 		memcpy(hif->skb_da, skb->data, ETH_ALEN);
@@ -2036,6 +2052,7 @@ int sc2355_tx_init(struct sprd_hif *hif)
 	tx_mgmt->cmd_timeout = msecs_to_jiffies(SPRD_TX_CMD_TIMEOUT);
 	tx_mgmt->data_timeout = msecs_to_jiffies(SPRD_TX_DATA_TIMEOUT);
 	atomic_set(&tx_mgmt->flow0, 0);
+	atomic_set(&tx_mgmt->pcie_tx_waiting, 0);
 	atomic_set(&tx_mgmt->flow1, 0);
 	atomic_set(&tx_mgmt->flow2, 0);
 
@@ -2346,8 +2363,6 @@ int sc2355_send_data(struct sprd_vif *vif, struct sprd_msg *msg,
 
 	hif = &vif->priv->hif;
 
-	buf = skb->data;
-
 	if (hif->hw_type == SPRD_HW_SC2355_PCIE) {
 		if (sc2355_pcie_hif_fill_msdu_dscr(vif, skb, SPRD_TYPE_DATA, offset))
 			return -EPERM;
@@ -2358,8 +2373,10 @@ int sc2355_send_data(struct sprd_vif *vif, struct sprd_msg *msg,
 
 	sprd_fill_msg(msg, skb, skb->data, skb->len);
 
+	/* Descriptor preparation may move skb->data on either transport. */
+	buf = skb->data + DSCR_LEN + offset;
 	if (hif->hw_type == SPRD_HW_SC2355_PCIE)
-		buf = skb->data + MSDU_DSCR_RSVD + DSCR_LEN;
+		buf += MSDU_DSCR_RSVD;
 
 	if (sc2355_tcp_ack_filter_send(vif->priv, msg, buf, plen))
 		return 0;

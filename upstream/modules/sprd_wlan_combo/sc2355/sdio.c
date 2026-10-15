@@ -779,7 +779,6 @@ int sc2355_hif_fill_msdu_dscr(struct sprd_vif *vif,
 	struct tx_msdu_dscr *dscr;
 	struct sprd_hif *hif;
 	u8 lut_index;
-	struct sk_buff *temp_skb;
 	unsigned char dscr_rsvd = 0;
 	struct ethhdr *ethhdr = (struct ethhdr *)skb->data;
 	u8 is_special_data = 0;
@@ -797,22 +796,23 @@ int sc2355_hif_fill_msdu_dscr(struct sprd_vif *vif,
 
 	hif = &vif->priv->hif;
 	dscr_rsvd = 0;
-	if (skb_headroom(skb) < (DSCR_LEN + hif->hif_offset +
+	/* Keep the skb object owned by the caller, including on allocation
+	 * failure. Replacing only this local pointer leaves its caller using
+	 * freed memory. Cloned headers must also become writable before push.
+	 */
+	if (skb_headroom(skb) < (DSCR_LEN + offset + hif->hif_offset +
+				 MSG_PTR_LEN + dscr_rsvd) || skb_header_cloned(skb)) {
+		if (skb_cow_head(skb, DSCR_LEN + offset + hif->hif_offset +
 				 MSG_PTR_LEN + dscr_rsvd)) {
-		temp_skb = skb;
-
-		skb = skb_realloc_headroom(skb, (DSCR_LEN + hif->hif_offset +
-						 MSG_PTR_LEN + dscr_rsvd));
-		kfree_skb(temp_skb);
-		if (!skb) {
-			pr_err("%s:%d failed to unshare skbuff: NULL\n",
-			       __func__, __LINE__);
-			return -EPERM;
+			pr_err_ratelimited("%s: failed to prepare skb headroom\n", __func__);
+			return -ENOMEM;
 		}
 #if defined(MORE_DEBUG)
 		hif->stats.tx_realloc++;
 #endif
 	}
+	/* skb_cow_head may have moved the data allocation. */
+	ethhdr = (struct ethhdr *)skb->data;
 
 	if (skb->data) {
 		memcpy(hif->skb_da, skb->data, ETH_ALEN);

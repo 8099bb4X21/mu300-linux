@@ -132,6 +132,7 @@ int main(void) {
         self.run_c(r'''
 #include <assert.h>
 #include <string.h>
+#include <errno.h>
 typedef long long atomic64_t;
 static atomic64_t edma_pending_full[32];
 #define atomic64_inc(p) (++*(p))
@@ -156,7 +157,7 @@ int main(void) {
     struct edma_pending_q before = *q;
     int head = 1, tail = 2;
     for (int i = 0; i < 50000; i++)
-        assert(edma_pending_q_buffer(10, &head, &tail, 2) == ERROR);
+        assert(edma_pending_q_buffer(10, &head, &tail, 2) == -EAGAIN);
     assert(!memcmp(&before, q, sizeof(before)));
     assert(edma_pending_full[10] == 50000 && warnings == 1);
     for (int i = 0; i < 32; i++) if (i != 10) assert(edma_pending_full[i] == 0);
