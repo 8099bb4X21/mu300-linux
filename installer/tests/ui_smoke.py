@@ -6,11 +6,18 @@ from playwright.sync_api import sync_playwright
 ROOT=Path(__file__).resolve().parents[1]
 BRIDGE=r"""
 (() => {
+ localStorage.setItem('support-notice-v1','seen');
  const callbacks = new Map(); let seq = 1;
  const device = {serial:'fixture-1234',model:'E5',system:'Android',slot:'_a',root:true,readiness:'ready',encrypted:true,profile:'e5'};
  const pkg = {path:'D:/OpenWrt-Package',name:'e5-openwrt-release',adapter:'e5',profile:'e5',kernel:'v2'};
  const tx = {id:'a'.repeat(32),status:'ready',stage:'plan',device,package:pkg,choices:{method:'part'},plan:{wipe:true,two_stage:true,offline:true,openwrt_bytes:10737418240,android_bytes:21474836480,target:'userdata shrink',grow:true},completed:[],unsafe:false,updated:Date.now()/1000};
- window.__fixture={tx,callbacks,records:[tx],fail:null,requests:[],calls:[],probed:{}};
+ window.__fixture={tx,callbacks,records:[tx],fail:null,requests:[],calls:[],probed:{},autoDismissSupport:true};
+ // Other suites dismiss the startup notice as a user would. The support suite
+ // disables this automation and verifies the actual dialog and every launch.
+ new MutationObserver(()=>{
+  if(window.__fixture.autoDismissSupport)
+   document.querySelector('button[aria-label="关闭赞赏提示"],button[aria-label="Close support notice"]')?.click();
+ }).observe(document,{childList:true,subtree:true});
  window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};
  window.__TAURI_INTERNALS__={
   transformCallback(fn,once){const id=seq++;callbacks.set(id,fn);return id;},
@@ -54,6 +61,12 @@ def settle(page):
     page.wait_for_timeout(450)
 
 
+def fixture_context(browser,**options):
+    context=browser.new_context(**options)
+    context.route('https://api.kanokano.cn/pay/zsm.png',lambda route:route.abort())
+    return context
+
+
 def layout(page):
     result=page.evaluate('''() => {
       const footer=document.querySelector('footer').getBoundingClientRect();
@@ -73,7 +86,7 @@ def main():
     out=ROOT/'screenshots';out.mkdir(exist_ok=True)
     with sync_playwright() as p:
         browser=p.chromium.launch()
-        context=browser.new_context(viewport={'width':1120,'height':900},device_scale_factor=1)
+        context=fixture_context(browser,viewport={'width':1120,'height':900},device_scale_factor=1)
         context.add_init_script(BRIDGE+"localStorage.setItem('onboarding-v1','seen');")
         page=context.new_page();errors=[]
         page.on('pageerror',lambda error:errors.append(str(error)))

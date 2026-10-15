@@ -6,6 +6,7 @@ import {toast} from 'sonner';
 import {Toaster} from './components/ui/sonner';
 import {ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, CircleAlert, CircleHelp, Copy, Download, FolderOpen, HardDrive, LoaderCircle, Monitor, Moon, Pause, RefreshCw, RotateCcw, Settings2, ShieldCheck, Smartphone, Sun, Upload, Usb} from 'lucide-react';
 import {Button} from './components/ui/button';
+import {SupportDialog, SupportInfo, type RepositoryId} from './components/support';
 import {helpStrings} from './help-i18n';
 import {strings, type Language} from './i18n';
 import {gib, native, request, stateGroup, subscribe, type Device, type Package, type Transaction, type Transfer} from './protocol';
@@ -25,6 +26,8 @@ function App() {
   const help = helpStrings[lang];
   const [helpOpen, setHelpOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [pendingGuide, setPendingGuide] = useState(false);
   const [helpTopic, setHelpTopic] = useState('start');
   const [view, setView] = useState<View>('home');
   const [pkg, setPkg] = useState<Package>();
@@ -53,6 +56,7 @@ function App() {
   const verificationTransaction = useRef('');
   const revisions = useRef(new Map<string, number>());
   const pageRef = useRef<HTMLDivElement>(null);
+  const stepperRef = useRef<HTMLOListElement>(null);
   const reduceMotion = useReducedMotion();
   const append = useCallback((text: string) => setLogs(old => [...old.slice(-499), `${new Date().toLocaleTimeString()}  ${text}`]), []);
   const reportError = useCallback((message: string) => {
@@ -142,7 +146,8 @@ function App() {
     task(async () => {
       const hello = await request<{package_path: string; transactions: Transaction[]}>('hello');
       setPath(hello.package_path); setRecords(hello.transactions);
-      if (!hello.transactions.length && !localStorage.getItem('onboarding-v1')) setGuideOpen(true);
+      const guide = !hello.transactions.length && !localStorage.getItem('onboarding-v1');
+      setPendingGuide(guide);setSupportOpen(true);
     });
   }, []);
   const verify = async (folder = path) => {
@@ -211,6 +216,20 @@ function App() {
   const statusLabel = (status: string) => status === 'ready' ? t.readyStatus : (t as unknown as Record<string, string>)[status] || status;
   const stageLabel = (stage: string) => t.stages[stage as keyof typeof t.stages] || stage;
   const current = stateGroup(['plan','progress'].includes(view) ? tx?.stage || 'plan' : 'plan');
+  useEffect(() => {
+    const list = stepperRef.current;
+    if (!list) return;
+    const revealCurrent = () => {
+      const item = list.querySelector<HTMLElement>('.current');
+      if (!item) return;
+      const a = list.getBoundingClientRect(), b = item.getBoundingClientRect();
+      if (b.bottom > a.bottom) list.scrollTop += b.bottom-a.bottom;
+      else if (b.top < a.top) list.scrollTop -= a.top-b.top;
+    };
+    revealCurrent();
+    const observer = new ResizeObserver(revealCurrent);observer.observe(list);
+    return () => observer.disconnect();
+  }, [current, lang]);
   const active = tx && ['running', 'waiting_device', 'waiting_user'].includes(tx.status);
   const openHelp = useCallback(() => {
     setHelpTopic(view === 'resume' || view === 'progress' && (['failed','completed'].includes(tx?.status || '') || tx?.stage === 'openwrt_boot') ? 'recovery' : view === 'progress' && ['android_boot','android_setup'].includes(tx?.stage || '') ? 'reset' : view === 'progress' && tx?.status.startsWith('waiting') ? 'faq' : view === 'plan' ? 'storage' : view === 'home' ? 'start' : 'purpose');
@@ -221,13 +240,21 @@ function App() {
     setGuideOpen(open);
     if (!open) localStorage.setItem('onboarding-v1','seen');
   };
+  const changeSupport = (open:boolean) => {
+    setSupportOpen(open);
+    if (!open) {
+      if (pendingGuide) {setPendingGuide(false);setGuideOpen(true);}
+    }
+  };
+  const showSupport = () => {setHelpOpen(false);setGuideOpen(false);setPendingGuide(false);setSupportOpen(true);};
+  const openRepository = (repository:RepositoryId) => task(() => invoke('open_repository',{repository}),t.repositoryOpened);
   useEffect(() => {
     const onKey = (event:KeyboardEvent) => {
-      if (event.key === 'F1') {event.preventDefault(); if (!guideOpen && !helpOpen) openHelp();}
+      if (event.key === 'F1') {event.preventDefault(); if (!guideOpen && !helpOpen && !supportOpen) openHelp();}
     };
     window.addEventListener('keydown',onKey);
     return () => window.removeEventListener('keydown',onKey);
-  }, [openHelp, guideOpen, helpOpen]);
+  }, [openHelp, guideOpen, helpOpen, supportOpen]);
   const purposes = [
     {id:'install', icon:Download, title:t.install, description:t.installDesc},
     {id:'update', icon:RefreshCw, title:t.update, description:t.updateDesc},
@@ -245,8 +272,8 @@ function App() {
         <label className="sr-only" htmlFor="theme">{t.theme}</label><select id="theme" value={theme} onChange={e => setTheme(e.target.value as typeof theme)}><option value="system">{t.system}</option><option value="light">{t.light}</option><option value="dark">{t.dark}</option></select><Button variant="ghost" className="help-trigger" onClick={openHelp} aria-label={help.help} title={`${help.help} (F1)`}><CircleHelp size={18}/><span>{help.help}</span></Button></div>
     </header>
     <div className="workspace"><aside><button className="nav-home" disabled={busy || !!active} onClick={() => navigate('home')}><HardDrive size={17}/>{t.home}</button>
-      <ol className="stepper">{t.steps.map((name, i) => <li key={name} className={current === i ? 'current' : current > i ? 'done' : ''}><span>{current > i ? <Check size={14}/> : i+1}</span><div>{name}</div></li>)}</ol>
-      <div className="sidebar-bottom"><div className="sidebar-note"><ShieldCheck size={19}/><p>{t.packageHint}</p></div>
+      <ol className="stepper" ref={stepperRef}>{t.steps.map((name, i) => <li key={name} className={current === i ? 'current' : current > i ? 'done' : ''}><span>{current > i ? <Check size={14}/> : i+1}</span><div>{name}</div></li>)}</ol>
+      <div className="sidebar-bottom"><SupportInfo language={lang} onCopy={number => task(() => navigator.clipboard.writeText(number), `${t.groupCopied}: ${number}`)} onRepository={openRepository} onSupport={showSupport}/><div className="sidebar-note"><ShieldCheck size={19}/><p>{t.packageHint}</p></div>
       <Button variant="ghost" className="data-folder" disabled={busy} onClick={openData}><FolderOpen size={16}/>{t.openData}</Button></div>
     </aside><main aria-busy={busy} className={waitingForOpenwrt ? 'boot-wait' : undefined}>
       <div className="busy-track" aria-hidden="true">{busy && <m.div animate={{opacity:reduceMotion ? 1 : [.4,1,.4]}} transition={{duration:1.3,repeat:reduceMotion ? 0 : Infinity}}/>}</div>
@@ -302,6 +329,7 @@ function App() {
     </main></div><footer><span><ShieldCheck size={13}/>OpenWrt Installer · v1.0</span><span>USB / SSH · {pkg?.profile || '—'}</span></footer>
     <Suspense fallback={<div className="help-loading" role="status"><LoaderCircle size={17} className="spin"/>{t.running}</div>}>{helpOpen && <HelpCenter language={lang} open={helpOpen} onOpenChange={setHelpOpen} initialTopic={helpTopic} onGuide={showGuide}/>}
     {guideOpen && <GettingStarted language={lang} open={guideOpen} onOpenChange={changeGuide}/>}</Suspense>
+    {supportOpen && <SupportDialog language={lang} onOpenChange={changeSupport} onRepository={openRepository}/>}
     <Toaster theme={theme} containerAriaLabel={t.notifications} toastOptions={{closeButtonAriaLabel:t.dismiss, classNames:{toast:"app-toast",description:"toast-description"}}}/>
   </div>;
 }

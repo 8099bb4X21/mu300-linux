@@ -1,6 +1,6 @@
 """Verify explicit UI methods survive probing, review and back navigation."""
 from playwright.sync_api import sync_playwright
-from ui_smoke import BRIDGE, ROOT, settle
+from ui_smoke import fixture_context,BRIDGE, ROOT, settle
 
 
 def last(page,command):
@@ -10,7 +10,7 @@ def last(page,command):
 def main():
     with sync_playwright() as p:
         browser=p.chromium.launch()
-        context=browser.new_context(viewport={'width':1120,'height':900})
+        context=fixture_context(browser,viewport={'width':1120,'height':900})
         context.add_init_script(BRIDGE+"localStorage.setItem('onboarding-v1','seen');window.__fixture.probed={existing:true,tf:null};")
         page=context.new_page();errors=[]
         page.on('pageerror',lambda error:errors.append(str(error)))

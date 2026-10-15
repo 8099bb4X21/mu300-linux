@@ -2,6 +2,10 @@
 
 ## 中文
 
+安装器作者：**Minikano**。侧栏解压提示上方显示作者、Q群0 `376737485`、Q群2 `1016263950`、Q群3 `950666902`、Q群4 `262019320`；点击群号按钮即可复制纯数字。项目仓库：E5 <https://github.com/sprd-linux-devs/e5-linux>（Enceka、Minikano），MU300 <https://github.com/dikeckaan/mu300-linux>（dikeckaan、Minikano）。两处都标注 Minikano 为共同作者；点击侧栏或赞赏弹窗中的仓库入口，用系统浏览器打开对应项目。
+
+每次启动都会显示可关闭的赞赏提示，本安装器接受自愿打赏，关闭后即可继续使用；需要的新手引导会随后出现。侧栏带爱心的“赞赏支持作者”文字按钮可随时重新打开。弹窗和侧栏都有 GitHub 图标与仓库入口，欢迎前往 GitHub 给项目点一个 Star，支持持续维护与更新。赞赏码优先从 <https://api.kanokano.cn/pay/zsm.png> 加载；网络出错或等待超过 5 秒后使用内置图片。该提示不会发起设备操作。
+
 完整解压 ZIP 后，双击根目录 **OpenWrt-Installer.exe**。请保留旁边的 `tools/`、`files/` 或 `payload/`、`desktop/`、`scripts/` 等目录。Windows 用户无需安装 Python、Node 或 Rust。程序使用系统 Microsoft Edge WebView2 Evergreen Runtime；缺失时会显示原生提示和安装地址：<https://developer.microsoft.com/microsoft-edge/webview2/>。不包含独立浏览器，不安装 Docker。
 
 `OpenWrt-Installer.py` 是兼容的命令行入口，需要 Python 及相应模块。Windows 的 `launchers/*.cmd` 优先使用随包解释器运行 CLI，普通用户应从根目录 EXE 开始。Magisk 用户仍可直接刷入同一个 ZIP；根目录 `module.prop`、`customize.sh` 和 Magisk 必需文件保留原用途。桌面依赖不会进入设备系统镜像。整个包只有一份系统载荷。
@@ -97,6 +101,10 @@
 以最终安装计划为准。TF 安装格式化选定目标；重装替换已有 OpenWrt；必须缩容的加密 userdata 会明确提示 Android 重置。未加密 userdata 保留原有保数据缩容路径，足够的未分配空间优先使用。先读清楚计划，再作一次最终确认。写入中保持供电；需要退出时点击“在安全边界暂停”，等任务实际暂停后关闭。暂停不能撤销已提交给设备的离线启动请求。
 
 ## English
+
+Installer author: **Minikano**. Above the sidebar extraction reminder are QQ groups 0 (`376737485`), 2 (`1016263950`), 3 (`950666902`) and 4 (`262019320`). Click a group to copy only its number. Project repositories: E5 <https://github.com/sprd-linux-devs/e5-linux> (Enceka and Minikano), and MU300 <https://github.com/dikeckaan/mu300-linux> (dikeckaan and Minikano). Minikano is credited as a co-author of both. Sidebar and support-dialog links open the selected project in the system browser.
+
+A dismissible support notice appears on every application launch: this installer accepts voluntary donations. Close it to continue; onboarding follows when needed. Reopen it using the labeled “Support the author” sidebar button. Both the dialog and sidebar include a GitHub icon and repository link; a Star on GitHub is welcome to support ongoing maintenance and updates. The donation code first loads from <https://api.kanokano.cn/pay/zsm.png>, falling back to the bundled image on network error or after five seconds. This dialog never starts a device operation.
 
 Extract the complete ZIP and run **OpenWrt-Installer.exe** at its root. Keep all adjacent folders. Windows users need no separate Python, Node or Rust. The application uses the system **Microsoft Edge WebView2 Evergreen Runtime**. If missing, a native dialog provides <https://developer.microsoft.com/microsoft-edge/webview2/>. No standalone browser or Docker is included.
 

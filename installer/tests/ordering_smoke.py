@@ -1,12 +1,12 @@
 """Exercise out-of-order checkpoints and saved unconfirmed plans in the UI."""
 from playwright.sync_api import sync_playwright
-from ui_smoke import BRIDGE, settle
+from ui_smoke import fixture_context,BRIDGE, settle
 
 
 def main():
     with sync_playwright() as p:
         browser=p.chromium.launch()
-        context=browser.new_context(viewport={'width':800,'height':650})
+        context=fixture_context(browser,viewport={'width':800,'height':650})
         context.add_init_script(BRIDGE+"localStorage.setItem('onboarding-v1','seen');window.__fixture.startRace=true;")
         page=context.new_page();errors=[]
         page.on('pageerror',lambda error:errors.append(str(error)))

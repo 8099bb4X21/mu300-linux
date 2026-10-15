@@ -1,5 +1,9 @@
 export const strings = {
   zh: {
+    author:'作者', qqGroup:'Q群', copyGroup:'复制群号', groupCopied:'群号已复制', repositoryOpened:'已打开项目仓库', support:'赞赏支持作者', closeSupport:'关闭赞赏提示',
+    installerAuthor:'安装器作者',
+    starTitle:'喜欢这个项目？点个 Star 吧', starDescription:'你的 Star，是持续维护与更新的动力。', starAction:'去 GitHub 给项目点 Star',
+    supportDescription:'本安装器可以被打赏。如果它帮到了你，欢迎自愿赞赏，支持 Minikano 的开发与维护。', supportOptional:'自愿赞赏，可直接关闭继续使用。', continueUsing:'继续使用', supportImageAlt:'Minikano 赞赏码', supportImageLoading:'正在加载赞赏码…', supportImageUnavailable:'赞赏码暂时无法显示，可以稍后从侧栏重新打开。',
     copyDiagnostics:'复制诊断信息给开发者', phase:'阶段', stageProgress:'当前阶段进度', noPercentage:'此操作没有可靠百分比，正在显示真实阶段与耗时。',
     installMethod:'安装方式',
     noDevicesShort:'未发现设备', inspectNeedsPackage:'可以先刷新并选择设备；检查设备和安装前仍需校验安装包。',
@@ -37,6 +41,10 @@ export const strings = {
     noBackend:'无法连接本地后端。请从完整解压后的安装包运行 OpenWrt-Installer.exe。', error:'操作未完成', elapsed:'阶段用时', bytes:'已传输', speed:'速度', packageHint:'请完整解压安装包；载荷校验通过后才能操作设备。',
   },
   en: {
+    author:'Author', qqGroup:'QQ group ', copyGroup:'Copy group number', groupCopied:'Group number copied', repositoryOpened:'Project repository opened', support:'Support the author', closeSupport:'Close support notice',
+    installerAuthor:'Installer author',
+    starTitle:'Enjoying the project? Give it a Star', starDescription:'Your Star encourages continued maintenance and updates.', starAction:'Star the project on GitHub',
+    supportDescription:'This installer accepts donations. If it helped you, you are welcome to support Minikano’s development and maintenance.', supportOptional:'Donations are optional. Close to continue.', continueUsing:'Continue', supportImageAlt:'Minikano donation code', supportImageLoading:'Loading donation code…', supportImageUnavailable:'The donation code is unavailable. You can reopen it from the sidebar later.',
     copyDiagnostics:'Copy diagnostics for the developer', phase:'Phase', stageProgress:'Current phase progress', noPercentage:'This operation has no reliable percentage. The phase and elapsed time are shown.',
     installMethod:'Installation method',
     noDevicesShort:'No devices found', inspectNeedsPackage:'You can refresh and select a device now. Verify the package before inspecting or installing.',

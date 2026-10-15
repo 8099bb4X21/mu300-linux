@@ -1,6 +1,6 @@
 """Offline onboarding/help integration checks against the production UI bundle."""
 from playwright.sync_api import sync_playwright
-from ui_smoke import BRIDGE, ROOT, layout, settle
+from ui_smoke import fixture_context,BRIDGE, ROOT, layout, settle
 
 
 def bounded_dialog(page):
@@ -18,11 +18,11 @@ def bounded_dialog(page):
 def main():
     with sync_playwright() as p:
         browser=p.chromium.launch()
-        context=browser.new_context(viewport={'width':1120,'height':900})
+        context=fixture_context(browser,viewport={'width':1120,'height':900})
         context.add_init_script(BRIDGE)
         page=context.new_page();errors=[];remote=[]
         page.on('pageerror',lambda error:errors.append(str(error)))
-        page.on('request',lambda request:remote.append(request.url) if not request.url.startswith('http://127.0.0.1:1420/') else None)
+        page.on('request',lambda request:remote.append(request.url) if not request.url.startswith('http://127.0.0.1:1420/') and request.url!='https://api.kanokano.cn/pay/zsm.png' else None)
         page.goto('http://127.0.0.1:1420')
         dialog=page.get_by_role('dialog',name='新手引导')
         dialog.wait_for();settle(page);bounded_dialog(page)
@@ -97,12 +97,12 @@ def main():
         assert not errors,errors
         assert not remote,remote
         # A saved transaction suppresses automatic onboarding even on a fresh computer profile.
-        second=browser.new_context(viewport={'width':800,'height':650})
+        second=fixture_context(browser,viewport={'width':800,'height':650})
         second.add_init_script(BRIDGE+'window.__fixture.saved=[window.__fixture.tx];')
         saved=second.new_page();saved.goto('http://127.0.0.1:1420');settle(saved)
         assert saved.get_by_role('dialog').count()==0
         assert set(saved.evaluate('window.__fixture.requests'))=={'hello'}
-        third=browser.new_context(viewport={'width':800,'height':650})
+        third=fixture_context(browser,viewport={'width':800,'height':650})
         third.add_init_script(BRIDGE)
         skipped=third.new_page();skipped.goto('http://127.0.0.1:1420')
         skipped.get_by_role('dialog',name='新手引导').wait_for()

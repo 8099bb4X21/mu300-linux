@@ -66,12 +66,24 @@ fn open_data(state: State<'_, Arc<Bridge>>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_repository(repository: String) -> Result<(), String> {
+    let url = match repository.as_str() {
+        "e5" => "https://github.com/sprd-linux-devs/e5-linux",
+        "mu300" => "https://github.com/dikeckaan/mu300-linux",
+        _ => return Err("Unknown project repository".into()),
+    };
+    Command::new("explorer.exe").arg(url)
+        .spawn().map_err(|e|e.to_string())?;
+    Ok(())
+}
+
 fn main() {
     let directory = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("OpenWrt-Installer");
     let bridge = Arc::new(Bridge {input:Mutex::new(None),pending:Mutex::new(HashMap::new()),sequence:AtomicU64::new(1),busy:AtomicBool::new(false),directory,export_log:Mutex::new(None)});
     let setup_state = bridge.clone();
     let app = tauri::Builder::default().manage(bridge.clone())
-        .invoke_handler(tauri::generate_handler![backend_request,pick_package,pick_recovery,save_backup,save_log,write_log,open_data])
+        .invoke_handler(tauri::generate_handler![backend_request,pick_package,pick_recovery,save_backup,save_log,write_log,open_data,open_repository])
         .setup(move |app| {
             let root = std::env::current_exe()?.parent().ok_or("Executable has no directory")?.to_path_buf();
             let mut process = Command::new(root.join("tools/backend/openwrt-backend.exe"));

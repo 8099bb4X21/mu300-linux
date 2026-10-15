@@ -1,6 +1,6 @@
 """Device enumeration remains available without a package; text selection is scoped."""
 from playwright.sync_api import sync_playwright
-from ui_smoke import BRIDGE, ROOT, layout, settle
+from ui_smoke import fixture_context,BRIDGE, ROOT, layout, settle
 
 
 def selection(page,selector,expected):
@@ -10,7 +10,7 @@ def selection(page,selector,expected):
 def main():
     with sync_playwright() as p:
         browser=p.chromium.launch()
-        context=browser.new_context(viewport={'width':800,'height':650})
+        context=fixture_context(browser,viewport={'width':800,'height':650})
         context.add_init_script(BRIDGE+"window.__fixture.devices=[];localStorage.setItem('onboarding-v1','seen');")
         page=context.new_page();errors=[]
         page.on('pageerror',lambda error:errors.append(str(error)))
