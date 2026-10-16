@@ -351,6 +351,12 @@ jobs:
 
       - name: TF Magisk zips (factory)
         run: |
+          # own: openwrt/build-hostapd.sh validates its cache by hashing its own scripts
+          # (wifi-sae-state.py build-id). The native x86 job applies the tools/toolchain
+          # sed below, so this arm leg must apply the identical sed first; otherwise the
+          # ids differ, the cache is rejected here, and it falls back to the forced
+          # amd64 docker build, which cannot run on this arm runner.
+          sed -i 's|^make defconfig$|make defconfig\nmake -j"$(nproc)" tools/install toolchain/install|' openwrt/build-hostapd-inner.sh
           mkdir -p out-tf
           DATE=$(date -u +%Y%m%d)
           ZOUT="out-tf/mu300-linux-openwrt-tf-${{ matrix.line }}-$DATE.zip"
