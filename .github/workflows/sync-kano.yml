@@ -27,4 +27,16 @@ jobs:
           git fetch kano clean-tf-7.2
           git checkout tf-7.2
           git merge --no-edit kano/clean-tf-7.2 || { echo 'CONFLICT - fix manually'; exit 1; }
+          # kano's CI is kano's: this fork runs only its own workflows. GITHUB_TOKEN
+          # can never push workflow files, so a merge that adds or edits one under
+          # .github/workflows/ is rejected; drop every non-own workflow here to keep
+          # the daily push green. The deletion persists into later merges.
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$f" ] || continue
+            case "$f" in
+              .github/workflows/sync-kano.yml|.github/workflows/tf-magisk-build.yml) ;;
+              *) git rm -q -f --ignore-unmatch "$f" ;;
+            esac
+          done
+          git diff --cached --quiet || git commit -q -m "own(ci): drop kano workflows this fork never runs"
           git push origin tf-7.2
