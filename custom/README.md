@@ -20,8 +20,11 @@ fragment 挂载覆盖合并，kano 的配置文件一个字不动，它自带的
 - ksmbd：本 CI 编内核模块 + 设备上装用户态（`apk add ksmbd-server`）。
   kano 和上游都没开它。
 - wsdd2 预装：TF 包烘焙时装好（`custom/post-rootfs.sh`，跑在
-  `tools/build-openwrt-tf-magisk.sh` 的 `MU300_POST_ROOTFS` 钩子上，
-  该钩子是本 fork 对 kano 脚本唯一的 3 行改动）。
+  `tools/build-openwrt-tf-magisk.sh` 的 `MU300_POST_ROOTFS` 钩子上）。
+  fork 对 kano 构建脚本的改动另有三处：`openwrt/build-rootfs.sh`
+  （结尾 REGDB 清理加 sudo 兜底）、`kernel/build-all.sh`（构建临时目录
+  清理加 sudo 兜底）、`upstream/mu300-mainline.config`
+  （补 `CONFIG_HOTPLUG_CPU=y`）。
 - 中文/默认密码：烘焙里写死（kano 安装器不管密码；密码只在全新安装
   生效，更新保留旧密码）。
 - 时区东八区 / NTP 默认开启 / Aurora 侧边栏：时区、NTP 走
