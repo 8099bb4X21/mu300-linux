@@ -203,7 +203,14 @@ jobs:
 
       - name: Build wifi-sae APKs (native x86, cache miss)
         if: steps.cache.outputs.cache-hit != 'true'
-        run: sh openwrt/build-hostapd.sh "$PWD/work/wifi-sae"
+        run: |
+          # own: build-hostapd-inner.sh runs `make defconfig` then builds the hostapd
+          # package straight away, but a fresh OpenWrt tree has no host tools/toolchain
+          # yet (kano relies on a persistent docker volume), so the package build dies
+          # on a missing staging_dir/host/bin/openssl. Build the prerequisites first.
+          sed -i 's|^make defconfig$|make defconfig\nmake -j"$(nproc)" tools/install toolchain/install|' openwrt/build-hostapd-inner.sh
+          grep -n 'tools/install toolchain/install' openwrt/build-hostapd-inner.sh
+          sh openwrt/build-hostapd.sh "$PWD/work/wifi-sae"
 
       - name: Save wifi-sae APKs (cache miss)
         if: steps.cache.outputs.cache-hit != 'true'
