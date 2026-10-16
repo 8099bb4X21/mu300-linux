@@ -327,7 +327,10 @@ jobs:
           # so it does not stop this 0x6b bind). Keep the F50 on the pre-U30 behaviour by
           # not building that driver. The fuel-gauge patches only look the supply up by
           # name (power_supply_get_by_name), so there is no symbol/link dependency.
-          grep -v '^CONFIG_CHARGER_BQ256XX=' upstream/mu300-mainline.config > combined-mainline.config
+          # CONFIG_REGMAP_I2C is only pulled in by that driver (Kconfig select), so it
+          # drops to unset once the driver is gone; the U30 batch is what added it. Drop
+          # both, or kano's config-taken check fails on REGMAP_I2C.
+          grep -v -e '^CONFIG_CHARGER_BQ256XX=' -e '^CONFIG_REGMAP_I2C=' upstream/mu300-mainline.config > combined-mainline.config
           cat custom/ksmbd.fragment >> combined-mainline.config
           grep -q '^CONFIG_SMB_SERVER=m$' combined-mainline.config
           docker run --rm -e KV="$KV" -e OUTDIR="$OUTDIR" -v tf-mainline:/src -v "$PWD/upstream":/work \
