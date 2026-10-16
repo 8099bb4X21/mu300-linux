@@ -171,8 +171,59 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  wifisae:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'yes'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          fetch-depth: 1
+
+      # own: build-hostapd.sh forces --platform linux/amd64, but the build legs are
+      # arm64, so running it there would need amd64 emulation (QEMU). Build the
+      # wifi-sae APKs once here on a native x86 runner instead; on the arm leg
+      # build-hostapd.sh finds the verified cache and skips docker. Same pattern as
+      # block-mount, no QEMU anywhere.
+      - name: Compute cache key
+        id: key
+        run: |
+          # same inputs as the stamp inside openwrt/build-hostapd.sh
+          k="wifisae-$(cat openwrt/build-hostapd.sh openwrt/build-hostapd-inner.sh openwrt/hostapd.Dockerfile openwrt/patch-hostapd-sae.py openwrt/hostapd-unisoc-sae.h openwrt/hostapd-unisoc.sh openwrt/hostapd-unisoc.uc openwrt/wifi-sae-state.py | sha256sum | cut -d' ' -f1)"
+          echo "key=$k" >> "$GITHUB_OUTPUT"
+          echo "key=$k"
+
+      - name: Restore wifi-sae APKs
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: work/wifi-sae
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Build wifi-sae APKs (native x86, cache miss)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sh openwrt/build-hostapd.sh "$PWD/work/wifi-sae"
+
+      - name: Save wifi-sae APKs (cache miss)
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: work/wifi-sae
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Package wifi-sae APKs
+        run: tar -czf wifi-sae-apks.tar.gz -C work/wifi-sae .
+
+      - name: Upload wifi-sae APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: wifisae-apks
+          path: wifi-sae-apks.tar.gz
+          retention-days: 1
+
   build:
-    needs: [resolve, vendor54, blockmount]
+    needs: [resolve, vendor54, blockmount, wifisae]
     if: needs.resolve.outputs.skip != 'yes'
     runs-on: ubuntu-24.04-arm
     strategy:
@@ -197,6 +248,20 @@ jobs:
         with:
           name: blockmount-apk
           path: work/
+
+      # own: same pattern for the wifi-sae APKs (native x86 job); build-rootfs.sh ->
+      # build-hostapd.sh finds the verified cache and skips the amd64 docker build, so
+      # this arm runner needs no amd64 emulation.
+      - name: Fetch wifi-sae APKs (native x86 build)
+        uses: actions/download-artifact@v4
+        with:
+          name: wifisae-apks
+          path: wifisae-dl
+      - name: Unpack wifi-sae APKs
+        run: |
+          mkdir -p work/wifi-sae
+          tar -xzf wifisae-dl/wifi-sae-apks.tar.gz -C work/wifi-sae
+          ls -la work/wifi-sae/
 
       - name: Fetch device inputs (private)
         env:
@@ -249,7 +314,14 @@ jobs:
           docker build -t mu300-mainline-build upstream/
           docker volume rm -f tf-mainline >/dev/null 2>&1 || true
           docker volume create tf-mainline
-          cat upstream/mu300-mainline.config custom/ksmbd.fragment > combined-mainline.config
+          # own: the F50 has no battery. The U30 charger driver (CONFIG_CHARGER_BQ256XX)
+          # binds the F50's charger@6b and turns charging on, which resets the board on a
+          # weak USB port (kano issue #225; its patch 0016 only guards the 0x1a fallback,
+          # so it does not stop this 0x6b bind). Keep the F50 on the pre-U30 behaviour by
+          # not building that driver. The fuel-gauge patches only look the supply up by
+          # name (power_supply_get_by_name), so there is no symbol/link dependency.
+          grep -v '^CONFIG_CHARGER_BQ256XX=' upstream/mu300-mainline.config > combined-mainline.config
+          cat custom/ksmbd.fragment >> combined-mainline.config
           grep -q '^CONFIG_SMB_SERVER=m$' combined-mainline.config
           docker run --rm -e KV="$KV" -e OUTDIR="$OUTDIR" -v tf-mainline:/src -v "$PWD/upstream":/work \
             -v "$PWD/combined-mainline.config:/work/mu300-mainline.config:ro" \
