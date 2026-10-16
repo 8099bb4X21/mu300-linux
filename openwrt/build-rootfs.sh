@@ -5,7 +5,7 @@
 # Inputs (same as rootfs/assemble.sh, all optional except modules):
 #   out/modules/*.ko  out/modules.builtin*  firmware/  android-subset/  android-gpu-subset/
 #   tools/logdw/logdw  tools/bt-init/mu300-bt-init  tools/keys/mu300-keys  tools/gpu/cltest  busybox (static, full)
-#   xray, hev-socks5-tunnel (tools/fetch-xray.sh) and sing-box (tools/fetch-sing-box.sh), for mu300-vpn
+# VPN/proxy engines are never preinstalled, even when present in MU300_INPUTS.
 #   MU300_MAINLINE_OUT/modules/*.ko (optional: out-of-tree WCN modules for the selected mainline kernel)
 #   The standalone LuCI plugin in openwrt/luci-app-mu300 is included by default.
 set -eu
@@ -86,6 +86,8 @@ URL=$BASEURL/$VER/targets/armsr/armv8
 # Build/install the patched APK before exposing LuCI's Mount Points page.
 BLOCK_APK=$TOP/work/block-mount-mu300.apk
 sh "$TOP/openwrt/build-block-mount.sh" "$BLOCK_APK"
+WIFI_APKS="$TOP/work/wifi-sae"
+UNISOC_WRT_VER="$VER" sh "$TOP/openwrt/build-hostapd.sh" "$WIFI_APKS"
 
 cd "$TOP"
 if [ ! -f "openwrt/$TARBALL" ]; then
@@ -112,23 +114,24 @@ ls "$IN/out/modules"/*.ko >/dev/null 2>&1 || {
 }
 # The optional ones decide whether the image can use the modem, Wi-Fi, the GPU or the VPN at all. Missing ones
 # used to be skipped silently, which produces an image that boots and then does nothing useful.
-for o in firmware android-subset android-gpu-subset tools/logdw/logdw tools/bt-init/mu300-bt-init tools/keys/mu300-keys tools/gpu/cltest busybox sing-box xray hev-socks5-tunnel upstream/out/modules; do
+for o in firmware android-subset android-gpu-subset tools/logdw/logdw tools/bt-init/mu300-bt-init tools/keys/mu300-keys tools/gpu/cltest busybox upstream/out/modules; do
     [ -e "$IN/$o" ] && echo "  + $o" || echo "  - $o   (missing: the image is built without it)"
 done
 # shellcheck disable=SC2046
 docker run --rm --platform linux/arm64 \
-  -v "$TOP/rootfs/overlay/opt/mu300":/in/opt-mu300:ro -v "$TOP/rootfs/overlay/etc/mu300/vpn.conf.example":/in/vpn.conf.example:ro -v "$TOP/openwrt/overlay":/in/overlay:ro \
+  -v "$TOP/rootfs/overlay/opt/mu300":/in/opt-mu300:ro -v "$TOP/openwrt/overlay":/in/overlay:ro \
   -v "$TOP/openwrt/patches/fw4-sipa-offload.patch":/in/fw4-sipa-offload.patch:ro \
   -v "$TOP/openwrt/patches/wifi-scripts-no-dfs.patch":/in/wifi-scripts-no-dfs.patch:ro \
   -v "$TOP/boot/module-order.txt":/in/module-order.txt:ro -v "$IN/out/modules":/in/modules:ro \
   $(opt out/modules.builtin modules.builtin) $(opt out/modules.builtin.modinfo modules.builtin.modinfo) \
   $(opt firmware firmware) $(opt android-subset android-subset) $(opt android-gpu-subset android-gpu-subset) \
   $(opt tools/logdw/logdw logdw) $(opt tools/bt-init/mu300-bt-init bt-init) $(opt tools/keys/mu300-keys keys) $(opt tools/gpu/cltest cltest) \
-  $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(mainline_opt modules mainline-modules) $(plugin_opt) -v "$TOP/openwrt":/out -v "$REGDB":/in/regdb:ro \
+  $(opt busybox busybox) $(mainline_opt modules mainline-modules) $(plugin_opt) -v "$TOP/openwrt":/out -v "$REGDB":/in/regdb:ro \
   $(mainline_opt modules.builtin mainline-modules.builtin) $(mainline_opt modules.builtin.modinfo mainline-modules.builtin.modinfo) \
   -v "$THEME_APK":/in/luci-theme-aurora.apk:ro \
   -v "$BLOCK_APK":/in/block-mount-mu300.apk:ro \
   -v "$BLOCK_APK.build-id":/in/block-mount.build-id:ro \
+  -v "$WIFI_APKS":/in/wifi-sae:ro \
   -v "$TOP/work/luci-app-aurora-config-1.2.5-r20260920.apk":/in/luci-app-aurora-config.apk:ro \
   -v "$TOP/work/luci-i18n-aurora-config-zh-cn-26.262.58276.362887a.apk":/in/aurora-config-zh-cn.apk:ro \
   -v "$TOP/work/luci-i18n-aurora-config-tr-26.262.58276.362887a.apk":/in/aurora-config-tr.apk:ro \
@@ -145,8 +148,9 @@ apk_retry() {
 apk_retry update >/dev/null
 # openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure;
 # i2c-tools, gpiod-tools: mu300-usb (the charger of the U30 Air) and mu300-nfc (its NFC tag)
-apk_retry add wpad-basic-mbedtls wifi-scripts iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
-    i2c-tools gpiod-tools >/dev/null
+apk_retry add --allow-untrusted /in/wifi-sae/*.apk >/dev/null
+apk_retry add iwinfo wireless-regdb iw bash ip-full coreutils-stty openssl-util curl ca-bundle msmtp ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-socket \
+    i2c-tools gpiod-tools flock >/dev/null
 apk_retry add --allow-untrusted /in/block-mount-mu300.apk >/dev/null
 apk_retry add --allow-untrusted /in/luci-theme-aurora.apk >/dev/null
 apk_retry add --allow-untrusted /in/luci-app-aurora-config.apk /in/aurora-config-zh-cn.apk /in/aurora-config-tr.apk >/dev/null
@@ -172,10 +176,18 @@ cp -a /in/opt-mu300 $R/opt/mu300
 cp -a /in/overlay/. $R/
 mkdir -p $R/etc/mu300
 cp /in/block-mount.build-id $R/etc/mu300/block-mount.build-id
+cp /in/wifi-sae/build-id $R/etc/mu300/wifi-sae.build-id
+cp /in/wifi-sae/source-info $R/etc/mu300/wifi-sae.source-info
 for f in sbin/block lib/libblkid-tiny.so etc/init.d/fstab; do
     [ -s "$R/$f" ] || { echo "patched block-mount required file missing: $f" >&2; exit 1; }
 done
 chmod 0755 $R/opt/mu300/bin/cpu-voltage-platform $R/etc/init.d/mu300-cpu-driver
+for helper in mu300-data-sim-u30 mu300-sim-u30 mu300-sim2-start mu300-sim2-warmup; do
+    [ -s "$R/opt/mu300/bin/$helper" ] || { echo "missing U30 helper: $helper" >&2; exit 1; }
+    chmod 0755 "$R/opt/mu300/bin/$helper"
+done
+chroot "$R" /bin/sh -c "command -v flock >/dev/null" || { echo "missing native SIM flock dependency" >&2; exit 1; }
+[ -s "$R/opt/mu300/lib/sim-config.sh" ] || { echo "missing U30 SIM configuration library" >&2; exit 1; }
 chmod 0755 $R/opt/mu300/bin/mu300-platform-config
 chmod 0755 $R/opt/mu300/bin/v50-led-status
 chmod 0755 $R/opt/mu300/bin/openwrt-board-check
@@ -201,6 +213,7 @@ grep -q "device_no_dfs(config);" $R/usr/share/ucode/wifi/hostapd.uc || { echo "w
 if [ -d /in/luci-plugin ]; then
     cp -a /in/luci-plugin/root/. $R/
     cp -a /in/luci-plugin/htdocs/. $R/www/
+    ucode $R/usr/libexec/unisoc-modem/disable-channel-analysis $R
     chmod 0755 $R/etc/init.d/unisoc-cpu
     chmod 0600 $R/etc/config/unisoc_apn
     chmod 0755 $R/etc/init.d/unisoc-modem-ui $R/etc/init.d/unisoc-sms-forward $R/etc/init.d/unisoc-traffic $R/etc/hotplug.d/net/90-unisoc-usb-host $R/etc/hotplug.d/iface/90-unisoc-usb-host $R/usr/libexec/rpcd/mu300dash $R/usr/libexec/unisoc-modem/*
@@ -229,8 +242,6 @@ fi
 [ -e /in/logdw ] && { cp /in/logdw $R/opt/mu300/bin/logdw; chmod 755 $R/opt/mu300/bin/logdw; }
 [ -e /in/bt-init ] && { cp /in/bt-init $R/opt/mu300/bin/mu300-bt-init; chmod 755 $R/opt/mu300/bin/mu300-bt-init; }
 [ -e /in/keys ] && { cp /in/keys $R/opt/mu300/bin/mu300-keys; chmod 755 $R/opt/mu300/bin/mu300-keys; }
-[ -f /in/sing-box ] && { cp /in/sing-box $R/opt/mu300/bin/sing-box; chmod 755 $R/opt/mu300/bin/sing-box; }
-for b in xray hev-socks5-tunnel; do [ -f /in/$b ] && { cp /in/$b $R/opt/mu300/bin/$b; chmod 755 $R/opt/mu300/bin/$b; }; done
 # full static busybox for the tools OpenWrt busybox leaves out (od, timeout, mountpoint, losetup, rfkill, telnetd)
 if [ -e /in/busybox ]; then
     cp /in/busybox $R/opt/mu300/bin/busybox; chmod 755 $R/opt/mu300/bin/busybox
@@ -241,8 +252,6 @@ if [ -e /in/busybox ]; then
     done
 fi
 mkdir -p $R/etc/mu300
-# the VPN is configured the same way on both systems, and mu300-toolkit copies this to start a vpn.conf
-cp /in/vpn.conf.example $R/etc/mu300/vpn.conf.example
 printf "%s\n" "${MU300_VERSION:-dev}" > $R/etc/mu300/image-version
 # Record image packages so upgrades can restore only user additions.
 (MU300_LIB=1; . $R/opt/mu300/bin/mu300-update; upk_manual $R openwrt) > $R/etc/mu300/image-packages
@@ -266,7 +275,7 @@ if [ -d /in/luci-plugin ]; then
     ln -sf ../init.d/unisoc-cpu $R/etc/rc.d/K89unisoc-cpu
 fi
 # busybox PATH is /usr/sbin:/usr/bin:/sbin:/bin, so the commands go into /usr/bin
-for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-sms led-status mu300-vpn wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc mu300-user-packages; do ln -sf /opt/mu300/bin/$c $R/usr/bin/$c; done
+for c in mu300-toolkit mu300-next-boot mu300-os mu300-update mobile-data mu300-at mu300-sms led-status wifi-client mu300-ttl mu300-wifi-band mu300-led mu300-usb mu300-nfc mu300-user-packages; do ln -sf /opt/mu300/bin/$c $R/usr/bin/$c; done
 # Config remnants of packages deliberately removed from our images must not return on upgrade.
 rm -f $R/etc/config/attendedsysupgrade $R/etc/config/*.apk-new
 # no kernel of its own: OpenWrt kmods (6.12) and grub are unused on this device
@@ -282,6 +291,8 @@ if ls /in/mainline-modules/*.ko >/dev/null 2>&1; then
 fi
 cd $R && tar -czf /out/$OUT .
 ls -la /out/$OUT'
+# Remove optional VPN helpers and reject accidentally inherited VPN packages.
+python3 "$TOP/openwrt/no-vpn-payload.py" "$TOP/openwrt/$(basename "$OUT")"
 if [ -d "$MAINLINE/modules" ]; then
     python3 "$TOP/upstream/check-container-support.py" "$MAINLINE" --rootfs "$TOP/openwrt/$(basename "$OUT")"
 fi

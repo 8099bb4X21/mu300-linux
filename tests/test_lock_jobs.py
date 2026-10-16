@@ -226,6 +226,13 @@ print('OK')
                 (self.state / 'identity').mkdir(exist_ok=True)
                 (self.state / 'identity/iccid').write_text('keep')
                 r = self.apply(shell, 'reset', 'auto')
+                if omit_ok:
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn('频段设置未确认', r.stderr)
+                    self.assertTrue((self.state / 'lte').exists())
+                    self.assertTrue((self.state / 'nr').exists())
+                    self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
+                    continue
                 self.assertEqual(r.returncode, 0, r.stderr)
                 modem = json.loads(self.modem.read_text())
                 for key, value in dict(tm='134,128,1', gran='1', endc='1',
@@ -281,7 +288,7 @@ print('OK')
 
     def test_reset_failure_never_discards_saved_intent(self):
         for shell in self.each_shell():
-            for failure in ('reject', 'ignore', 'silent', 'reject_restart', 'reset_drift', 'corrupt_mode_fields'):
+            for failure in ('reject', 'ignore', 'silent', 'reject_restart', 'corrupt_mode_fields'):
                 self.reset(tm='131,128,1', **{failure: True})
                 original = self.seed_locks()
                 r = self.apply(shell, 'reset', 'auto')
@@ -294,8 +301,7 @@ print('OK')
 
     def test_reset_checks_each_readback_not_just_mode(self):
         for shell in self.each_shell():
-            for key, value in [('endc', '0'), ('lte', '0,0,0,1,0'), ('nr', '0,0,256,0'),
-                               ('gran', '0'), ('lte', 'ERROR'), ('nr', '0,0')]:
+            for key, value in [('endc', '0'), ('gran', '0')]:
                 self.reset(read_override={key: value})
                 original = self.seed_locks()
                 r = self.apply(shell, 'reset', 'auto')
@@ -332,7 +338,9 @@ print('OK')
                 self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
 
     def test_reset_barrier_publication_failure_keeps_all_old_files(self):
-        self.stub('mv', 'case "$2" in */reset_pending) exit 1;; esac; exec /bin/mv "$@"')
+        # BusyBox ash may use its built-in mv instead of a PATH stub.
+        # A shell function injects the same publication failure in every shell.
+        self.lock.write_text('mv() { case "$2" in */reset_pending) return 1;; esac; command mv "$@"; }\n' + self.lock.read_text())
         for shell in self.each_shell():
             self.reset()
             original = self.seed_locks()
@@ -463,12 +471,12 @@ print('OK')
     def test_late_replay_requires_readback_and_successful_activation(self):
         (self.state / 'lte').write_text('1')
         for shell in self.each_shell():
-            for failure in ('reject', 'ignore', 'silent', 'reject_restart', 'drift'):
+            for failure in ('reject', 'omit_ok', 'reject_restart', 'silent'):
                 self.reset(**{failure: True})
                 r = self.replay(shell, 'late')
                 self.assertNotEqual(r.returncode, 0, failure)
                 self.assertFalse((self.tmp / 'marker').exists(), failure)
-                if failure in ('reject', 'ignore', 'silent'):
+                if failure in ('reject', 'omit_ok'):
                     self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
 
     def test_replay_preserves_mode_fields_and_refuses_missing_source(self):
@@ -529,7 +537,7 @@ print('OK')
             self.assertEqual(modem['lte'], '0,0,0,5,0')
             self.assertEqual(modem['nr'], '0,0,272,0')
 
-    def test_replay_rejects_corrupt_mode_fields_and_malformed_empty_readback(self):
+    def test_replay_rejects_corrupt_mode_but_does_not_compare_band_readback(self):
         for shell in self.each_shell():
             (self.state / 'mode').write_text('nsa')
             self.reset(corrupt_mode_fields=True)
@@ -539,8 +547,8 @@ print('OK')
             for kind, raw in [('lte','ERROR'), ('lte','0,0'), ('nr','0,0'), ('nr','bad')]:
                 (self.state / kind).write_text('')
                 self.reset(read_override={kind:raw})
-                self.assertNotEqual(self.replay(shell, 'early').returncode, 0, (kind,raw))
-                self.assertFalse((self.tmp / 'marker').exists())
+                self.assertEqual(self.replay(shell, 'early').returncode, 0, (kind,raw))
+                self.assertTrue((self.tmp / 'marker').exists())
                 (self.state / kind).unlink()
 
     def test_replay_silent_setter_requires_fresh_proof_but_error_always_fails(self):
@@ -552,9 +560,9 @@ print('OK')
             self.assertNotEqual(self.replay(shell, 'early').returncode, 0)
             self.assertFalse((self.tmp / 'marker').exists())
 
-    def test_rejected_ignored_and_silent_writes_do_not_save_or_restart(self):
+    def test_rejected_and_unacknowledged_band_writes_do_not_save_or_restart(self):
         for shell in self.each_shell():
-            for failure in ('reject', 'ignore', 'silent'):
+            for failure in ('reject', 'omit_ok'):
                 self.reset(**{failure: True})
                 (self.state / 'lte').write_text('3')
                 r = self.apply(shell, 'lte', '1')
@@ -562,14 +570,57 @@ print('OK')
                 self.assertEqual((self.state / 'lte').read_text(), '3')
                 self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
 
-    def test_setting_lost_after_restart_is_not_persisted(self):
+    def test_band_mask_change_after_restart_is_still_saved(self):
         for shell in self.each_shell():
             self.reset(drift=True)
             (self.state / 'lte').write_text('3')
             r = self.apply(shell, 'lte', '1')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual((self.state / 'lte').read_text(), '1')
+            self.assertEqual(json.loads(self.modem.read_text())['lte'], '0,0,0,0,0')
+
+    def test_acknowledged_band_subset_is_saved_and_cache_shows_actual(self):
+        for shell in self.each_shell():
+            for kind, val, actual in [('lte', '1,3', '0,0,0,1,0'), ('nr', '1,41,78', '0,0,16,0')]:
+                self.reset(read_override={kind: actual})
+                r = self.apply(shell, kind, val)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual((self.state / kind).read_text(), val)
+                commands = (self.tmp / 'commands').read_text()
+                self.assertEqual(commands.count('AT+SFUN=5'), 1)
+                cache = json.loads((self.run / 'lock.json').read_text())
+                self.assertEqual(cache[kind]['locked'], '1' if kind == 'lte' else '41')
+
+    def test_acknowledged_band_drift_or_unchanged_mask_does_not_fail_replay(self):
+        for shell in self.each_shell():
+            for phase in ('early', 'late'):
+                for failure in ('ignore', 'drift'):
+                    self.reset(**{failure: True})
+                    (self.state / 'lte').write_text('1')
+                    r = self.replay(shell, phase)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertTrue((self.tmp / 'marker').exists())
+                    self.assertEqual((self.state / 'lte').read_text(), '1')
+                    if phase == 'early': self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
+
+    def test_reset_does_not_require_band_mask_equality(self):
+        for shell in self.each_shell():
+            for key, value in [('lte', '0,0,0,1,0'), ('nr', '0,0,256,0'), ('lte', 'ERROR'), ('nr', '0,0')]:
+                self.reset(read_override={key: value})
+                self.seed_locks()
+                r = self.apply(shell, 'reset', 'auto')
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertFalse((self.state / 'lte').exists())
+                self.assertFalse((self.state / 'nr').exists())
+
+    def test_band_missing_ok_is_not_proven_by_matching_old_mask(self):
+        for shell in self.each_shell():
+            self.reset(omit_ok=True, lte='0,0,0,1,0')
+            r = self.apply(shell, 'lte', '1')
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn('协议栈重启后', r.stderr)
-            self.assertEqual((self.state / 'lte').read_text(), '3')
+            self.assertIn('频段设置未确认', r.stderr)
+            self.assertFalse((self.state / 'lte').exists())
+            self.assertNotIn('SFUN', (self.tmp / 'commands').read_text())
 
     def test_restart_error_restores_radio_attempt_but_does_not_save(self):
         for shell in self.each_shell():

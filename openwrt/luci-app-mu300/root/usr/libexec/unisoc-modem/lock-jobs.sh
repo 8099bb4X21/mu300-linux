@@ -17,7 +17,7 @@ job_status() {
     if ! grep -Eq '"state":"(done|error)"' "$JOBDIR/result"; then
         started=$(cat "$JOBDIR/started"); age=$(( $(job_uptime) - started ))
         pid=$(cat "$JOBDIR/pid" 2>/dev/null)
-        if [ "$age" -gt 240 ]; then
+        if [ "$age" -gt "${MU300_JOB_TIMEOUT:-240}" ]; then
             job_write error 0 '应用超时，请刷新确认模组状态'
         elif [ "$age" -gt 2 ] && { [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; }; then
             job_write error 0 '设置进程已中断，请刷新确认模组状态'
@@ -71,7 +71,7 @@ job_worker() {
     # verification, never cached timestamps, determine this job's result.
     "$0" apply "$2" "$3" >/dev/null 2> "$JOBDIR/error"
     rc=$?
-    if [ $(( $(job_uptime) - $(cat "$JOBDIR/started") )) -gt 240 ]; then
+    if [ $(( $(job_uptime) - $(cat "$JOBDIR/started") )) -gt "${MU300_JOB_TIMEOUT:-240}" ]; then
         job_write error 0 '应用超时，请刷新确认模组状态'
     elif [ "$rc" = 0 ]; then
         job_write done 1 ''

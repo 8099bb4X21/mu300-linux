@@ -616,6 +616,36 @@ static int pcie_suspend_resume_handle(int chn, int mode)
 	return -EBUSY;
 }
 
+static int sc2355_pcie_tx_data_complete(int channel, int timeout)
+{
+	struct sprd_hif *hif = sc2355_pcie_get_hif();
+	struct tx_mgmt *tx_mgmt;
+
+	/* The bus calls this after draining its pending queue, with IRQs off. */
+	tx_mgmt = hif ? smp_load_acquire(&hif->tx_mgmt) : NULL;
+	if (!timeout && tx_mgmt && atomic_xchg(&tx_mgmt->pcie_tx_waiting, 0))
+		sc2355_tx_up(tx_mgmt);
+	return 0;
+}
+
+static int sc2355_pcie_tx_data_push(struct sprd_hif *hif,
+				    struct mbuf_t *head, struct mbuf_t *tail,
+				    int num)
+{
+	struct tx_mgmt *tx_mgmt = hif->tx_mgmt;
+	int ret;
+
+	/* Arm before submission: completion may free space before push returns.
+	 * A stored completion also covers the race before the TX thread sleeps.
+	 */
+	atomic_set(&tx_mgmt->pcie_tx_waiting, 1);
+	ret = sc2355_pcie_push_link(hif, hif->tx_data_port, head, tail, num,
+				   sc2355_pcie_tx_data_pop_list);
+	if (ret != -EAGAIN)
+		atomic_set(&tx_mgmt->pcie_tx_waiting, 0);
+	return ret;
+}
+
 struct mchn_ops_t sc2355_pcie_hif_ops[] = {
 	/* ADD HIF ops config here */
 	/* NOTE: Requested by SDIO team, pool_size MUST be 1 in RX */
@@ -653,10 +683,10 @@ struct mchn_ops_t sc2355_pcie_hif_ops[] = {
 			NULL, NULL, pcie_suspend_resume_handle),
 	INIT_INTF_SC2355(PCIE_TX_DATA_PORT, 1, 1, 0, SPRD_MAX_CMD_TXLEN,
 			300, 0, 0, 0, 1, 32, sc2355_pcie_tx_data_pop_list,
-			NULL, NULL, NULL),
+			NULL, sc2355_pcie_tx_data_complete, NULL),
 	INIT_INTF_SC2355(PCIE_TX_ADDR_DATA_PORT, 1, 1, 0, SPRD_MAX_CMD_TXLEN,
 			300, 0, 0, 0, 1, 4, sc2355_pcie_tx_data_pop_list,
-			NULL, NULL, NULL),
+			NULL, sc2355_pcie_tx_data_complete, NULL),
 };
 
 static void pcie_tx_ba_mgmt(struct sprd_priv *priv, struct sprd_vif *vif,
@@ -1009,14 +1039,14 @@ int sc2355_pcie_hif_tx_list(struct sprd_hif *hif,
 		if (hif->mbuf_head) {
 			/*ret = mchn_push_link(9, head, tail, pcie_count);*/
 			/*edma sync function*/
-			ret = sc2355_pcie_push_link(hif, hif->tx_data_port,
+			ret = sc2355_pcie_tx_data_push(hif,
 					       (struct mbuf_t *)hif->mbuf_head,
 					       (struct mbuf_t *)hif->mbuf_tail,
-					       hif->mbuf_num,
-					       sc2355_pcie_tx_data_pop_list);
+					       hif->mbuf_num);
 			if (ret != 0) {
 				/*pr_err("%s: push link fail\n", __func__); */
-				hif->pushfail_count++;
+				if (ret != -EAGAIN)
+					hif->pushfail_count++;
 				sprdwl_list_cut_to_send_list(tx_head,
 								 tx_list_tail,
 								 tx_count);
@@ -1147,7 +1177,6 @@ int sc2355_pcie_hif_fill_msdu_dscr(struct sprd_vif *vif,
 	struct tx_msdu_dscr *dscr;
 	struct sprd_hif *hif;
 	u8 lut_index;
-	struct sk_buff *temp_skb;
 	unsigned char dscr_rsvd = 0;
 	struct ethhdr *ethhdr = (struct ethhdr *)skb->data;
 	u8 is_special_data = 0;
@@ -1166,22 +1195,23 @@ int sc2355_pcie_hif_fill_msdu_dscr(struct sprd_vif *vif,
 
 	hif = &vif->priv->hif;
 	dscr_rsvd = INTF_IS_PCIE ? MSDU_DSCR_RSVD : 0;
-	if (skb_headroom(skb) < (DSCR_LEN + hif->hif_offset +
+	/* Keep the skb object owned by the caller, including on allocation
+	 * failure. Replacing only this local pointer leaves its caller using
+	 * freed memory. Cloned headers must also become writable before push.
+	 */
+	if (skb_headroom(skb) < (DSCR_LEN + offset + hif->hif_offset +
+				 MSG_PTR_LEN + dscr_rsvd) || skb_header_cloned(skb)) {
+		if (skb_cow_head(skb, DSCR_LEN + offset + hif->hif_offset +
 				 MSG_PTR_LEN + dscr_rsvd)) {
-		temp_skb = skb;
-
-		skb = skb_realloc_headroom(skb, (DSCR_LEN + hif->hif_offset +
-						 MSG_PTR_LEN + dscr_rsvd));
-		kfree_skb(temp_skb);
-		if (!skb) {
-			pr_err("%s:%d failed to unshare skbuff: NULL\n",
-			       __func__, __LINE__);
-			return -EPERM;
+			pr_err_ratelimited("%s: failed to prepare skb headroom\n", __func__);
+			return -ENOMEM;
 		}
 #if defined(MORE_DEBUG)
 		hif->stats.tx_realloc++;
 #endif
 	}
+	/* skb_cow_head may have moved the data allocation. */
+	ethhdr = (struct ethhdr *)skb->data;
 
 	memcpy(hif->skb_da, skb->data, ETH_ALEN);
 

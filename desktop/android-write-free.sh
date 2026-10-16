@@ -4,6 +4,7 @@
 set -eu
 set -o pipefail
 P=${MU300_PAYLOAD_DIR:?};T=${MU300_INSTALL_TMP:?}
+. "$P/desktop-settings.env"
 . "$P/android-loop.sh"
 # BusyBox's losetup lacks a size-limit option. Use Android Toybox explicitly;
 # PATH in the installer intentionally points at BusyBox for other applets.
@@ -41,9 +42,20 @@ image=$T/openwrt.ext4.new
 bytes=$(stat -c %s "$image")
 [ "$bytes" -gt 0 ] && [ "$bytes" -le "$((need*512))" ] && [ "$((bytes%1048576))" = 0 ]
 loop=$(desktop_free_loop)
-cleanup() { umount "$T/image-root" 2>/dev/null || :; losetup -d "$loop" 2>/dev/null || :; }
+loop_attached=0; mounted=0
+cleanup() {
+    rc=$?
+    trap - EXIT HUP INT TERM
+    if [ "$mounted" = 1 ]; then
+        umount "$T/image-root" || { echo 'root still mounted; loop retained' >&2; exit 1; }
+    fi
+    [ "$loop_attached" = 0 ] || losetup -d "$loop" || exit 1
+    exit "$rc"
+}
 trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
 /system/bin/losetup -o "$((start*512))" -S "$((need*512))" "$loop" "$disk"
+loop_attached=1
 # Confirm the kernel actually honored the hard range bound before any write.
 name=${loop##*/}
 [ "$(cat /sys/class/block/$name/loop/offset)" = "$((start*512))" ]
@@ -58,13 +70,18 @@ repair=$P/desktop/files/boot/repair
 "$repair/lib/ld-musl-aarch64.so.1" --library-path "$repair/lib:$repair/usr/lib" "$repair/usr/sbin/e2fsck" -pf "$loop" || {
     rc=$?; [ "$rc" = 1 ] || exit "$rc";
 }
+if [ "${GROW_FS:-1}" = 1 ]; then
 "$repair/lib/ld-musl-aarch64.so.1" --library-path "$repair/lib:$repair/usr/lib" "$repair/usr/sbin/resize2fs" -f "$loop" "$((need/8))"
 "$repair/lib/ld-musl-aarch64.so.1" --library-path "$repair/lib:$repair/usr/lib" "$repair/usr/sbin/e2fsck" -fn "$loop"
 low=$(od -An -tu4 -j1028 -N4 "$loop" | tr -d ' \n');high=$(od -An -tu4 -j1360 -N4 "$loop" | tr -d ' \n')
 [ "$high" = 0 ] && [ "$low" = "$((need/8))" ]
+fi
 mount -t ext4 -o ro,noload "$loop" "$T/image-root"
+mounted=1
 (cd "$T/image-root" && sha256sum -c "$T/image.sha256" >/dev/null)
-umount "$T/image-root";losetup -d "$loop";trap - EXIT
+umount "$T/image-root";mounted=0
+losetup -d "$loop";loop_attached=0
+trap - EXIT HUP INT TERM
 check_gpt before || { echo 'GPT changed; verified image left unallocated, boot untouched' >&2; exit 1; }
 write_gpt() {
     # Backup first, each write flushed; preserve all existing entries and MBR.

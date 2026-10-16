@@ -11,9 +11,11 @@ class PlatformConfig(ShellTest):
 if [ "$2" = get ]; then
  case "$3" in
  unisoc_modem.main) echo core ;;
+ *.u30_native_version) echo "${TEST_NATIVE_VERSION:-1}" ;;
  *.platform_defaults) echo "${TEST_DEFAULTS:-}" ;;
  esac
-elif [ "$2" = batch ]; then cat > "$STUBLOG/batch"; fi
+elif [ "$2" = batch ]; then cat > "$STUBLOG/batch"
+elif [ "$2" = set ] || [ "$2" = commit ]; then echo "$*" >> "$STUBLOG/direct"; fi
 ''')
 
     def test_initial_defaults_and_same_board_preferences(self):
@@ -27,13 +29,13 @@ elif [ "$2" = batch ]; then cat > "$STUBLOG/batch"; fi
                 if changes:
                     commands=batch.read_text()
                     self.assertIn("platform_defaults='"+device+"'",commands)
-                    if device=='v50':self.assertIn("sim_slots='2'",commands)
+                    if device in ('v50','u30air'):self.assertIn("sim_slots='2'",commands)
                     else:self.assertNotIn('sim_slots=',commands)
                     self.assertNotIn('data_sim=',commands)
 
     def test_cross_board_restore_resets_only_adapter_configuration(self):
         for shell in self.each_shell():
-            for device,marker,slots in [('f50','v50',1),('u30air','v50',1),('v50','f50',2),('f50','u30air',1)]:
+            for device,marker,slots in [('f50','v50',1),('u30air','v50',2),('v50','f50',2),('f50','u30air',1)]:
                 batch=self.tmp/'batch';batch.unlink(missing_ok=True)
                 r=self.script(shell,SCRIPT,TEST_DEVICE=device,TEST_DEFAULTS=marker)
                 self.assertEqual(r.returncode,0,r.stderr)
@@ -57,3 +59,14 @@ elif [ "$2" = batch ]; then cat > "$STUBLOG/batch"; fi
         self.assertLess(source.index('/mu300-platform-config'),source.index('procd_open_instance atd'))
         for file in ['tools/build-openwrt-tf-magisk.sh','tools/make-release.sh','openwrt/build-rootfs.sh']:
             self.assertIn('mu300-platform-config',(TOP/file).read_text())
+
+    def test_existing_u30_profile_gets_capability_once_without_changing_data_sim(self):
+        for shell in self.each_shell():
+            commands=self.tmp/'direct';commands.unlink(missing_ok=True)
+            r=self.script(shell,SCRIPT,TEST_DEVICE='u30air',TEST_DEFAULTS='u30air',TEST_NATIVE_VERSION='0')
+            self.assertEqual(r.returncode,0,r.stderr)
+            self.assertIn('sim_slots=2',commands.read_text())
+            self.assertNotIn('data_sim=',commands.read_text())
+            commands.unlink()
+            self.assertEqual(self.script(shell,SCRIPT,TEST_DEVICE='u30air',TEST_DEFAULTS='u30air').returncode,0)
+            self.assertFalse(commands.exists())

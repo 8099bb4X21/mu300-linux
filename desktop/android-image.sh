@@ -16,11 +16,23 @@ free=$(df -Pk /data | awk 'END {print $4}')
 [ "$free" -gt "$((IMAGE_MIB * 1024 + 524288))" ] || { echo 'insufficient userdata staging space' >&2; exit 1; }
 truncate -s "$((IMAGE_MIB * 1048576))" "$image"
 /system/bin/mke2fs -t ext4 -F -b 4096 -m 1 -E lazy_itable_init=1,lazy_journal_init=1,nodiscard -L mu300root "$image"
+loop=; loop_attached=0; mounted=0
+cleanup() {
+    rc=$?
+    trap - EXIT HUP INT TERM
+    if [ "$mounted" = 1 ]; then
+        umount "$T/image-root" || { echo 'image still mounted; loop retained' >&2; exit 1; }
+    fi
+    [ "$loop_attached" = 0 ] || losetup -d "$loop" || exit 1
+    exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
 loop=$(desktop_free_loop)
 losetup "$loop" "$image"
-trap 'losetup -d "$loop" 2>/dev/null || :' EXIT
+loop_attached=1
 mount -t ext4 "$loop" "$T/image-root"
-trap 'umount "$T/image-root" 2>/dev/null || :; losetup -d "$loop" 2>/dev/null || :' EXIT
+mounted=1
 M=$T/image-root; R=$M/openwrt
 mkdir -p "$R"
 tar -xzpf "$P/mu300-openwrt.tar.gz" -C "$R"
@@ -56,13 +68,19 @@ fi
 [ -x "$R/sbin/init" ] || [ -L "$R/sbin/init" ]
 [ -s "$R/lib/firmware/wcnmodem.bin" ] && [ -x "$R/opt/mu300/android/vendor/bin/modem_control" ]
 (cd "$M" && find . -type f -exec sha256sum {} +) > "$T/image.sha256"
-umount "$M"; losetup -d "$loop"; trap - EXIT
+umount "$M"; mounted=0
+losetup -d "$loop"; loop_attached=0
+# The old loop may now belong to another process. Allocate again and only
+# mark ownership after a successful attach, so a failed bind never detaches it.
+loop=$(desktop_free_loop)
 losetup -r "$loop" "$image"
-trap 'losetup -d "$loop" 2>/dev/null || :' EXIT
+loop_attached=1
 mount -t ext4 -o ro,noload "$loop" "$M"
-trap 'umount "$M" 2>/dev/null || :; losetup -d "$loop" 2>/dev/null || :' EXIT
+mounted=1
 (cd "$M" && sha256sum -c "$T/image.sha256" >/dev/null)
-umount "$M"; losetup -d "$loop"; trap - EXIT
+umount "$M"; mounted=0
+losetup -d "$loop"; loop_attached=0
+trap - EXIT HUP INT TERM
 if [ "$DESKTOP_MODE" = data-image ]; then
     [ ! -e /data/mu300linux/openwrt.ext4 ] || mv /data/mu300linux/openwrt.ext4 /data/mu300linux/openwrt.ext4.backup
     mv "$image" /data/mu300linux/openwrt.ext4

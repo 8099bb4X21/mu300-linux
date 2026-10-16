@@ -8,6 +8,20 @@ token=${payload##*/}; token=${token#.mu300-desktop-}
 case "$token" in ''|*[!0-9a-f]*) exit 1 ;; esac
 [ "${#token}" = 12 ]
 [ ! -L "$payload" ] && [ -d "$payload" ] && [ "$(id -u)" = 0 ]
+# Minimal OpenWrt lacks tools such as stat/blockdev. The installer uploads and
+# checksums its complete static BusyBox before executing this script. Supply
+# only missing commands in this private staging directory; existing tools and
+# the running system's PATH configuration remain untouched.
+BB=$payload/busybox
+[ ! -L "$BB" ] && [ -x "$BB" ]
+mkdir "$payload/compat-bin"
+for tool in $("$BB" --list); do
+    command -v "$tool" >/dev/null 2>&1 || ln -s "$BB" "$payload/compat-bin/$tool"
+done
+export PATH="$payload/compat-bin:$PATH"
+for tool in stat blockdev dd cmp sha256sum mount umount; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "missing update command: $tool"; exit 1; }
+done
 linux=$(cat /run/mu300/linux-slot)
 case "$linux" in a|b) ;; *) exit 1 ;; esac
 misc=$(cat /run/mu300/misc-dev)

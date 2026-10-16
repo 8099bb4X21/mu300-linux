@@ -123,7 +123,9 @@ partition editing is not offered.
 ## Updates
 
 The computer initiates SSH uploads, avoiding inbound Windows firewall rules.
-Known host keys are checked, with explicit trust on first use. Updating uses
+SSH keys are accepted per connection without a persistent host-key cache, so
+swapping devices at the same USB management address does not block updates.
+Root-password authentication remains required. Updating uses
 MU300's native mutex, config/account preservation, user-package migration and
 `openwrt.new`/`openwrt.old` swap. The old directory remains for native rollback.
 Runtime firmware comes from the existing installation. A plain filesystem

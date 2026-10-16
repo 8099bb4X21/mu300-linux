@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import runpy
 
 TOP = Path(__file__).resolve().parents[1]
 
@@ -63,17 +64,18 @@ unset MU300_DEPLOY_ROOT
     shutil.copyfile(TOP/'desktop/START-HERE.md',stage/'START-HERE.md')
     shutil.copyfile(TOP/'desktop/installer.py',stage/'OpenWrt-Installer.py')
     # Python source runs from the archive root, so resolve its support files there.
-    if exe:
+    if exe and not Path(exe).is_dir():
         fingerprint=json.loads(Path(str(exe)+'.json').read_text())
         current={n:sha(TOP/'desktop'/n) for n in ('installer.py','boot_image.py')}
         if fingerprint['source'] != current: raise ValueError('desktop EXE is stale; rebuild it')
-        shutil.copyfile(exe,stage/'OpenWrt-Installer.exe')
+        (stage/'tools/legacy').mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(exe,stage/'tools/legacy/installer.exe')
     actions={'start-installer':'','install-to-tf-card':'--tf','install-to-internal-storage':'--part',
              'install-to-userdata-image':'--data','reinstall-internal-system':'--reinstall-part',
              'resume-internal-install':'--resume','switch-to-openwrt':'--boot-openwrt','update-openwrt':'--update'}
     launchers=stage/'launchers';launchers.mkdir()
     for name,flags in actions.items():
-        cmd='@echo off\r\ncd /d "%~dp0.."\r\nif exist "OpenWrt-Installer.exe" (\r\n  "OpenWrt-Installer.exe" '+flags+' --no-pause %*\r\n) else (\r\n  py -3 "OpenWrt-Installer.py" '+flags+' --no-pause %*\r\n)\r\npause\r\n'
+        cmd='@echo off\r\ncd /d "%~dp0.."\r\nif exist "tools\\backend\\openwrt-backend.exe" (\r\n  "tools\\backend\\openwrt-backend.exe" --cli --package-root "%cd%" '+flags+' --no-pause %*\r\n) else (\r\n  py -3 "OpenWrt-Installer.py" '+flags+' --no-pause %*\r\n)\r\npause\r\n'
         (launchers/(name+'.cmd')).write_bytes(cmd.encode())
         (launchers/(name+'.sh')).write_text('#!/bin/sh\ncd "$(dirname "$0")/.." || exit 1\nexec python3 OpenWrt-Installer.py '+flags+' "$@"\n',newline='\n')
         (launchers/(name+'.sh')).chmod(0o755)
@@ -82,6 +84,8 @@ unset MU300_DEPLOY_ROOT
         (stage/'tools').mkdir(exist_ok=True)
         for n in ('adb.exe','AdbWinApi.dll','AdbWinUsbApi.dll'):
             shutil.copyfile(Path(adb_dir)/n,stage/'tools'/n)
+    if os.environ.get('OPENWRT_GUI_OPTIONAL') != '1':
+        runpy.run_path(str(TOP/'installer/package_gui.py'))['attach'](stage,exe if exe and Path(exe).is_dir() else None)
     after={n:sha(stage/layout[n]) for n in before}
     if after!=before: raise ValueError('original Magisk payload changed')
     relocated={layout[n]:h for n,h in before.items()}

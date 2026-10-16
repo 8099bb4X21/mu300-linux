@@ -173,17 +173,26 @@ T_SOC=$1; T_CPU=$2; T_NR=$3; T_BRD=$4
 T_HOT=$(temp_hottest)
 
 # ------------------------------------------------------------------- power
-# The F50 has a battery; the V50 (same SoC) does not - a missing capacity file
-# simply means "no battery" and the page hides the tile. voltage_now is
-# microvolts on this PMIC; current_now microamps (negative = charging on some
-# firmwares, positive on others - the sign is reported raw and the page only
-# shows magnitude + charging state from `status`).
-P_CAP=$(rd /sys/class/power_supply/battery/capacity)
-P_STATUS=$(rd /sys/class/power_supply/battery/status)
-P_V=$(rd /sys/class/power_supply/battery/voltage_now)
-P_I=$(rd /sys/class/power_supply/battery/current_now)
-P_USB=$(rd /sys/class/power_supply/usb/online)
-case "$P_CAP" in ''|*[!0-9]*) P_PRESENT=0 ;; *) P_PRESENT=1 ;; esac
+# Vendor kernels use battery; mainline UMP9620 uses sc27xx-fgu. The shared
+# selector also excludes F50/V50's synthetic FGU, and validates 0..100 percent.
+POWER_LIB=${MU300_POWER_LIB:-${0%/*}/power-supply.sh}
+[ -r "$POWER_LIB" ] || POWER_LIB=/usr/libexec/unisoc-modem/power-supply.sh
+. "$POWER_LIB"
+PSY=${MU300_POWER_SUPPLY_DIR:-/sys/class/power_supply}
+P_DIR=$(power_battery_dir) || P_DIR=
+P_PRESENT=0 P_CAP= P_STATUS= P_V= P_I= P_USB=
+if [ -n "$P_DIR" ]; then
+    P_PRESENT=1
+    P_CAP=$(rd "$P_DIR/capacity")
+    P_STATUS=$(rd "$P_DIR/status")
+    P_V=$(rd "$P_DIR/voltage_now")
+    P_I=$(rd "$P_DIR/current_now")
+fi
+# Mainline reports external power on bq256xx-charger, rather than usb/ac.
+for d in "$PSY/usb" "$PSY/ac" "$PSY/bq256xx-charger" "$PSY"/*; do
+    case "${d##*/}" in usb|ac|bq256xx-charger) ;; *) case "$(rd "$d/type")" in USB*|Mains) ;; *) continue ;; esac ;; esac
+    case "$(rd "$d/online")" in 1) P_USB=1; break ;; 0) P_USB=0 ;; esac
+done
 P_V=$(n_or_null "$(awk -v v="$P_V" 'BEGIN{if(v+0>0)printf "%.2f",v/1000000}')")
 P_I=$(n_or_null "$(awk -v v="$P_I" 'BEGIN{if(v!="")printf "%d",v}')")
 

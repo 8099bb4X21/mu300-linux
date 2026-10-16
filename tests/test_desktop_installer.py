@@ -4,8 +4,10 @@ import base64
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import struct
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -58,6 +60,72 @@ def cpio_files(stream):
     return found
 
 class Desktop(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('paramiko'), 'SSH tests need Paramiko')
+    def test_update_ignores_old_host_key_cache_and_never_saves_keys(self):
+        import paramiko
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp);cache=home/'.mu300-desktop-known-hosts'
+            cache.write_text('stale key for another device at the same address\n')
+            c=Mock()
+            with patch.object(paramiko,'SSHClient',return_value=c), \
+                 patch.object(installer.Path,'home',return_value=home), \
+                 patch.dict(installer.os.environ,{'MU300_SSH_PASSWORD':'test-only'}), \
+                 patch.object(installer,'ssh_exec',return_value='unsupported-runtime'), \
+                 patch.object(installer,'confirm',side_effect=AssertionError('unexpected key prompt')):
+                with self.assertRaisesRegex(ValueError,'supported MU300 runtime'):
+                    installer.update(Mock(host='192.168.77.1'),home)
+            self.assertIsInstance(c.set_missing_host_key_policy.call_args.args[0],paramiko.AutoAddPolicy)
+            c.load_host_keys.assert_not_called();c.load_system_host_keys.assert_not_called()
+            c.save_host_keys.assert_not_called();c.close.assert_called_once()
+            self.assertEqual(cache.read_text(),'stale key for another device at the same address\n')
+
+    def test_ssh_upload_streams_binary_without_sftp_and_closes_channel(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'payload.bin';data=b'\x00\xff\n\r'*140000;path.write_bytes(data)
+            c=Mock();channel=c.get_transport.return_value.open_session.return_value
+            channel.makefile_stderr.return_value=io.BytesIO(b'')
+            channel.recv_exit_status.return_value=0
+            with patch('sys.stdout',io.StringIO()):installer.ssh_upload(c,path,"/tmp/update dir/file'1")
+            self.assertEqual(b''.join(x.args[0] for x in channel.sendall.call_args_list),data)
+            self.assertGreater(channel.sendall.call_count,1)
+            channel.shutdown_write.assert_called_once()
+            channel.close.assert_called_once()
+            c.open_sftp.assert_not_called()
+            self.assertEqual(shlex.split(channel.exec_command.call_args.args[0].split('> ',1)[1]),["/tmp/update dir/file'1"])
+
+    def test_ssh_upload_remote_failure_or_disconnect_never_succeeds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'payload.bin';path.write_bytes(b'payload')
+            for disconnected in (False,True):
+                with self.subTest(disconnected=disconnected):
+                    c=Mock();channel=c.get_transport.return_value.open_session.return_value
+                    channel.makefile_stderr.return_value=io.BytesIO(b'No space left on device')
+                    channel.recv_exit_status.return_value=1
+                    if disconnected:channel.sendall.side_effect=OSError('connection lost')
+                    with patch('sys.stdout',io.StringIO()),self.assertRaises((RuntimeError,OSError)):
+                        installer.ssh_upload(c,path,'/tmp/test')
+                    channel.close.assert_called_once()
+
+    def test_ssh_boot_control_is_binary_and_diagnostics_stay_separate(self):
+        c=Mock();out=Mock();out.read.return_value=live('b')
+        out.channel.recv_exit_status.return_value=0
+        c.exec_command.return_value=(None,out,io.BytesIO(b'32+0 records in\n32+0 records out\n'))
+        command='dd if=/dev/mmcblk0p3 bs=1 skip=2048 count=32'
+        raw=installer.ssh_read_exact(c,command,32)
+        self.assertEqual(raw,live('b'))
+        c.exec_command.assert_called_once_with(command,timeout=30)
+        self.assertEqual(len(boot.boot_control(raw,'a')),32)
+
+    def test_ssh_boot_control_short_reads_and_remote_errors_stop_update(self):
+        for rc,data,stderr,exception in [(0,b'',b'',ValueError),
+                (0,live()[:-1],b'',ValueError),
+                (1,live(),b'dd: read error',RuntimeError)]:
+            with self.subTest(rc=rc,size=len(data)):
+                c=Mock();out=Mock();out.read.return_value=data
+                out.channel.recv_exit_status.return_value=rc
+                c.exec_command.return_value=(None,out,io.BytesIO(stderr))
+                with self.assertRaises(exception):installer.ssh_read_exact(c,'dd',32)
+
     def test_interactive_exit_shows_success_next_step_and_waits_once(self):
         output=io.StringIO();stdin=Mock();stdin.isatty.return_value=True
         with patch.object(installer,'main',return_value=installer.Outcome('success','Installed','Reboot manually')), \
@@ -387,7 +455,10 @@ desktop_free_loop
                 elf=bytearray(64);elf[:6]=b'\x7fELF\x02\x01';struct.pack_into('<H',elf,18,183);p.write_bytes(elf)
             (stage/'customize.sh').write_text('ORIGINAL_PAYLOAD=$MODPATH\n[ -f "$MODPATH/boot-linux.img" ]\n')
             original=package.original_files(stage)
-            manifest=package.assemble(stage,tools,'7.2')
+            # This tiny Magisk fixture deliberately exercises the CLI-only layout.
+            # Portable GUI artifacts are verified by the shared release tests.
+            with patch.dict(os.environ, {'OPENWRT_GUI_OPTIONAL':'1'}):
+                manifest=package.assemble(stage,tools,'7.2')
             self.assertEqual({n:package.sha(stage/manifest['magisk_layout'][n]) for n in original},original)
             self.assertEqual([p.relative_to(stage).as_posix() for p in stage.rglob('*.tar.gz')],['payload/mu300-openwrt.tar.gz'])
             self.assertEqual({p.name for p in stage.iterdir() if p.is_file()}, {'OpenWrt-Installer.py','START-HERE.md','customize.sh','module.prop'})
@@ -420,7 +491,12 @@ desktop_free_loop
             result=installer.install(Mock(boot_openwrt=True),Path('/test/package'),{})
         self.assertEqual(result.state,'success')
         android.storage.assert_not_called()
-        self.assertIn('switch.sh',android.run.call_args.args[0])
+        self.assertEqual([c.args[0] for c in android.run.call_args_list],
+                         ['"$BB" sh "$P/android-bootchain.sh" check',
+                          '"$BB" sh "$P/switch.sh" --no-reboot'])
+        android.put.assert_not_called()
+        self.assertIn('only misc changed',result.message)
+        self.assertIn('default-boot settings are unchanged',result.next_step)
         android.flash.assert_not_called()
 
     def test_menu_warns_about_userdata_image_f2fs_risk(self):
